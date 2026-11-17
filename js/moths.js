@@ -232,6 +232,7 @@
           }
         }
       }
+      if (LO.admin && LO.admin.noMoths) inBeam = false;
       if (inBeam) m.lit += dt; else m.lit = Math.max(0, m.lit - dt * 0.7);
       const k = m.lit / stareLimit;
       if (k > this.maxLit) { this.maxLit = k; this.nearestLit = m; }

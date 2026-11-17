@@ -76,12 +76,40 @@
     const n = performance.now();
     const raw = (n - (this.lastReal || n)) / 1000;
     this.lastReal = n;
-    return raw > 0.25 ? Math.min(0.1, dt || 0.016) : Math.min(0.1, raw);
+    const step = raw > 0.25 ? Math.min(0.1, dt || 0.016) : Math.min(0.1, raw);
+    if (LO.admin) {
+      if (LO.admin.open && LO.admin.freezeWhenOpen) return 0;
+      if (typeof LO.admin.timeScale === 'number') return step * LO.admin.timeScale;
+    }
+    return step;
+  };
+
+  Sneaky.prototype.forceSpawn = function (player, camera) {
+    if (!player || !camera) return false;
+    if (player.hidden || player.hideAnim) player.ejectFromHide && player.ejectFromHide();
+    if (LO.ambush) { LO.ambush.active = null; LO.ambush.gapUntil = 0; }
+    const fwd = new V3(); camera.getWorldDirection(fwd);
+    this.attacking = true; this.t = 0;
+    LO.ambush.active = 'sneaky';
+    const back = new V3(-fwd.x, 0, -fwd.z);
+    if (back.lengthSq() < 1e-4) back.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+    back.normalize();
+    this.root.position.set(player.pos.x + back.x * 1.5, 0, player.pos.z + back.z * 1.5);
+    this.root.lookAt(player.pos.x, 0, player.pos.z);
+    this.root.visible = true;
+    player.flickerForce = true;
+    this.lightWasOff = !player.flashOn;
+    this.window = this.lightWasOff ? WINDOW + 1 : WINDOW;
+    if (this.breath) { this.breath.stop(); this.breath = null; }
+    this.breath = LO.audio.sneakyBreath(this.root.position);
+    this.onAttack && this.onAttack(this.lightWasOff);
+    return true;
   };
 
   Sneaky.prototype.update = function (dt, player, camera, siren) {
     dt = this.realDt(dt);
-    if ((LO.ver && !LO.ver().sneaky) || player.calm || !player.alive) {
+    if (dt <= 0) return;
+    if ((LO.ver && !LO.ver().sneaky) || (LO.admin && LO.admin.noSneaky) || player.calm || !player.alive) {
       if (this.attacking) this.vanish(player, false);
       return;
     }

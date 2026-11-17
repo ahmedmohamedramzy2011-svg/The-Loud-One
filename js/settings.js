@@ -27,10 +27,11 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.4.2',
+    gameVersion: '2.4.3',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.4.3', label: 'v2.4.3', era: '2.5s breach telegraph, >10.5s Adrenaline w/ 75s cooldown & winded penalty, Siren breach distractions, extra exterior dumpsters' },
     { id: '2.4.2', label: 'v2.4.2', era: 'Version selector, full notebook notes, CRT locker-slam tape, mobile scrolling UI' },
     { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building smash & evidence pathing, low-poly fences & buildings' },
     { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-241), Sneaky fix, Silent 10 dmg, Tenant 90% blind' },
@@ -48,14 +49,14 @@ window.LO = window.LO || {};
   ];
 
   function verNum(id) {
-    const parts = String(id || '2.4.2').split('.').map(n => parseInt(n, 10) || 0);
+    const parts = String(id || '2.4.3').split('.').map(n => parseInt(n, 10) || 0);
     return parts[0] * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
   }
 
   function versionFeatures(id) {
     const v = verNum(id || S.gameVersion);
     return {
-      id: id || S.gameVersion || '2.4.2',
+      id: id || S.gameVersion || '2.4.3',
       hint: v >= 10300,
       darkLight: v >= 10300,
       tenant: v >= 10400,
@@ -80,6 +81,7 @@ window.LO = window.LO || {};
       silentDamage: v >= 20400 ? 10 : 5,
       tenantCost: v >= 20400 ? 90 : 95,
       sirenSmash: v >= 20401,
+      fastoneV2: v >= 20403,
     };
   }
 
@@ -88,7 +90,7 @@ window.LO = window.LO || {};
     const raw = localStorage.getItem(KEY);
     if (raw) Object.assign(S, JSON.parse(raw));
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (!VERSIONS.some(x => x.id === S.gameVersion)) S.gameVersion = '2.4.2';
+  if (!VERSIONS.some(x => x.id === S.gameVersion)) S.gameVersion = '2.4.3';
 
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ }

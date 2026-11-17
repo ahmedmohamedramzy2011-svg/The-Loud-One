@@ -100,8 +100,34 @@
     this.alive = true;
     this.zoom = 0;
     this.adrenaline = 0;
+    this.adrenalineCooldown = 0;
+    this.adrenalineArmed = false;
+    this.adrenalineSprintTime = 0;
+    this.windedTimer = 0;
     this.dizzy = 0;
     this.dizzyT = 0;
+  };
+
+  Player.prototype.triggerAdrenaline = function (duration) {
+    if ((this.adrenalineCooldown || 0) > 0) return false;
+    this.adrenaline = duration || 8.5;
+    this.adrenalineCooldown = 75;
+    this.adrenalineArmed = true;
+    this.adrenalineSprintTime = 0;
+    this.windedTimer = 0;
+    this.stamina = 100;
+    this.exhausted = false;
+    return true;
+  };
+
+  Player.prototype.startWinded = function () {
+    if (!this.adrenalineArmed) return;
+    this.adrenalineArmed = false;
+    this.adrenalineSprintTime = 0;
+    this.adrenaline = 0;
+    this.windedTimer = 5.0; // 3s paused stamina regen (>2.0), then 2s at 50% speed
+    this.exhausted = true;
+    this.panting = 1;
   };
 
   Player.prototype.bindInput = function () {
@@ -145,12 +171,13 @@
       return;
     }
     const cost = V.tenantCost || 90;
-    if (this.battery < cost) {
+    const infBat = LO.admin && LO.admin.infBattery;
+    if (!infBat && this.battery < cost) {
       LO.audio.click(false);
       this.hint && this.hint(`Not enough battery (needs ${cost}%).`);
       return;
     }
-    this.battery -= cost;
+    if (!infBat) this.battery -= cost;
     this.hideTime = 0;
     this.tenantTick = 0;
     this.burst.intensity = 18;
@@ -168,6 +195,9 @@
     const W = this.world, k = this.keys;
     this.photoCooldown = Math.max(0, this.photoCooldown - dt);
     this.adrenaline = Math.max(0, (this.adrenaline || 0) - dt);
+    this.adrenalineCooldown = Math.max(0, (this.adrenalineCooldown || 0) - dt);
+    this.windedTimer = Math.max(0, (this.windedTimer || 0) - dt);
+    const windedMult = this.windedTimer > 2.0 ? 0 : (this.windedTimer > 0 ? 0.5 : 1);
     if (this.dizzy > 0) {
       this.dizzy = Math.max(0, this.dizzy - dt * 0.22);
       this.dizzyT = (this.dizzyT || 0) + dt;
@@ -187,12 +217,17 @@
       // the light stays on until you're fully inside (it goes off as the door shuts)
       this.flash.intensity = this.flashOn ? (LO.settings.lighting === 'simple' ? 3 : 8) * Math.min(1, 0.4 + this.battery / 40) : 0;
       LO.audio.setFlashlightBuzz(this.flashOn);
+      if (this.windedTimer > 0) {
+        this.panting = Math.max(this.panting, this.windedTimer > 2.0 ? 1.0 : 0.7);
+        LO.audio.setBreathing(Math.min(1, this.panting * 1.2));
+      }
       this.zoom = 0;
       return;
     }
     this.hideView = !!this.hidden;
 
     if (this.hidden) {
+      if (this.adrenalineArmed) this.startWinded();
       // locked in place, can only look around a bit
       const sp = this.hidden;
       this.pos.set(sp.pos.x, 0, sp.pos.z);
@@ -204,12 +239,28 @@
       this.pitch = Math.max(-0.5, Math.min(0.4, this.pitch));
       this.flashOn = false;
       this.cameraUp = false;
-      this.stamina = Math.min(100, this.stamina + 18 * dt);
+      if (LO.admin && LO.admin.infStamina) {
+        this.stamina = 100;
+        this.exhausted = false;
+        this.windedTimer = 0;
+        this.panting = 0;
+      } else {
+        this.stamina = Math.min(100, this.stamina + 18 * windedMult * dt);
+        if (this.windedTimer > 0) {
+          this.exhausted = true;
+          this.panting = Math.max(this.panting, this.windedTimer > 2.0 ? 1.0 : 0.7);
+        } else {
+          if (this.exhausted && this.stamina > 35) this.exhausted = false;
+          this.panting = Math.max(0, this.panting - dt * 0.5);
+        }
+      }
       // THE TENANT: something already lives in every hiding spot (v1.4+).
       // Stay too long and it throws you out.
       const Vh = LO.ver ? LO.ver() : { tenant: true };
-      if (!Vh.tenant) {
+      const adm = LO.admin || {};
+      if (!Vh.tenant || adm.noTenant) {
         this.hideTime = 0;
+        this.tenantTick = 0;
       } else {
         if (!this.calm) this.hideTime += dt;
         // after ~10s of hiding it starts hurting you every second, harder the closer it gets
@@ -223,7 +274,6 @@
         } else this.tenantTick = 0;   // first hit lands the moment it starts
         if (this.hideTime >= TENANT_LIMIT) { this.damage(9999, 'tenant'); }   // it reached you
       }
-      this.panting = Math.max(0, this.panting - dt * 0.5);
     } else {
       this.hideTime = Math.max(0, this.hideTime - dt * 0.5);
       // ---------- movement ----------
@@ -238,49 +288,77 @@
       moving = fwd !== 0 || str !== 0;
       const wantSprint = (k.ShiftLeft || k.ShiftRight) && moving && fwd > 0.3 && !wantCrouch && !this.cameraUp;
       if (this.adrenaline > 0) this.exhausted = false;
-      if (this.exhausted && this.stamina > 35) this.exhausted = false;
+      if (this.windedTimer > 0) this.exhausted = true;
+      else if (this.exhausted && this.stamina > 35) this.exhausted = false;
       sprinting = wantSprint && !this.exhausted && this.stamina > 0;
+      if (this.adrenalineArmed) {
+        if (sprinting && this.adrenaline > 0) this.adrenalineSprintTime += dt;
+        if (this.adrenaline <= 0 || (this.adrenalineSprintTime > 0.25 && !sprinting)) {
+          this.startWinded();
+          sprinting = false;
+        }
+      }
+      const adm = LO.admin || {};
+      const speedMult = adm.speedMult || 1;
       const sprintSpeed = this.adrenaline > 0 ? 13.8 : 6.9;
-      let speed = (wantCrouch ? 1.6 : sprinting ? sprintSpeed : 3.3) * (sprinting ? 1 : Math.max(0.5, analog));
+      let speed = (wantCrouch ? 1.6 : sprinting ? sprintSpeed : 3.3) * (sprinting ? 1 : Math.max(0.5, analog)) * speedMult;
       if (this.cameraUp) speed *= 0.6;
       const sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw);
       let mx = -sinY * fwd + cosY * str, mz = -cosY * fwd - sinY * str;
       const ml = Math.hypot(mx, mz) || 1;
       mx /= ml; mz /= ml;
-      const accel = this.onGround ? 12 : 3;
-      this.vel.x += (mx * speed * (moving ? 1 : 0) - this.vel.x) * Math.min(1, accel * dt);
-      this.vel.z += (mz * speed * (moving ? 1 : 0) - this.vel.z) * Math.min(1, accel * dt);
 
-      // jump
-      if (k.Space && this.onGround && this.stamina > 12 && !wantCrouch) {
-        this.vel.y = 4.6; this.onGround = false;
-        this.stamina -= 12;
-        this.spike = Math.max(this.spike, NOISE.jump);
-        LO.audio.jumpGrunt();
-        k.Space = false;
-      }
-      this.vel.y -= 13 * dt;
-      this.pos.addScaledVector(this.vel, dt);
-      if (this.pos.y <= 0) {
-        if (!this.onGround) {
-          const hard = this.vel.y < -4;
-          LO.audio.land(hard);
-          this.spike = Math.max(this.spike, NOISE.land * (hard ? 1 : 0.6));
-          this.shake = Math.max(this.shake, 0.15);
+      if (adm.noclip) {
+        const flySpeed = Math.max(8, speed * 2.2);
+        const up = (k.Space ? 1 : 0) - (wantCrouch ? 1 : 0);
+        this.vel.set(mx * flySpeed * (moving ? 1 : 0), up * flySpeed * 0.75, mz * flySpeed * (moving ? 1 : 0));
+        this.pos.addScaledVector(this.vel, dt);
+        if (this.pos.y < 0.1) this.pos.y = 0.1;
+        this.onGround = this.pos.y <= 0.11;
+      } else {
+        const accel = this.onGround ? 12 : 3;
+        this.vel.x += (mx * speed * (moving ? 1 : 0) - this.vel.x) * Math.min(1, accel * dt);
+        this.vel.z += (mz * speed * (moving ? 1 : 0) - this.vel.z) * Math.min(1, accel * dt);
+
+        // jump
+        if (k.Space && this.onGround && (adm.infStamina || this.stamina > 12) && !wantCrouch) {
+          this.vel.y = 4.6; this.onGround = false;
+          if (!adm.infStamina) this.stamina -= 12;
+          this.spike = Math.max(this.spike, NOISE.jump);
+          LO.audio.jumpGrunt();
+          k.Space = false;
         }
-        this.pos.y = 0; this.vel.y = 0; this.onGround = true;
+        this.vel.y -= 13 * dt;
+        this.pos.addScaledVector(this.vel, dt);
+        if (this.pos.y <= 0) {
+          if (!this.onGround) {
+            const hard = this.vel.y < -4;
+            LO.audio.land(hard);
+            this.spike = Math.max(this.spike, NOISE.land * (hard ? 1 : 0.6));
+            this.shake = Math.max(this.shake, 0.15);
+          }
+          this.pos.y = 0; this.vel.y = 0; this.onGround = true;
+        }
+        this.collide();
       }
-      this.collide();
 
       // stamina
-      if (sprinting) {
+      if (adm.infStamina) {
+        this.stamina = 100;
+        this.exhausted = false;
+        this.windedTimer = 0;
+        this.panting = 0;
+      } else if (sprinting) {
         this.stamina -= (this.adrenaline > 0 ? 4.5 : 21) * dt;
         if (this.stamina <= 0) { this.stamina = 0; this.exhausted = true; this.panting = 1; }
       } else {
-        this.stamina = Math.min(100, this.stamina + (moving ? 9 : 15) * dt);
+        this.stamina = Math.min(100, this.stamina + (moving ? 9 : 15) * windedMult * dt);
       }
-      if (sprinting && this.stamina < 40) this.panting = Math.max(this.panting, 0.6);
-      if (!sprinting) this.panting = Math.max(0, this.panting - dt * (this.crouch > 0.5 ? 0.25 : 0.12));
+      if (!adm.infStamina) {
+        if (this.windedTimer > 0) this.panting = Math.max(this.panting, this.windedTimer > 2.0 ? 1.0 : 0.7);
+        if (sprinting && this.stamina < 40) this.panting = Math.max(this.panting, 0.6);
+        if (!sprinting && this.windedTimer <= 0) this.panting = Math.max(0, this.panting - dt * (this.crouch > 0.5 ? 0.25 : 0.12));
+      }
 
       // footsteps
       const hspeed = Math.hypot(this.vel.x, this.vel.z);
@@ -297,7 +375,10 @@
     }
 
     // ---------- battery ----------
-    if (this.flashOn) {
+    const admB = LO.admin || {};
+    if (admB.infBattery) {
+      this.battery = 100;
+    } else if (this.flashOn) {
       this.battery = Math.max(0, this.battery - dt * 100 / 360);
       if (this.battery <= 0) { this.flashOn = false; LO.audio.click(false); this.hint && this.hint('The flashlight died.'); }
     }
@@ -317,12 +398,13 @@
     n += this.spike;
     if (indoor) n *= 0.6;
     if (this.hidden) n = this.spike > 0 ? this.spike * 0.5 : 0;
+    if (admB.zeroNoise) n = 0;
     this.noiseRadius = n;
 
     // ---------- THE SILENT ONE ----------
     // any sound at all resets it; total silence (including hiding) feeds it
     const Vs = LO.ver ? LO.ver() : { silent: true, silentDamage: SILENT_DAMAGE, rocks: true, exposure: true };
-    if (!Vs.silent || n > 0 || this.noSilent || this.calm) { this.silentTime = 0; this.silentTick = 0; }
+    if (!Vs.silent || n > 0 || this.noSilent || admB.noSilent || this.calm) { this.silentTime = 0; this.silentTick = 0; }
     else {
       this.silentTime += dt;
       if (this.silentTime >= SILENT_ATTACK) {
@@ -333,7 +415,7 @@
         }
       }
     }
-    LO.audio.setBreathing(Math.min(1, this.panting * 1.2) * (this.crouch > 0.5 && !this.moving ? 0.15 : 1));
+    LO.audio.setBreathing(Math.min(1, this.panting * 1.2) * (this.crouch > 0.5 && !this.moving && this.windedTimer <= 0 ? 0.15 : 1));
 
     // ---------- pickups ----------
     W.pickups.forEach(p => {
@@ -375,10 +457,10 @@
 
     // ---------- THE EXPOSURE ----------
     // it lives in the lens: the longer the camera is up, the closer it gets
-    if (!Vs.exposure || this.calm) this.exposure = 0;
+    if (!Vs.exposure || admB.noExposure || this.calm) this.exposure = 0;
     else if (this.zoom > 0.5) this.exposure += dt;
     else this.exposure = Math.max(0, this.exposure - dt * EXPO.DECAY);
-    if (Vs.exposure && this.exposure >= EXPO.LUNGE) {
+    if (Vs.exposure && !admB.noExposure && this.exposure >= EXPO.LUNGE) {
       this.exposure = 0;
       this.cameraUp = false;
       this.damage(EXPO.LUNGE_DMG, 'exposure');
@@ -516,6 +598,7 @@
 
   Player.prototype.damage = function (amount, cause) {
     if (this.health <= 0) return;
+    if (LO.admin && LO.admin.god) return;
     const hasHealth = !LO.ver || LO.ver().health;
     this.health = hasHealth ? Math.max(0, this.health - amount) : 0;
     this.shake = Math.max(this.shake, 0.3);
@@ -542,6 +625,7 @@
   const smooth = t => t * t * (3 - 2 * t);
   function angDiff(a, b) { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; }
   Player.prototype.startHideAnim = function (spot, dir) {
+    if (dir === 'in' && this.adrenalineArmed) this.startWinded();
     const eyeOut = 1.62;
     this.hideAnim = {
       spot, dir, t: 0,

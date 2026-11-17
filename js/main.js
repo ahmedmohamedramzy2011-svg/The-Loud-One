@@ -21,7 +21,7 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
@@ -117,10 +117,27 @@
     document.body.classList.toggle('pixelated', S.renderScale < 0.75);
     renderer.toneMappingExposure = 1.15 * S.brightness;
     if (camera) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); }
-    if (scene && scene.fog && state !== 'ending') scene.fog.density = { near: 0.034, medium: 0.022, far: 0.014 }[S.viewDistance] || 0.022;
+    if (scene && scene.fog && state !== 'ending') {
+      scene.fog.density = (LO.admin && LO.admin.fullbright)
+        ? 0.0035
+        : ({ near: 0.034, medium: 0.022, far: 0.014 }[S.viewDistance] || 0.022);
+    }
     $('grain').style.display = S.filmGrain ? 'block' : 'none';
     $('vignette').style.display = S.vignette ? 'block' : 'none';
     $('fps').style.display = S.showFps ? 'block' : 'none';
+  }
+
+  function applyAdminLighting() {
+    if (!world || !world.hemi || !world.moonLight || !world.baseLight) return;
+    if (LO.admin && LO.admin.fullbright) {
+      world.hemi.intensity = 2.2;
+      world.moonLight.intensity = 1.65;
+    } else {
+      const lightBoost = V().darkLight ? 1 : 1.45;
+      world.hemi.intensity = world.baseLight.hemi * lightBoost;
+      world.moonLight.intensity = world.baseLight.moon * lightBoost;
+    }
+    applyDisplay();
   }
 
   function buildWorld() {
@@ -142,6 +159,10 @@
       if (lightOff) showHint('Your equipment is flickering...', 3000);
     };
     fastone = new LO.FastOne(scene, world);
+    fastone.onBreach = pos => {
+      if (state !== 'play' || !V().fastoneV2) return;
+      siren.investigateFence && siren.investigateFence(pos);
+    };
     titleSpot = new THREE.SpotLight(0xfff1d6, 0, 90, 0.42, 0.5, 1.2);
     scene.add(titleSpot, titleSpot.target);
     moths.onShriek = pos => {
@@ -198,7 +219,8 @@
     };
     siren.onSmash = (b, pos) => {
       if (state !== 'play') return;
-      if (b && b.hideSpots && b.hideSpots.length && (player.hidden || player.hideAnim)) {
+      const fastActive = LO.ambush && LO.ambush.active === 'fastone';
+      if (!fastActive && b && b.hideSpots && b.hideSpots.length && (player.hidden || player.hideAnim)) {
         const curSpot = player.hidden || (player.hideAnim && player.hideAnim.spot);
         if (curSpot && b.hideSpots.includes(curSpot)) player.ejectFromHide();
       }
@@ -312,7 +334,7 @@
   }
 
   function syncVersionUI() {
-    const cur = S.gameVersion || '2.4.2';
+    const cur = S.gameVersion || '2.4.3';
     const btn = $('version-btn');
     if (btn) btn.textContent = 'v' + cur;
     document.querySelectorAll('#updates .upd').forEach(u => {
@@ -323,7 +345,7 @@
       let sp = h3.querySelector('span');
       if (match) {
         if (!sp) { sp = document.createElement('span'); h3.appendChild(sp); }
-        sp.textContent = cur === '2.4.2' ? 'current' : 'playing';
+        sp.textContent = cur === '2.4.3' ? 'current' : 'playing';
       } else if (sp) {
         sp.remove();
       }
@@ -334,7 +356,7 @@
     const list = $('version-list');
     if (!list || !LO.VERSIONS) return;
     list.innerHTML = '';
-    const cur = S.gameVersion || '2.4.2';
+    const cur = S.gameVersion || '2.4.3';
     LO.VERSIONS.forEach((v, idx) => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -351,7 +373,8 @@
         LO.Settings.set('gameVersion', v.id);
         syncVersionUI();
         renderVersions();
-        if (moths) moths.reset();
+        if (state === 'title') { buildWorld(); setupTitleScene(); }
+        else worldDirty = true;
         closePanel();
       };
       list.appendChild(b);
@@ -515,6 +538,7 @@
     siren.root.rotation.x = 0;
     siren.glowOverride = undefined; siren.forceLean = undefined; siren.armRaise = 0; siren.neckDip = 0;
     siren.anger = 0; siren.catchDisabled = false; siren.state = 'wander'; siren.path = []; siren.lastHeardTime = -999;
+    siren.fenceDistractUntil = 0; siren.ignorePlayerUntil = 0; siren.fenceLockPos = null;
     siren.spawnFar();
     player.reset(world.spawn, Math.PI);
     moths.reset();
@@ -572,11 +596,10 @@
     siren.glowOverride = undefined;
     siren.spawnFar();
     siren.state = 'wander'; siren.path = [];
+    siren.fenceDistractUntil = 0; siren.ignorePlayerUntil = 0; siren.fenceLockPos = null;
     player.reset(world.spawn, Math.PI);
     const ver = V();
-    const lightBoost = ver.darkLight ? 1 : 1.45;
-    world.hemi.intensity = world.baseLight.hemi * lightBoost;
-    world.moonLight.intensity = world.baseLight.moon * lightBoost;
+    applyAdminLighting();
     const hpRow = $('health-fill') && $('health-fill').closest('.bar-row');
     if (hpRow) hpRow.style.display = ver.health ? '' : 'none';
     const throwBtn = $('t-throw');
@@ -589,7 +612,7 @@
     A.playMusic('explore', 3);
     windStrength = 1;
     A.setWind(ver.wind ? 0.26 : 0, 0.5);
-    lockPointer();
+    if (!(LO.admin && LO.admin.open)) lockPointer();
     setTimeout(() => {
       if (state !== 'play') return;
       showHint(`Photograph ${EVIDENCE_NEEDED} pieces of evidence. Raise your camera with ${LO.isTouch ? 'the CAMERA button' : 'RIGHT MOUSE or Q'}.`, 7000);
@@ -598,7 +621,7 @@
   }
 
   function lockPointer() {
-    if (LO.isTouch) return;
+    if (LO.isTouch || (LO.admin && LO.admin.open)) return;
     const el = renderer.domElement;
     try {
       const p = el.requestPointerLock && el.requestPointerLock();
@@ -608,11 +631,12 @@
 
   LO.pauseGame = () => pause();
   document.addEventListener('pointerlockchange', () => {
-    if (!document.pointerLockElement && state === 'play') pause();
+    if (!document.pointerLockElement && state === 'play' && !(LO.admin && LO.admin.open)) pause();
   });
 
   function pause() {
     if (state !== 'play') return;
+    if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
     state = 'paused';
     player.enabled = false;
     if (sneaky && sneaky.pause) sneaky.pause();
@@ -906,7 +930,7 @@
     const d = siren.distToPlayer || 999;
     $('bars').querySelector('.bar-mark').style.left = Math.min(99, d / 50 * 100) + '%';
     $('stamina-fill').style.width = player.stamina + '%';
-    $('stamina-fill').parentNode.classList.toggle('tired', player.exhausted);
+    $('stamina-fill').parentNode.classList.toggle('tired', !!(player.exhausted || player.windedTimer > 0));
     $('battery-fill').style.width = player.battery + '%';
     $('battery-fill').parentNode.classList.toggle('low', player.battery < 15);
     const st = siren.status(player);
@@ -1014,27 +1038,32 @@
     if (state === 'title' || state === 'gate') {
       updateTitle(dt);
     } else if (state === 'play') {
-      gameTime += dt;
-      LO.ambush.now = gameTime;
-      player.update(dt, gameTime);
-      siren.update(dt, player, gameTime);
-      if (state === 'play') moths.update(dt, player, camera, gameTime);
-      if (state === 'play' && sneaky.update(dt, player, camera, siren) === 'kill') dieBy('sneaky');
-      if (state === 'play' && fastone.update(dt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
-      world.update(dt, gameTime);
-      if (state === 'play') {
-        updateHUD();
-        updateHintUI();
-        updateWindState(dt);
-        // music & heartbeat follow the danger
-        const d = siren.distToPlayer || 999;
-        const near = Math.max(0, 1 - d / 70);
-        // the ground trembles when he's right on top of you
-        if (d < 35 && !A.still) player.shake = Math.max(player.shake, Math.pow(1 - d / 35, 1.5) * 0.3);
-        if (siren.state === 'hunt') A.playMusic('chase', 1);
-        else A.playMusic('explore', 4);
-        A.intensity = Math.min(1, near * 0.7 + (siren.state === 'investigate' ? 0.4 : siren.state === 'search' ? 0.5 : 0));
-        A.setHeartbeat(siren.state === 'wander' ? near * 0.5 : Math.max(0.35, near));
+      const adm = LO.admin;
+      const frozenByPanel = !!(adm && adm.open && adm.freezeWhenOpen);
+      const simDt = frozenByPanel ? 0 : dt * (adm && typeof adm.timeScale === 'number' ? adm.timeScale : 1);
+      if (simDt > 0) {
+        gameTime += simDt;
+        LO.ambush.now = gameTime;
+        player.update(simDt, gameTime);
+        siren.update(simDt, player, gameTime);
+        if (state === 'play') moths.update(simDt, player, camera, gameTime);
+        if (state === 'play' && sneaky.update(simDt, player, camera, siren) === 'kill') dieBy('sneaky');
+        if (state === 'play' && fastone.update(simDt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
+        world.update(simDt, gameTime);
+        if (state === 'play') {
+          updateHUD();
+          updateHintUI();
+          updateWindState(simDt);
+          // music & heartbeat follow the danger
+          const d = siren.distToPlayer || 999;
+          const near = Math.max(0, 1 - d / 70);
+          // the ground trembles when he's right on top of you
+          if (d < 35 && !A.still) player.shake = Math.max(player.shake, Math.pow(1 - d / 35, 1.5) * 0.3);
+          if (siren.state === 'hunt') A.playMusic('chase', 1);
+          else A.playMusic('explore', 4);
+          A.intensity = Math.min(1, near * 0.7 + ((siren.state === 'investigate' || siren.state === 'investigate_breach') ? 0.4 : siren.state === 'search' ? 0.5 : 0));
+          A.setHeartbeat(siren.state === 'wander' ? near * 0.5 : Math.max(0.35, near));
+        }
       }
     } else if (state === 'dying') {
       updateDying(dt);
@@ -1050,6 +1079,8 @@
       if (world && world.updateWind) world.updateWind(dt, 0.5, camera.position, gameTime);
       if (world) world.update(dt, gameTime += dt);
     }
+
+    if (LO.admin && LO.admin.update) LO.admin.update(dt);
 
     if (world && world.sky) { world.sky.position.copy(camera.position); world.stars.position.copy(camera.position); }
     if (state === 'dead') {
@@ -1086,6 +1117,7 @@
         case 'audio': openPanel('audio', inPause ? 'pause' : 'title'); break;
         case 'updates': openPanel('updates', 'title'); break;
         case 'versions': openPanel('versions', 'title'); break;
+        case 'admin': LO.admin && LO.admin.openPanel(inPause ? 'pause' : 'title'); break;
         case 'back': closePanel(); break;
         case 'resume': resume(); break;
         case 'retry': startGame(true); break;
@@ -1093,8 +1125,14 @@
       }
     });
     window.addEventListener('keydown', e => {
-      if (e.code === 'KeyH' && state === 'play') useHint();
+      if ((e.code === 'Backquote' || e.code === 'F9') && state !== 'gate') {
+        e.preventDefault();
+        if (LO.admin) LO.admin.toggle(state);
+        return;
+      }
+      if (e.code === 'KeyH' && state === 'play' && !(LO.admin && LO.admin.open)) useHint();
       if (e.code === 'Escape') {
+        if (LO.admin && LO.admin.open) { LO.admin.closePanel(); return; }
         if (state === 'paused' && $('pause').classList.contains('active')) resume();
         else if (document.querySelector('.panel-screen.active')) closePanel();
       }
@@ -1134,6 +1172,70 @@
     };
     gate.addEventListener('click', leaveGate);
     window.addEventListener('keydown', leaveGate);
+    LO.adminHost = {
+      getState: () => state,
+      getGameTime: () => gameTime,
+      getEvidenceCount: () => evidenceCount,
+      getWorld: () => world,
+      getSiren: () => siren,
+      getPlayer: () => player,
+      getMoths: () => moths,
+      getSneaky: () => sneaky,
+      getFastOne: () => fastone,
+      getScene: () => scene,
+      getCamera: () => camera,
+      pause,
+      resume,
+      lockPointer,
+      startPlay: () => startGame(true),
+      goTitle,
+      showHint,
+      applyDisplay,
+      applyAdminLighting,
+      markEvidence(ev) {
+        if (!ev || ev.found) return;
+        ev.found = true;
+        evidenceCount++;
+        lastEvidenceTime = gameTime;
+        if (ev === hintTarget) hintTarget = null;
+        A.evidenceSting();
+        updateEvidenceUI();
+        if (evidenceCount >= EVIDENCE_NEEDED && !endingQueued) queueEnding();
+      },
+      resetEvidence() {
+        world.evidence.forEach(e => { e.found = false; });
+        evidenceCount = 0;
+        endingQueued = false;
+        player.calm = false;
+        player.noSilent = false;
+        hintTarget = null;
+        updateEvidenceUI();
+      },
+      unlockHint() {
+        lastEvidenceTime = gameTime - HINT_DELAY;
+        updateHintUI();
+        if (state === 'play') useHint();
+      },
+      queueEnding() { if (!endingQueued) queueEnding(); },
+      startEnding() { startEnding(); },
+      triggerDeath(cause) {
+        if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
+        if (state === 'paused') { hideAllScreens(); show('hud'); state = 'play'; }
+        if (state !== 'play') return false;
+        const wasGod = !!(LO.admin && LO.admin.god);
+        if (LO.admin) LO.admin.god = false;
+        siren.catchDisabled = false;
+        if (cause === 'siren') onCaught();
+        else dieBy(cause || 'siren');
+        if (LO.admin) LO.admin.god = wasGod;
+        return true;
+      },
+      showScreen: (id, on) => show(id, on),
+      hideAllScreens,
+      setPlayEnabled: on => { if (player) player.enabled = !!on; },
+      syncClock: () => { clock.getDelta(); },
+    };
+    if (LO.admin && LO.admin.init) LO.admin.init();
     // expose for debugging
     LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, startGame, startEnding, beginPlay };
   }

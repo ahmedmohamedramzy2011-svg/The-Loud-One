@@ -540,24 +540,47 @@
   A.fenceSmash = function (pos) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    const p = panner(pos, 26, 0.55); p.connect(worldBus);
-    // heavy metallic fence crunch + splintering crackle
-    const o = ctx.createOscillator(); o.type = 'triangle';
-    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(32, t + 0.45);
-    const g = ctx.createGain(); env(g, t, 0.002, 1.2, 0.5, 0.0001);
-    o.connect(g); g.connect(p); o.start(t); o.stop(t + 0.55);
-    for (let i = 0; i < 4; i++) {
-      const tt = t + i * 0.045;
+    const p = panner(pos, 70, 0.22); p.connect(worldBus);
+    // distant-carry path so the breach is unmistakable from anywhere in town while preserving stereo direction
+    const carry = ctx.createGain(); carry.gain.value = 0.55;
+    const carryLP = ctx.createBiquadFilter(); carryLP.type = 'lowpass'; carryLP.frequency.value = 1450;
+    carry.connect(carryLP); carryLP.connect(worldBus);
+
+    // 1. heavy post-break structural slam
+    const sub = ctx.createOscillator(); sub.type = 'sine';
+    sub.frequency.setValueAtTime(145, t); sub.frequency.exponentialRampToValueAtTime(28, t + 0.62);
+    const sg = ctx.createGain(); env(sg, t, 0.003, 1.4, 0.62, 0.0001);
+    sub.connect(sg); sg.connect(p); sg.connect(carry); sub.start(t); sub.stop(t + 0.72);
+
+    const knock = ctx.createOscillator(); knock.type = 'triangle';
+    knock.frequency.setValueAtTime(240, t); knock.frequency.exponentialRampToValueAtTime(52, t + 0.34);
+    const kg = ctx.createGain(); env(kg, t, 0.002, 1.05, 0.34, 0.0001);
+    knock.connect(kg); kg.connect(p); kg.connect(carry); knock.start(t); knock.stop(t + 0.42);
+
+    // 2. cascading wood-plank snaps & splintering crackle
+    for (let i = 0; i < 5; i++) {
+      const tt = t + i * 0.062;
       const n = noiseSrc(false, false);
-      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 950 + i * 500; f.Q.value = 1.4;
-      const gn = ctx.createGain(); env(gn, tt, 0.002, 0.85 - i * 0.15, 0.18, 0.0001);
-      n.connect(f); f.connect(gn); gn.connect(p); n.start(tt); n.stop(tt + 0.25);
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 850 + i * 420; f.Q.value = 1.25;
+      const gn = ctx.createGain(); env(gn, tt, 0.002, 1.15 - i * 0.14, 0.26, 0.0001);
+      n.connect(f); f.connect(gn); gn.connect(p); gn.connect(carry); n.start(tt); n.stop(tt + 0.34);
     }
+
+    // 3. top security-wire snap + splinter scatter tail
+    const wire = ctx.createOscillator(); wire.type = 'sine';
+    wire.frequency.setValueAtTime(760, t + 0.03); wire.frequency.exponentialRampToValueAtTime(460, t + 0.42);
+    const wg = ctx.createGain(); env(wg, t + 0.03, 0.003, 0.28, 0.38, 0.0001);
+    wire.connect(wg); wg.connect(p); wire.start(t + 0.03); wire.stop(t + 0.46);
+
+    const tail = noiseSrc(true, false);
+    const tf = ctx.createBiquadFilter(); tf.type = 'lowpass'; tf.frequency.value = 540;
+    const tg = ctx.createGain(); env(tg, t + 0.08, 0.04, 0.65, 0.85, 0.0001);
+    tail.connect(tf); tf.connect(tg); tg.connect(p); tg.connect(carry); tail.start(t + 0.08); tail.stop(t + 0.98);
   };
   A.fastHowl = function (pos) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    const p = panner(pos, 24, 0.55); p.connect(worldBus);
+    const p = panner(pos, 55, 0.28); p.connect(worldBus);
     const dist = distortion(4);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 780; f.Q.value = 1.5;
     dist.connect(f); f.connect(p);
@@ -566,7 +589,7 @@
       o.frequency.setValueAtTime(220 * mul, t);
       o.frequency.linearRampToValueAtTime(580 * mul, t + 0.22);
       o.frequency.exponentialRampToValueAtTime(170 * mul, t + 1.15);
-      const g = ctx.createGain(); env(g, t, 0.03, 0.45, 1.1, 0.0001);
+      const g = ctx.createGain(); env(g, t, 0.03, 0.58, 1.1, 0.0001);
       o.connect(g); g.connect(dist); o.start(t); o.stop(t + 1.25);
     });
   };

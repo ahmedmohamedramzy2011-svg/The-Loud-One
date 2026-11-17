@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=52">
+<link rel="stylesheet" href="css/style.css?v=57">
 </head>
 <body>
 
@@ -43,8 +43,9 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.4.2</button>
-    <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.4.3</button>
+    <span class="ver-sep">&nbsp;·&nbsp; stay quiet &nbsp;·&nbsp;</span>
+    <button type="button" id="admin-footer-btn" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
   </div>
 </div>
 
@@ -83,6 +84,7 @@
         <tr><td>E</td><td>Hide / leave hiding spot</td></tr>
         <tr><td>G</td><td>Throw a rock</td></tr>
         <tr><td>H</td><td>Hint (after 3 minutes without new evidence)</td></tr>
+        <tr><td>` / F9</td><td>Admin testing panel</td></tr>
         <tr><td>Esc</td><td>Pause</td></tr>
       </table>
     </div>
@@ -97,7 +99,14 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.4.2"><h3>v2.4.2 <span>current</span></h3><ul>
+      <div class="upd" data-ver="2.4.3"><h3>v2.4.3 <span>current</span></h3><ul>
+        <li>Added a 2.5-second fence breach telegraph delay (shattering planks, roar &amp; dust cloud) before The Fast One begins its 6-second pursuit</li>
+        <li>Raised Adrenaline trigger threshold from &gt;7s to &gt;10.5s away (using normal sprint speed distance to closest cover) while keeping blue hiding-spot highlights always active</li>
+        <li>Added a 75-second Adrenaline cooldown plus a 5-second Exhausted / Winded penalty (3s paused stamina regen, 2s half-speed regen &amp; heavy panting) after sprint end or hiding</li>
+        <li>Siren Head now immediately turns to investigate both entry and exit perimeter fence breaches</li>
+        <li>Added 4 exterior dumpsters in Hollow Creek open dead zones</li>
+      </ul></div>
+      <div class="upd" data-ver="2.4.2"><h3>v2.4.2</h3><ul>
         <li>Added version switcher — click the version label at the bottom left of the title screen to play older versions</li>
         <li>Added mechanic doodles and handwritten notes to every entity sketch in the death screen notebook</li>
         <li>Upgraded Phenomenon-241's CRT TV survival tape with the locker rear-up &amp; slam animation</li>
@@ -307,6 +316,7 @@
       <button data-action="resume">RESUME</button>
       <button data-action="graphics">GRAPHICS</button>
       <button data-action="audio">AUDIO &amp; CONTROLS</button>
+      <button data-action="admin">ADMIN PANEL</button>
       <button data-action="quit">QUIT TO TITLE</button>
     </nav>
   </div>
@@ -345,24 +355,50 @@
   </div>
 </div>
 
+<!-- Admin / Testing Panel -->
+<div id="admin-panel" class="screen panel-screen">
+  <div class="panel adm-panel">
+    <div class="panel-head adm-head">
+      <div>
+        <h2>ADMIN PANEL</h2>
+        <div class="adm-sub">Testing &amp; debug tools &nbsp;·&nbsp; Press ` or F9 anytime</div>
+      </div>
+      <div class="adm-head-ctrls">
+        <button type="button" id="adm-freeze-btn" class="adm-chip on">FREEZE WHEN OPEN: ON</button>
+        <button type="button" id="adm-close" class="panel-close" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <div id="adm-telemetry" class="adm-telemetry"></div>
+    <div id="adm-tabs" class="adm-tabs">
+      <button type="button" data-tab="entities" class="active">ENTITIES</button>
+      <button type="button" data-tab="player">PLAYER</button>
+      <button type="button" data-tab="world">WORLD &amp; EVIDENCE</button>
+      <button type="button" data-tab="debug">DEBUG &amp; SCENES</button>
+    </div>
+    <div id="adm-body" class="panel-body adm-body"></div>
+    <div id="adm-toast" class="adm-toast"></div>
+  </div>
+</div>
+
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=52"></script>
+<script src="js/settings.js?v=54"></script>
 <script src="audio/sounds.js?v=25"></script>
 <script src="audio/voice.js?v=16"></script>
-<script src="js/audio.js?v=50"></script>
+<script src="js/audio.js?v=51"></script>
 <script src="js/textures.js?v=50"></script>
-<script src="js/world.js?v=52"></script>
-<script src="js/sirenhead.js?v=52"></script>
-<script src="js/player.js?v=52"></script>
-<script src="js/moths.js?v=52"></script>
+<script src="js/world.js?v=54"></script>
+<script src="js/sirenhead.js?v=57"></script>
+<script src="js/player.js?v=57"></script>
+<script src="js/moths.js?v=57"></script>
 <script src="js/deathroom.js?v=53"></script>
-<script src="js/sneaky.js?v=52"></script>
-<script src="js/fastone.js?v=52"></script>
+<script src="js/sneaky.js?v=57"></script>
+<script src="js/fastone.js?v=57"></script>
 <script src="js/cutscenes.js?v=50"></script>
 <script src="js/tvfx.js?v=52"></script>
-<script src="js/main.js?v=52"></script>
+<script src="js/admin.js?v=57"></script>
+<script src="js/main.js?v=57"></script>
 <script src="js/touch.js?v=50"></script>
 </body>
 </html>

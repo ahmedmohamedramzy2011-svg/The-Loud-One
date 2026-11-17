@@ -11,9 +11,12 @@
 (function () {
   const V3 = THREE.Vector3;
   const MIN_T = 30, MAX_T = 180;
+  const BREACH_DELAY = 2.5;
   const KILL_TIME = 6.0;
-  const ADRENALINE_TIME_THRESHOLD = 7.0;
-  const BASE_WALK_SPEED = 3.3;
+  const ADRENALINE_TIME_THRESHOLD = 10.5;
+  const NORMAL_SPRINT_SPEED = 6.9;
+  const LEGACY_THRESHOLD = 7.0;
+  const LEGACY_WALK_SPEED = 3.3;
   const AFTERIMAGES = 4;
 
   LO.ambush = LO.ambush || { active: null, gapUntil: 0, now: 0 };
@@ -29,9 +32,11 @@
     scene.add(this.fxGroup);
 
     this.splinters = [];
+    this.dust = [];
     this.trail = [];
     this.clones = [];
     this.highlightedSpot = null;
+    this.onBreach = null;
 
     this.buildModel();
     this.buildAfterimages();
@@ -271,9 +276,11 @@
     }
   };
 
-  // ---------------- splinter particles for fence breach ----------------
+  // ---------------- splinter & dust cloud particles for fence breach ----------------
   const splinterGeo = new THREE.BoxGeometry(0.08, 0.05, 0.46);
   const splinterMat = new THREE.MeshLambertMaterial({ color: 0x4b463e });
+  const dustGeo = new THREE.DodecahedronGeometry(0.45, 0);
+
   FastOne.prototype.spawnSplinters = function (origin, dir) {
     const count = 26;
     for (let i = 0; i < count; i++) {
@@ -301,6 +308,40 @@
     }
   };
 
+  FastOne.prototype.spawnDustCloud = function (origin, dir) {
+    const count = 16;
+    for (let i = 0; i < count; i++) {
+      const mat = new THREE.MeshLambertMaterial({
+        color: i % 2 ? 0x6c6558 : 0x575046,
+        transparent: true,
+        opacity: 0.46,
+        depthWrite: false,
+      });
+      const m = new THREE.Mesh(dustGeo, mat);
+      m.position.set(
+        origin.x + (Math.random() - 0.5) * 3.6,
+        0.35 + Math.random() * 1.5,
+        origin.z + (Math.random() - 0.5) * 3.6
+      );
+      const s0 = 0.7 + Math.random() * 0.8;
+      m.scale.setScalar(s0);
+      const sp = 1.5 + Math.random() * 4.5;
+      const side = (Math.random() - 0.5) * 3.2;
+      const maxLife = 1.8 + Math.random() * 0.8;
+      this.fxGroup.add(m);
+      this.dust.push({
+        mesh: m,
+        mat,
+        vx: dir.x * sp + (-dir.z) * side,
+        vy: 0.6 + Math.random() * 1.4,
+        vz: dir.z * sp + dir.x * side,
+        s0,
+        life: maxLife,
+        maxLife,
+      });
+    }
+  };
+
   FastOne.prototype.updateSplinters = function (dt) {
     for (let i = this.splinters.length - 1; i >= 0; i--) {
       const s = this.splinters[i];
@@ -324,6 +365,24 @@
       s.mesh.rotation.y += s.ry * dt;
       s.mesh.rotation.z += s.rz * dt;
     }
+    for (let i = this.dust.length - 1; i >= 0; i--) {
+      const d = this.dust[i];
+      d.life -= dt;
+      if (d.life <= 0) {
+        this.fxGroup.remove(d.mesh);
+        d.mat.dispose();
+        this.dust.splice(i, 1);
+        continue;
+      }
+      const k = 1 - d.life / d.maxLife;
+      d.mesh.position.x += d.vx * dt;
+      d.mesh.position.y += d.vy * dt;
+      d.mesh.position.z += d.vz * dt;
+      d.vx *= Math.max(0, 1 - dt * 1.6);
+      d.vz *= Math.max(0, 1 - dt * 1.6);
+      d.mesh.scale.setScalar(d.s0 * (1 + k * 2.6));
+      d.mat.opacity = 0.46 * (1 - k);
+    }
   };
 
   FastOne.prototype.breachFence = function (fence, dir) {
@@ -333,7 +392,9 @@
     }
     const pos = fence ? fence.pos : this.pos;
     this.spawnSplinters(pos, dir);
+    if (!LO.ver || LO.ver().fastoneV2) this.spawnDustCloud(pos, dir);
     LO.audio.fenceSmash(pos);
+    return pos;
   };
 
   // ---------------- blue outline highlight on closest locker/dumpster ----------------
@@ -410,16 +471,75 @@
     this.setHighlight(null);
   };
 
-  FastOne.prototype.findClosestHideSpot = function (player) {
+  FastOne.prototype.findClosestHideSpot = function (player, computePath) {
     const now = performance.now() / 1000;
+    const spots = [];
     let best = null, bd = Infinity;
     (this.world.hideSpots || []).forEach(sp => {
       if (sp.disabled) return;
       if (sp.lockedUntil && sp.lockedUntil > now) return;
       const d = Math.hypot(sp.interact.x - player.pos.x, sp.interact.z - player.pos.z);
+      spots.push({ sp, d });
       if (d < bd) { bd = d; best = sp; }
     });
-    return { spot: best, dist: bd };
+    let pathDist = bd;
+    if (computePath && spots.length && this.world.colliders) {
+      // Single-source 4m grid BFS from player.pos around colliders to estimate true walkable distance
+      const STEP = 4, HALF = (this.world.HALF || 110);
+      const MIN = -HALF, N = Math.floor((HALF * 2) / STEP) + 1;
+      const colliders = this.world.colliders;
+      const blocked = new Uint8Array(N * N);
+      for (let ix = 0; ix < N; ix++) {
+        const x = MIN + ix * STEP;
+        for (let iz = 0; iz < N; iz++) {
+          const z = MIN + iz * STEP;
+          for (let ci = 0; ci < colliders.length; ci++) {
+            const c = colliders[ci];
+            if (c.disabled || c.maxY < 0.35 || c.minY > 1.75) continue;
+            if (x + 0.35 > c.minX && x - 0.35 < c.maxX && z + 0.35 > c.minZ && z - 0.35 < c.maxZ) {
+              blocked[ix * N + iz] = 1;
+              break;
+            }
+          }
+        }
+      }
+      const distGrid = new Float32Array(N * N);
+      distGrid.fill(1e9);
+      const clampIdx = v => Math.max(0, Math.min(N - 1, Math.round((v - MIN) / STEP)));
+      const sx = clampIdx(player.pos.x), sz = clampIdx(player.pos.z);
+      const sIdx = sx * N + sz;
+      distGrid[sIdx] = 0;
+      const q = [sIdx];
+      let head = 0;
+      const dirs = [[1, 0, STEP], [-1, 0, STEP], [0, 1, STEP], [0, -1, STEP], [1, 1, STEP * 1.414], [1, -1, STEP * 1.414], [-1, 1, STEP * 1.414], [-1, -1, STEP * 1.414]];
+      while (head < q.length) {
+        const cur = q[head++], cx = (cur / N) | 0, cz = cur % N, cd = distGrid[cur];
+        for (let di = 0; di < 8; di++) {
+          const nx = cx + dirs[di][0], nz = cz + dirs[di][1];
+          if (nx < 0 || nx >= N || nz < 0 || nz >= N) continue;
+          const ni = nx * N + nz;
+          if (blocked[ni]) continue;
+          const nd = cd + dirs[di][2];
+          if (nd < distGrid[ni]) { distGrid[ni] = nd; q.push(ni); }
+        }
+      }
+      let bestPath = Infinity;
+      for (let i = 0; i < spots.length; i++) {
+        const { sp, d } = spots[i];
+        const tx = clampIdx(sp.interact.x), tz = clampIdx(sp.interact.z);
+        let gd = distGrid[tx * N + tz];
+        if (gd >= 1e8) {
+          for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+            const nx = tx + ox, nz = tz + oz;
+            if (nx >= 0 && nx < N && nz >= 0 && nz < N) gd = Math.min(gd, distGrid[nx * N + nz] + STEP);
+          }
+        }
+        const cand = gd < 1e8 ? Math.max(d, gd) : d;
+        if (cand < bestPath) bestPath = cand;
+      }
+      if (bestPath < 1e8) pathDist = bestPath;
+    }
+    return { spot: best, dist: bd, pathDist };
   };
 
   FastOne.prototype.farthestFence = function (fromPos) {
@@ -450,10 +570,23 @@
     return best;
   };
 
+  // pick a distant intact fence (>= 70m away, preferring the farthest opposite-side perimeter)
+  FastOne.prototype.distantExitFence = function (refPos) {
+    const fences = this.world.fences || [];
+    let best = null, bd = -1;
+    for (const f of fences) {
+      if (f.broken) continue;
+      const d = Math.hypot(f.pos.x - refPos.x, f.pos.z - refPos.z);
+      if (d >= 70 && d > bd) { bd = d; best = f; }
+    }
+    return best || this.farthestFence(refPos);
+  };
+
   // ---------------- reset ----------------
   FastOne.prototype.reset = function () {
-    this.state = 'idle';          // idle | chase | slam | exit
+    this.state = 'idle';          // idle | telegraph | chase | slam | exit
     this.timer = nextTime();
+    this.telegraphT = 0;
     this.chaseT = 0;
     this.slamT = 0;
     this.slamPhase = 'approach';
@@ -484,6 +617,8 @@
     }
     for (const s of this.splinters) this.fxGroup.remove(s.mesh);
     this.splinters.length = 0;
+    for (const d of this.dust) { this.fxGroup.remove(d.mesh); d.mat.dispose(); }
+    this.dust.length = 0;
     if (LO.ambush.active === 'fastone') LO.ambush.active = null;
   };
 
@@ -493,41 +628,81 @@
     let sx = 0, sz = this.world.HALF + 2;
     if (fence) { sx = fence.pos.x; sz = fence.pos.z; }
 
-    // start just outside the fence, pointing inward toward the player
+    // start right at/just outside the shattered fence facing inward
     const inward = new V3(player.pos.x - sx, 0, player.pos.z - sz).normalize();
-    this.pos.set(sx - inward.x * 2.5, 0, sz - inward.z * 2.5);
+    this.pos.set(sx - inward.x * 1.4, 0, sz - inward.z * 1.4);
     this.root.rotation.y = Math.atan2(inward.x, inward.z);
     this.root.visible = true;
 
-    this.breachFence(fence, inward);
+    const breachPos = this.breachFence(fence, inward);
     LO.audio.fastHowl(this.pos);
 
-    this.state = 'chase';
+    const v2 = !LO.ver || LO.ver().fastoneV2;
+    if (v2 && this.onBreach) this.onBreach(breachPos, 'entry');
+
+    this.state = v2 ? 'telegraph' : 'chase';
+    this.telegraphT = 0;
     this.chaseT = 0;
     this.gait = 0;
     this.trail = [];
     this.trailTimer = 0;
-    this.trailFade = 1;
+    this.trailFade = v2 ? 0 : 1;
     LO.ambush.active = 'fastone';
 
-    // >7-second distance check to closest locker/dumpster triggers adrenaline
-    const nearest = this.findClosestHideSpot(player);
+    const nearest = this.findClosestHideSpot(player, v2);
     if (nearest.spot) {
       this.setHighlight(nearest.spot, time);
-      const estSeconds = nearest.dist / BASE_WALK_SPEED;
-      if (estSeconds > ADRENALINE_TIME_THRESHOLD) {
-        player.adrenaline = 8.0;
-        player.stamina = 100;
-        player.exhausted = false;
-        LO.audio.adrenaline();
-        player.hint && player.hint('You feel a surge of adrenaline...', 4200);
+      if (v2) {
+        const estSeconds = nearest.pathDist / NORMAL_SPRINT_SPEED;
+        if (estSeconds > ADRENALINE_TIME_THRESHOLD && player.triggerAdrenaline && player.triggerAdrenaline(BREACH_DELAY + KILL_TIME + 0.5)) {
+          LO.audio.adrenaline();
+          player.hint && player.hint('You feel a surge of adrenaline...', 4200);
+        } else {
+          player.hint && player.hint('Something smashed through the fence! Find cover!', 3200);
+        }
       } else {
-        player.hint && player.hint('Something broke through the fence! Get to a hiding spot!', 3200);
+        const estSeconds = nearest.dist / LEGACY_WALK_SPEED;
+        if (estSeconds > LEGACY_THRESHOLD) {
+          player.adrenaline = 8.0;
+          player.stamina = 100;
+          player.exhausted = false;
+          LO.audio.adrenaline();
+          player.hint && player.hint('You feel a surge of adrenaline...', 4200);
+        } else {
+          player.hint && player.hint('Something broke through the fence! Get to a hiding spot!', 3200);
+        }
       }
     }
   };
 
-  // ---------------- gallop animation helper ----------------
+  // ---------------- breach telegraph & gallop animation helpers ----------------
+  FastOne.prototype.animateTelegraph = function (dt, player) {
+    const t = this.telegraphT;
+    const p = t / BREACH_DELAY;
+    const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+    this.root.rotation.y = Math.atan2(dx, dz);
+    // brace low & snarl violently, lunging forward near t -> 2.5s
+    const crouch = p < 0.78 ? Math.sin(p * Math.PI) * 0.14 : 0.18 * (1 - (p - 0.78) / 0.22);
+    this.body.position.y = 0.54 - crouch * 0.4 + Math.sin(t * 22) * 0.02;
+    this.body.rotation.x = p < 0.78 ? -0.18 - Math.sin(t * 14) * 0.06 : 0.15;
+    this.jaw.rotation.x = 0.45 + Math.abs(Math.sin(t * 11)) * 0.42;
+    this.tail.rotation.y = Math.sin(t * 15) * 0.55;
+    this.legs.forEach(L => {
+      const scrape = L.front ? Math.sin(t * 9 + L.phase) * 0.28 : 0;
+      L.hip.rotation.x = (L.front ? -0.25 : 0.28) + scrape;
+      L.knee.rotation.x = L.front ? -0.35 : 0.45;
+    });
+    const half = Math.floor(t * 4);
+    if (half !== this.lastStepHalf) {
+      this.lastStepHalf = half;
+      LO.audio.fastStep(this.pos);
+    }
+    const dist = Math.hypot(dx, dz);
+    if (dist < 45) {
+      player.shake = Math.max(player.shake, (1 - dist / 45) * 0.25);
+    }
+  };
+
   FastOne.prototype.animateRun = function (dt, speed, time) {
     this.gait += dt * (10 + speed * 0.65);
     const p = this.gait;
@@ -548,9 +723,18 @@
   };
 
   // ---------------- update ----------------
+  FastOne.prototype.forceSpawn = function (player, time) {
+    if (!player) return false;
+    if (this.state !== 'idle') this.finishEncounter();
+    if (LO.ambush) { LO.ambush.active = null; LO.ambush.gapUntil = 0; }
+    this.timer = 0;
+    this.spawnBreach(player, time || 0);
+    return true;
+  };
+
   FastOne.prototype.update = function (dt, player, camera, siren, time) {
     this.updateSplinters(dt);
-    if (LO.ver && !LO.ver().fastone) {
+    if ((LO.ver && !LO.ver().fastone) || (LO.admin && LO.admin.noFastOne)) {
       if (this.state !== 'idle') this.finishEncounter();
       this.updateAfterimages(dt, false);
       return;
@@ -559,7 +743,7 @@
     if (player.calm || !player.alive) {
       if (this.state !== 'idle') {
         this.clearHighlight();
-        if (this.state === 'chase') this.startExit();
+        if (this.state === 'chase' || this.state === 'telegraph') this.startExit(player);
         else if (this.state === 'slam' || this.state === 'exit') { /* finish cleanly */ }
       }
       if (this.state === 'idle') { this.updateAfterimages(dt, false); return; }
@@ -579,6 +763,26 @@
         return;
       }
       this.spawnBreach(player, time);
+      return;
+    }
+
+    if (this.state === 'telegraph') {
+      this.telegraphT += dt;
+      this.animateTelegraph(dt, player);
+      this.updateAfterimages(dt, false);
+      const hidingSpot = player.hidden || (player.hideAnim && player.hideAnim.dir === 'in' && player.hideAnim.t >= 0.45 ? player.hideAnim.spot : null);
+      if (!hidingSpot) {
+        const nearest = this.findClosestHideSpot(player);
+        this.setHighlight(nearest.spot, time);
+      } else {
+        this.clearHighlight();
+      }
+      if (this.telegraphT >= BREACH_DELAY) {
+        this.state = 'chase';
+        this.chaseT = 0;
+        this.trailFade = 1;
+        LO.audio.fastHowl(this.pos);
+      }
       return;
     }
 
@@ -642,7 +846,7 @@
 
     if (this.state === 'slam') {
       const sp = this.slamSpot;
-      if (!sp || sp.disabled) { this.startExit(); return; }
+      if (!sp || sp.disabled) { this.startExit(player); return; }
       if (this.slamPhase === 'approach') {
         const tx = sp.exit.x, tz = sp.exit.z;
         const dx = tx - this.pos.x, dz = tz - this.pos.z;
@@ -723,40 +927,45 @@
         }
       } else {
         if (!player.hideAnim && sp.setOpen) sp.setOpen(0);
-        this.startExit();
+        this.startExit(player);
       }
       return;
     }
 
     if (this.state === 'exit') {
       const f = this.exitFence;
+      const v2 = !LO.ver || LO.ver().fastoneV2;
+      const exitSpeed = v2 ? 44 : 34;
+      const maxExitElapsed = v2 ? 9.0 : 4.5;
       if (!this.exitBreached) {
         this.exitElapsed += dt;
         const tx = f ? f.pos.x : 0;
         const tz = f ? f.pos.z : -(this.world.HALF + 2);
         const dx = tx - this.pos.x, dz = tz - this.pos.z;
         const dist = Math.hypot(dx, dz) || 0.001;
-        const speed = 34;
-        const step = Math.min(dist, speed * dt);
+        const step = Math.min(dist, exitSpeed * dt);
         this.pos.x += (dx / dist) * step;
         this.pos.z += (dz / dist) * step;
         this.root.rotation.y = Math.atan2(dx, dz);
-        this.animateRun(dt, speed, time);
+        this.animateRun(dt, exitSpeed, time);
         this.updateAfterimages(dt, true);
 
-        if (dist <= 2.6 || this.exitElapsed > 4.5) {
+        if (dist <= 2.6 || this.exitElapsed > maxExitElapsed) {
           this.exitBreached = true;
           this.exitAfterT = 0;
           const outDir = new V3(dx / dist, 0, dz / dist);
           this.exitDir = outDir;
-          this.breachFence(f, outDir);
+          const exitPos = this.breachFence(f, outDir);
+          if (v2 && this.onBreach) {
+            this.onBreach(exitPos, 'exit');
+          }
         }
       } else {
         this.exitAfterT += dt;
         const d = this.exitDir || new V3(0, 0, -1);
-        this.pos.x += d.x * 34 * dt;
-        this.pos.z += d.z * 34 * dt;
-        this.animateRun(dt, 34, time);
+        this.pos.x += d.x * exitSpeed * dt;
+        this.pos.z += d.z * exitSpeed * dt;
+        this.animateRun(dt, exitSpeed, time);
         this.updateAfterimages(dt, true);
 
         if (this.exitAfterT >= 0.55) {
@@ -766,10 +975,12 @@
     }
   };
 
-  FastOne.prototype.startExit = function () {
+  FastOne.prototype.startExit = function (player) {
     this.clearHighlight();
     this.state = 'exit';
-    this.exitFence = this.closestFence(this.pos);
+    const v2 = !LO.ver || LO.ver().fastoneV2;
+    const refPos = (player && player.pos) || this.pos;
+    this.exitFence = v2 ? this.distantExitFence(refPos) : this.closestFence(this.pos);
     this.exitBreached = false;
     this.exitAfterT = 0;
     this.exitElapsed = 0;

@@ -42,6 +42,9 @@
     this.echoTimer = 50 + Math.random() * 15;
     this.echoCount = 0;
     this.smashPulse = 0;
+    this.fenceDistractUntil = 0;
+    this.ignorePlayerUntil = 0;
+    this.fenceLockPos = null;
     this.voice = LO.audio.createMonsterVoice();
     this.spawnFar();
   }
@@ -226,6 +229,7 @@
   // ------------------------------------------------------------
   SirenHead.prototype.update = function (dt, player, time) {
     if (this.scripted || !player) { this.animate(dt); return; }
+    if (LO.admin && LO.admin.sirenFreeze) { this.speedNow = 0; this.animate(dt); return; }
     this.stateTime += dt;
     this.lastTime = time;
     const W = this.world;
@@ -233,17 +237,43 @@
     const dist = Math.sqrt(dx * dx + dz * dz);
     this.distToPlayer = dist;
 
+    const V = LO.ver ? LO.ver() : { echo: true, sirenFast: true, sirenSmash: true, fastoneV2: true };
+    const adminIgnore = !!(LO.admin && LO.admin.sirenIgnore);
+    const fastActive = !!(LO.ambush && LO.ambush.active === 'fastone');
+    // Direct close-range spot check (only possible AFTER The Fast One has finished its encounter)
+    const dirDot = dist > 0.01 ? ((dx / dist) * Math.sin(this.yaw) + (dz / dist) * Math.cos(this.yaw)) : 1;
+    const directSpotClose = !adminIgnore && !fastActive && !player.hidden && dist < 8.5 && dirDot > 0.4 && player.noiseRadius > 0;
+    if (directSpotClose && this.state === 'investigate_breach') {
+      this.fenceLockPos = null;
+      this.ignorePlayerUntil = 0;
+      this.fenceDistractUntil = 0;
+    }
+    const fenceLocked = !!(V.fastoneV2 && this.fenceLockPos && (fastActive || time < this.ignorePlayerUntil) && !directSpotClose);
+    if (!fenceLocked && time >= this.ignorePlayerUntil && time >= this.fenceDistractUntil) {
+      this.fenceLockPos = null;
+    }
+
     // ---------- HEARING ----------
-    // he hears a little further than the raw noise radius
+    // he hears a little further than the raw noise radius (disabled while distracted by a Fast One fence breach)
     const HEAR = 1.3;
     let heard = false, strength = 0;
     const radius = player.noiseRadius * HEAR;
-    if (!player.hidden && radius > 0 && dist < radius) {
+    if (!adminIgnore && !fenceLocked && !player.hidden && radius > 0 && dist < radius) {
       heard = true;
       strength = 1 - dist / radius;
     }
     this.heardNow = heard;
-    if (heard) {
+    if (fenceLocked) {
+      this.anger = Math.max(0, this.anger - 35 * dt);
+      this.hunting = false;
+      this.echoApproach = false;
+      this.lastHeard.copy(this.fenceLockPos);
+      this.lastHeardTime = time;
+      if (this.state !== 'investigate_breach') {
+        this.reached = false;
+        this.setState('investigate_breach');
+      }
+    } else if (heard) {
       const err = Math.min(6, dist * 0.07);
       // while hunting he leads his target, aiming where you are running to
       const lead = this.state === 'hunt' ? 1.2 : 0.4;
@@ -259,15 +289,14 @@
       if (time - this.lastHeardTime > 2.5) this.anger = Math.max(0, this.anger - decay * dt);
     }
     const sinceHeard = time - this.lastHeardTime;
-    this.stalkTimer = (this.stalkTimer || 0) + dt;
+    this.stalkTimer = fenceLocked ? 0 : (this.stalkTimer || 0) + dt;
 
     // ---------- ECHOLOCATION ----------
     // roughly once a minute he pings the town. It finds you even if you are
     // silent or hidden, and every ping narrows down where you are.
-    const V = LO.ver ? LO.ver() : { echo: true, sirenFast: true, sirenSmash: true };
-    if (V.echo) {
+    if (V.echo && !adminIgnore) {
       this.echoTimer -= dt;
-      if (this.echoTimer <= 0 && this.state !== 'hunt') {
+      if (!fenceLocked && this.echoTimer <= 0 && this.state !== 'hunt') {
         this.echoTimer = 52 + Math.random() * 16;
         this.echoCount++;
         LO.audio.echoPing(this.voice);
@@ -278,9 +307,15 @@
         this.echoApproach = true;
         this.setState('investigate');
         this.onEcho && this.onEcho(dist);
+      } else if (fenceLocked && this.echoTimer <= 0) {
+        this.echoTimer = 10; // defer echo until fence distraction finishes
       }
     }
-    if (heard) this.echoApproach = false;
+    if (heard) {
+      this.echoApproach = false;
+      this.fenceDistractUntil = 0;
+      this.fenceLockPos = null;
+    }
 
     // ---------- STATE MACHINE ----------
     switch (this.state) {
@@ -288,7 +323,7 @@
         this.speed = V.sirenFast ? 3.1 : 2.6;
         if (heard) { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); break; }
         // he "senses" the living: every so often he heads straight for your area
-        if (this.stalkTimer > 40) {
+        if (!adminIgnore && !fenceLocked && this.stalkTimer > 40) {
           this.stalkTimer = 0;
           const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 18;
           const p = W.projectToStreet({ x: player.pos.x + Math.cos(a) * r, z: player.pos.z + Math.sin(a) * r });
@@ -307,14 +342,48 @@
           this.path = this.buildSafeStreetPath(this.pos, n);
         }
         break;
-      case 'investigate':
+      case 'investigate_breach': {
+        // High-priority fence breach response: 1.5x investigate speed to cover Hollow Creek quickly
+        this.speed = (V.sirenFast ? 5.0 : 4.2) * 1.5;
+        if (directSpotClose) {
+          this.setState('investigate');
+          this.lastHeard.set(player.pos.x, 0, player.pos.z);
+          this.anger = Math.max(this.anger, 75);
+          break;
+        }
+        if (!fenceLocked && heard) {
+          if (this.anger >= 100) this.startHunt(dist);
+          else { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); }
+          break;
+        }
+        const target = this.fenceLockPos || this.lastHeard;
+        this.goTo(target, dt);
+        const fenceHold = this.fenceDistractUntil && time < this.fenceDistractUntil;
+        if (!fenceLocked && this.reached && sinceHeard > 2.5) {
+          this.fenceDistractUntil = 0;
+          this.fenceLockPos = null;
+          this.setState('search');
+        } else if (!fenceLocked && !fenceHold) {
+          this.fenceLockPos = null;
+          this.setState('search');
+        }
+        break;
+      }
+      case 'investigate': {
         // an echo only gives him a rough idea: he creeps closer slowly
         this.speed = this.echoApproach ? 2.6 : (V.sirenFast ? 5.0 : 4.2);
-        if (this.anger >= 100) { this.startHunt(dist); break; }
+        if (!fenceLocked && this.anger >= 100) { this.startHunt(dist); break; }
         this.goTo(this.lastHeard, dt);
-        if (this.reached && sinceHeard > 2.5) this.setState('search');
-        if (sinceHeard > 18) this.setState('search');
+        const fenceHold = this.fenceDistractUntil && time < this.fenceDistractUntil;
+        if (!fenceLocked && this.reached && sinceHeard > 2.5) {
+          this.fenceDistractUntil = 0;
+          this.fenceLockPos = null;
+          this.setState('search');
+        } else if (!fenceLocked && !fenceHold && sinceHeard > 18) {
+          this.setState('search');
+        }
         break;
+      }
       case 'hunt':
         this.speed = V.sirenFast ? 7.4 : 6.0; // faster than you can sprint (or classic v1.0 speed)
         this.goTo(this.lastHeard, dt);
@@ -323,8 +392,8 @@
           LO.audio.siren(this.voice, 'short', 0.7);
           this.hunting = false;
         }
-        // CATCH — only possible while he is angry AND you are making noise
-        if (dist < 7 && player.noiseRadius > 0 && !player.hidden && this.stateTime > 0.6) {
+        // CATCH — only possible while he is angry AND you are making noise (never during Fast One fence distraction or admin god/ignore)
+        if (!adminIgnore && !(LO.admin && LO.admin.god) && !fenceLocked && dist < 7 && player.noiseRadius > 0 && !player.hidden && this.stateTime > 0.6) {
           this.onCatch && this.onCatch();
           return;
         }
@@ -381,10 +450,15 @@
   // a noise that is not the player (a thrown rock) — he goes to check it out
   SirenHead.prototype.hearNoise = function (pos, radius) {
     if (this.scripted) return false;
+    const now = this.lastTime || 0;
+    const V = LO.ver ? LO.ver() : { fastoneV2: true };
+    if (V.fastoneV2 && this.fenceLockPos && ((LO.ambush && LO.ambush.active === 'fastone') || now < this.ignorePlayerUntil)) {
+      return false;
+    }
     const d = Math.hypot(pos.x - this.pos.x, pos.z - this.pos.z);
     if (d > radius * 1.3) return false;
     this.lastHeard.set(pos.x, 0, pos.z);
-    this.lastHeardTime = this.lastTime || 0;
+    this.lastHeardTime = now;
     this.echoApproach = false;
     this.path = [];
     if (this.state === 'hunt') return true;           // keeps hunting — but toward the rock
@@ -392,6 +466,28 @@
     this.setState('investigate');
     if (Math.random() < 0.6) this.say('heard', d);
     LO.audio.siren(this.voice, 'short', 0.8);
+    return true;
+  };
+
+  // loud perimeter fence breach (The Fast One entry/exit) — enters high-priority INVESTIGATE_BREACH
+  SirenHead.prototype.investigateFence = function (pos) {
+    if (this.scripted || !pos) return false;
+    const now = this.lastTime || 0;
+    const d = Math.hypot(pos.x - this.pos.x, pos.z - this.pos.z);
+    this.fenceLockPos = new V3(pos.x, 0, pos.z);
+    this.lastHeard.copy(this.fenceLockPos);
+    this.lastHeardTime = now;
+    this.ignorePlayerUntil = now + 12;
+    this.fenceDistractUntil = now + 24;
+    this.anger = 0;
+    this.echoApproach = false;
+    this.path = [];
+    this.hunting = false;
+    this.reached = false;
+    this.stateTime = 0;
+    this.setState('investigate_breach');
+    if (d < 120) this.say('heard', d);
+    LO.audio.siren(this.voice, 'short', 0.9);
     return true;
   };
 
@@ -519,7 +615,8 @@
     let diff = want - this.yaw;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    this.yaw += Math.max(-1.6 * dt, Math.min(1.6 * dt, diff));
+    const turnRate = this.state === 'investigate_breach' ? 4.2 : 1.6;
+    this.yaw += Math.max(-turnRate * dt, Math.min(turnRate * dt, diff));
     const facing = Math.max(0, Math.cos(diff));
     const step = this.speed * dt * (0.25 + 0.75 * facing);
     const move = Math.min(step, d);
@@ -611,7 +708,7 @@
     // ---- posture
     this.smashPulse = Math.max(0, (this.smashPulse || 0) - dt * 1.8);
     const sp = this.smashPulse;
-    const searching = this.state === 'search' || (this.state === 'investigate' && this.reached);
+    const searching = this.state === 'search' || ((this.state === 'investigate' || this.state === 'investigate_breach') && this.reached);
     const targetLean = this.forceLean !== undefined ? this.forceLean : (searching ? 0.5 : 0.14 + H * 0.22 + sp * 0.45);
     this.lean += (targetLean - this.lean) * Math.min(1, dt * 1.5);
     this.torso.rotation.x = this.lean;
@@ -662,7 +759,7 @@
     if (player.hidden && this.state !== 'wander') return 'hidden';
     if (this.state === 'hunt') return 'angry';
     if (this.state === 'search') return 'searching';
-    if (this.state === 'investigate') return 'heard';
+    if (this.state === 'investigate' || this.state === 'investigate_breach') return 'heard';
     return 'calm';
   };
 

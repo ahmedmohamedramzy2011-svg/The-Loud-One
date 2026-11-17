@@ -79,6 +79,13 @@
         mat({ map: T('facade', { wall: 'concrete', color: '#6a6f73' }) }),
         mat({ map: T('facade', { wall: 'brick', color: '#3f3a44' }) }),
       ],
+      walls: [
+        mat({ map: T('brick', { color: '#6b3426' }) }),
+        mat({ map: T('brick', { color: '#5a4a3a' }) }),
+        mat({ map: T('concrete', { color: '#77746c' }) }),
+        mat({ map: T('concrete', { color: '#6a6f73' }) }),
+        mat({ map: T('brick', { color: '#3f3a44' }) }),
+      ],
       brick: mat({ map: T('brick', { color: '#5e3024' }) }),
       concrete: mat({ map: T('concrete') }),
       plaster: [mat({ map: T('plaster', { color: '#8c8573' }) }), mat({ map: T('plaster', { color: '#6f7a72' }) }), mat({ map: T('plaster', { color: '#7d6d6a' }) })],
@@ -89,11 +96,13 @@
       dumpster: mat({ map: T('metal', { color: '#2f4a33' }), roughness: 0.7, metalness: 0.3 }),
       locker: mat({ map: T('metal', { color: '#4b5560' }), roughness: 0.6, metalness: 0.4 }),
       dark: mat({ color: 0x151515 }),
-      trim: mat({ color: 0x2a2622 }),
+      trim: mat({ color: 0x24211e }),
       pole: mat({ color: 0x3a3a3a, roughness: 0.6, metalness: 0.5 }),
+      iron: mat({ color: 0x222528, roughness: 0.68, metalness: 0.45 }),
       lampOff: mat({ color: 0x555544, emissive: 0x000000 }),
       lampOn: new THREE.MeshBasicMaterial({ color: 0xffd9a0 }),
-      glass: mat({ color: 0x0b0f14, roughness: 0.2, metalness: 0.6 }),
+      glass: mat({ color: 0x10161e, roughness: 0.22, metalness: 0.55 }),
+      windowLit: new THREE.MeshLambertMaterial({ color: 0x4b381a, emissive: 0x1a1206 }),
       rubble: mat({ map: T('concrete', { color: '#5b574f' }) }),
       fabric: mat({ color: 0x40302a }),
       bark: mat({ color: 0x2a2018 }),
@@ -565,7 +574,7 @@
     function buildEnterable(cx, cz, L, D, H, axis, sign, kind, opts) {
       const F = frame(cx, cz, axis, sign, L, D);
       const t = 0.35, ceil = 3.6, doorW = 2.2, doorH = 2.8;
-      const facade = pick(M.facades);
+      const facade = pick(M.walls);
       const inner = pick(M.plaster);
       const floorMat = kind === 'shop' || kind === 'police' ? M.tile : M.wood;
       const hl = L / 2, hd = D / 2;
@@ -722,7 +731,7 @@
 
     function buildClosed(cx, cz, L, D, H, axis, sign) {
       const F = frame(cx, cz, axis, sign, L, D);
-      const facade = pick(M.facades);
+      const facade = pick(M.walls);
       const [x0, x1, z0, z1] = F.rect(-L / 2, L / 2, -D / 2, D / 2);
       const w = x1 - x0, d = z1 - z0;
       const b = {
@@ -737,8 +746,8 @@
       curB = b;
 
       const g = new THREE.BoxGeometry(w, H, d);
-      // facade on sides, roof on top
-      worldUV(g, w, H, d, 12);
+      // brick/concrete walls on sides, roof on top
+      worldUV(g, w, H, d, 4);
       const m = new THREE.Mesh(g, [facade, facade, M.roof, M.roof, facade, facade]);
       m.position.set((x0 + x1) / 2, H / 2, (z0 + z1) / 2);
       add(m, { occlude: true });
@@ -823,6 +832,19 @@
       if (!map.has(material)) map.set(material, []);
       map.get(material).push(g.index ? g.toNonIndexed() : g);
     }
+    const _up = new THREE.Vector3(0, 1, 0), _dir = new THREE.Vector3();
+    function decoStrut(material, x0, y0, z0, x1, y1, z1, w, d) {
+      _dir.set(x1 - x0, y1 - y0, z1 - z0);
+      const len = _dir.length();
+      if (len < 1e-4) return;
+      _dir.divideScalar(len);
+      const g = new THREE.BoxGeometry(w, len, d);
+      _q.setFromUnitVectors(_up, _dir);
+      g.applyMatrix4(_m4.compose(_p.set((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5), _q, _s.set(1, 1, 1)));
+      const map = decoMap();
+      if (!map.has(material)) map.set(material, []);
+      map.get(material).push(g.index ? g.toNonIndexed() : g);
+    }
     function decoCyl(material, rt, rb, h, x, y, z, seg) {
       const g = new THREE.CylinderGeometry(rt, rb, h, seg || 8);
       g.applyMatrix4(_m4.makeTranslation(x, y, z));
@@ -854,7 +876,7 @@
       });
       map.clear();
     }
-    // parapet, cornice, floor bands, plinth, rooftop clutter, fire escape, awning
+    // parapet, cornice, plinth, 3D windows, detailed fire escape, rooftop clutter, awning
     function decorate(x0, x1, z0, z1, H, F, opts) {
       opts = opts || {};
       const w = x1 - x0, d = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
@@ -883,15 +905,76 @@
         });
       };
       ring(H - 0.25, 0.22, 0.26, false);                                   // cornice
-      // low-poly front window sill strip per upper floor instead of 4-sided rings
-      if (F) {
-        const along = F.axis === 'z';
-        for (let y = 3.5; y < H - 1.5; y += 3.2) {
-          const sp = F.point(0, F.D / 2 + 0.06);
-          decoBox(M.trim, along ? w : 0.12, 0.1, along ? 0.12 : d, sp.x, y, sp.z);
-        }
-      }
       ring(0.275, 0.55, 0.07, !!opts.doorGap);                             // plinth (gap at the door)
+
+      // ---- 3D architectural windows on all 4 facades (batched into building deco) ----
+      const floorStep = 3.2;
+      const floorYs = [1.05];
+      for (let fy = 3.85; fy + 2.35 < H - 0.55; fy += floorStep) floorYs.push(fy);
+      const drawWin = (wx, wy, wz, alongZ, dirSign, wh) => {
+        const ww = 1.24, jambW = 0.10, innerW = ww - jambW * 2;
+        const sx = alongZ ? 1 : 0, sz = alongZ ? 0 : 1; // along-wall tangent
+        const nx = alongZ ? 0 : dirSign, nz = alongZ ? dirSign : 0; // outward wall normal
+        const yc = wy + wh * 0.5;
+        const lit = rand() < 0.035;
+        // recessed dark pane (cleanly offset off wall at +0.02m)
+        decoBox(lit ? M.windowLit : M.glass, alongZ ? innerW : 0.02, wh, alongZ ? 0.02 : innerW, wx + nx * 0.02, yc, wz + nz * 0.02);
+        // 2x2 cross mullions in front of pane (+0.05m)
+        decoBox(M.trim, alongZ ? 0.055 : 0.03, wh, alongZ ? 0.03 : 0.055, wx + nx * 0.05, yc, wz + nz * 0.05);
+        decoBox(M.trim, alongZ ? innerW : 0.03, 0.055, alongZ ? 0.03 : innerW, wx + nx * 0.05, yc, wz + nz * 0.05);
+        // deep side jambs (+0.045m center -> +0.09m front, creating real physical frame recess)
+        [-1, 1].forEach(sd => {
+          const off = sd * (ww * 0.5 - jambW * 0.5);
+          decoBox(M.trim, alongZ ? jambW : 0.09, wh, alongZ ? 0.09 : jambW, wx + sx * off + nx * 0.045, yc, wz + sz * off + nz * 0.045);
+        });
+        // top stone header lintel & projecting lower sill
+        decoBox(M.rubble, alongZ ? ww + 0.24 : 0.11, 0.16, alongZ ? 0.11 : ww + 0.24, wx + nx * 0.055, wy + wh + 0.08, wz + nz * 0.055);
+        decoBox(M.rubble, alongZ ? ww + 0.28 : 0.14, 0.11, alongZ ? 0.14 : ww + 0.28, wx + nx * 0.07, wy - 0.055, wz + nz * 0.07);
+        // occasional boarded-up wooden planks across the window
+        if (rand() < 0.16) {
+          for (let b = 0; b < 2; b++) {
+            const by = wy + wh * (0.28 + b * 0.44);
+            const tilt = (rand() - 0.5) * 0.14;
+            decoBox(M.wood, alongZ ? ww + 0.16 : 0.04, 0.14, alongZ ? 0.04 : ww + 0.16,
+              wx + nx * 0.095, by, wz + nz * 0.095, alongZ ? 0 : tilt, 0, alongZ ? tilt : 0);
+          }
+        }
+      };
+
+      const makeCols = len => {
+        const usable = len - 3.0;
+        const count = Math.max(2, Math.round(usable / 3.2));
+        const span = Math.max(2.6, len - 3.6);
+        const arr = [];
+        for (let i = 0; i < count; i++) arr.push(count === 1 ? 0 : -span * 0.5 + (i / (count - 1)) * span);
+        return arr;
+      };
+      const colsW = makeCols(w), colsD = makeCols(d);
+      const frontFace = F ? (F.axis === 'z' ? (F.sign > 0 ? 'z1' : 'z0') : (F.sign > 0 ? 'x1' : 'x0')) : null;
+      const doorCenter = opts.doorA || 0;
+      const wallFaces = [
+        { key: 'z1', alongZ: true, dirSign: 1, fixed: z1, mid: cx, cols: colsW },
+        { key: 'z0', alongZ: true, dirSign: -1, fixed: z0, mid: cx, cols: colsW },
+        { key: 'x1', alongZ: false, dirSign: 1, fixed: x1, mid: cz, cols: colsD },
+        { key: 'x0', alongZ: false, dirSign: -1, fixed: x0, mid: cz, cols: colsD },
+      ];
+      wallFaces.forEach(wf => {
+        const isFront = wf.key === frontFace;
+        floorYs.forEach((fy, fi) => {
+          const wh = fi === 0 ? 1.42 : 1.48;
+          const sillY = fi === 0 ? fy : fy + 0.36;
+          wf.cols.forEach(off => {
+            // map offset relative to F door axis when on front face
+            const lat = isFront && F ? (wf.alongZ ? off : off) : off;
+            if (isFront && fi === 0 && Math.abs(lat - doorCenter) < 2.2) return;
+            if (isFront && opts.sheriff && fi === 1 && Math.abs(lat) < 2.3) return;
+            const wx = wf.alongZ ? wf.mid + off : wf.fixed;
+            const wz = wf.alongZ ? wf.fixed : wf.mid + off;
+            drawWin(wx, sillY, wz, wf.alongZ, wf.dirSign, wh);
+          });
+        });
+      });
+
       // rooftop clutter
       const r = rand();
       if (r < 0.45) {   // water tank on stilts (low-poly 8-sided)
@@ -903,22 +986,90 @@
       }
       if (rand() < 0.5) { decoBox(M.pole, 0.06, R(2.5, 4.5), 0.06, cx + R(-w / 3, w / 3), H + 1.8, cz + R(-d / 3, d / 3)); }   // antenna
       decoBox(M.brick, 0.7, 1.4, 0.7, cx + R(-w / 3, w / 3), H + 0.7, cz + R(-d / 3, d / 3));                                  // chimney / vent stack
-      // low-poly fire escape on a side wall of taller buildings (open rail + proper stair orientation)
+
+      // ---- detailed multi-floor fire escape (corbels, grate slats, railings, pickets, diagonal stairs & treads, drop ladder) ----
       if (H > 9 && F && rand() < 0.75) {
         const side = rand() < 0.5 ? -1 : 1;
-        const L2 = F.L, along = F.axis === 'z';
-        const p0 = F.point(side * (L2 / 2 + 0.52), 0);
-        const a = 2.6, b = 0.96, ox = along ? side * 0.46 : 0, oz = along ? 0 : side * 0.46;
-        for (let y = 3.6; y < H - 1.2; y += 3.2) {
-          decoBox(M.pole, along ? b : a, 0.06, along ? a : b, p0.x, y, p0.z);                                            // landing
-          decoBox(M.pole, along ? 0.04 : a, 0.04, along ? a : 0.04, p0.x + ox, y + 0.88, p0.z + oz);                     // top rail
-          [-1.2, 1.2].forEach(dOff => {                                                                                  // 2 corner posts
-            decoBox(M.pole, 0.04, 0.88, 0.04, p0.x + ox + (along ? 0 : dOff), y + 0.44, p0.z + oz + (along ? dOff : 0));
+        const alongZ = F.axis === 'z'; // true -> side wall is at X = side*L/2, runs along Z
+        const wallOrigin = F.point(side * (F.L / 2), 0);
+        // helper: local (u outward from wall, y world height, v along wall) -> world box / strut
+        const fePos = (u, y, v) => alongZ
+          ? [wallOrigin.x + side * u, y, wallOrigin.z + v]
+          : [wallOrigin.x + v, y, wallOrigin.z + side * u];
+        const feBox = (wOut, h, dAlong, u, y, v) => {
+          const [px, py, pz] = fePos(u, y, v);
+          decoBox(M.iron, alongZ ? wOut : dAlong, h, alongZ ? dAlong : wOut, px, py, pz);
+        };
+        const feStrut = (u0, y0, v0, u1, y1, v1, thick) => {
+          const [ax, ay, az] = fePos(u0, y0, v0);
+          const [bx, by, bz] = fePos(u1, y1, v1);
+          decoStrut(M.iron, ax, ay, az, bx, by, bz, thick, thick);
+        };
+
+        const bayLen = 3.5, halfBay = bayLen * 0.5, depth = 1.18, railH = 0.96;
+        let fi = 0;
+        for (let y = 3.85; y + 2.35 < H - 0.55; y += floorStep, fi++) {
+          // 1. perimeter steel frame & slatted deck grate (6 open steel slats)
+          feBox(depth, 0.06, 0.07, depth * 0.5, y, -halfBay);
+          feBox(depth, 0.06, 0.07, depth * 0.5, y, halfBay);
+          feBox(0.07, 0.06, bayLen, depth - 0.035, y, 0);
+          feBox(0.06, 0.08, bayLen, 0.03, y, 0); // wall ledger beam
+          for (let g = 0; g < 5; g++) {
+            const gu = 0.16 + g * 0.21;
+            feBox(0.055, 0.03, bayLen - 0.1, gu, y + 0.01, 0);
+          }
+
+          // 2. heavy wall-mounted corbel support brackets under the landing
+          [-1.25, 1.25].forEach(bv => {
+            feBox(0.06, 0.72, 0.09, 0.03, y - 0.36, bv); // vertical wall anchor plate
+            feBox(depth - 0.08, 0.055, 0.07, depth * 0.5, y - 0.055, bv); // horizontal shelf arm
+            feStrut(0.05, y - 0.68, bv, depth - 0.12, y - 0.06, bv, 0.055); // 45-deg gusset brace
           });
-          if (y > 4.2) {
-            decoBox(M.pole, 0.06, 3.9, 0.06, p0.x, y - 1.6, p0.z, along ? 0.62 : 0, 0, along ? 0 : 0.62);                // stair between landings
+
+          // 3. full 3-sided safety railing (top rail, mid rail, corner/mid posts, vertical pickets)
+          feBox(0.045, 0.045, bayLen, depth - 0.03, y + railH, 0);      // front top rail
+          feBox(0.035, 0.03, bayLen, depth - 0.03, y + railH * 0.5, 0); // front mid rail
+          [-halfBay + 0.03, halfBay - 0.03].forEach(ev => {
+            feBox(depth, 0.045, 0.045, depth * 0.5, y + railH, ev);     // end top rails
+            feBox(depth, 0.03, 0.035, depth * 0.5, y + railH * 0.5, ev);// end mid rails
+            feBox(0.05, railH, 0.05, depth - 0.03, y + railH * 0.5, ev);// outer corner stanchion
+            feBox(0.045, railH, 0.045, 0.05, y + railH * 0.5, ev);      // inner wall stanchion
+            // end pickets
+            [-0.45, -0.80].forEach(pu => feBox(0.025, railH, 0.025, -pu, y + railH * 0.5, ev));
+          });
+          // front vertical balusters/pickets spaced evenly along the landing
+          for (let pv = -1.35; pv <= 1.36; pv += 0.34) {
+            const post = Math.abs(pv) < 0.18;
+            feBox(post ? 0.045 : 0.024, railH, post ? 0.045 : 0.024, depth - 0.03, y + railH * 0.5, pv);
+          }
+
+          // 4. connecting zig-zag diagonal staircase to floor below, or drop-down ladder on floor 1
+          if (fi > 0) {
+            const dir = fi % 2 === 1 ? 1 : -1;
+            const vBot = -1.15 * dir, vTop = 1.15 * dir;
+            const yBot = y - floorStep + 0.04, yTop = y;
+            // parallel stair stringers (inner + outer)
+            [0.24, 0.86].forEach(su => feStrut(su, yBot, vBot, su, yTop, vTop, 0.065));
+            // 7 horizontal stair treads stepping up cleanly between the stringers
+            const treads = 7;
+            for (let tIdx = 1; tIdx <= treads; tIdx++) {
+              const k = tIdx / (treads + 1);
+              feBox(0.58, 0.035, 0.22, 0.55, yBot + (yTop - yBot) * k, vBot + (vTop - vBot) * k);
+            }
+            // sloped outer handrail + upright posts
+            feStrut(0.90, yBot + 0.78, vBot, 0.90, yTop + 0.78, vTop, 0.038);
+            feStrut(0.90, yBot, vBot, 0.90, yBot + 0.78, vBot, 0.038);
+            feStrut(0.90, yTop, vTop, 0.90, yTop + 0.78, vTop, 0.038);
           } else {
-            decoBox(M.pole, 0.05, 1.9, 0.05, p0.x + ox, y - 0.95, p0.z + oz);                                            // drop ladder stub
+            // drop-down vertical iron ladder (2 parallel side rails + 8 rungs + guide brackets)
+            const lu = depth + 0.06, botY = 1.75, topY = y + 0.65;
+            [-0.24, 0.24].forEach(lv => {
+              feBox(0.04, topY - botY, 0.04, lu, (botY + topY) * 0.5, lv);
+              feBox(0.14, 0.04, 0.04, depth + 0.01, y + 0.03, lv); // mounting bracket
+            });
+            for (let ry = botY + 0.16; ry < topY - 0.1; ry += 0.30) {
+              feBox(0.032, 0.032, 0.48, lu, ry, 0);
+            }
           }
         }
       }
@@ -1113,6 +1264,15 @@
       if (rand() < 0.5) dumpster(bx + side * (BLOCK / 2 - 1.2), bz + R(-14, 14), side > 0 ? Math.PI / 2 : -Math.PI / 2);
       else dumpster(bx + R(-14, 14), bz + side * (BLOCK / 2 - 1.2), side > 0 ? 0 : Math.PI);
     }
+    // additional exterior dumpsters covering perimeter & open dead zones (v2.4.3+)
+    if (!LO.ver || LO.ver().fastoneV2) {
+      [
+        [-92.0, -96.0, Math.PI],       // SW perimeter corner building exterior
+        [59.8, 90.0, -Math.PI / 2],    // NE avenue storefront edge near north road
+        [-96.8, 25.0, -Math.PI / 2],   // West perimeter alley mouth
+        [44.5, -96.2, Math.PI],        // South-East park / perimeter road edge
+      ].forEach(([dx, dz, dry]) => dumpster(dx, dz, dry));
+    }
     // outdoor batteries
     [[-58, -20], [47, 58], [-20, 47], [56, -80], [-102, 70], [80, 100], [4, -40]].forEach(([x, z]) => battery(x, 0.4, z));
     // throwable rocks lying around (sparse — you only find one occasionally)
@@ -1143,33 +1303,66 @@
     const E = HALF + 3;
     collider(-E - 5, -E, -E - 5, E + 5); collider(E, E + 5, -E - 5, E + 5);
     collider(-E, E, E, E + 5); collider(-E, E, -E - 5, -E);
-    // break-ready perimeter fence (low-poly shared opaque geometry, grounded at y = 0)
+    // break-ready weathered timber perimeter fence (posts, rails, spaced slats with open gaps, grounded at y = 0)
     W.fences = [];
-    const fenceMat = mat({ color: 0x3b3b38, roughness: 0.72, metalness: 0.3 });
+    const fenceMat = mat({ map: T('wood'), color: 0x7a6e5f, vertexColors: true, roughness: 0.95, metalness: 0.02 });
     const fenceGeo = (() => {
-      const parts = [
-        [0.14, 2.25, 0.14, -2.9, 1.125, 0],   // post
-        [5.8, 0.08, 0.06, 0, 0.32, 0],        // bottom rail
-        [5.8, 0.08, 0.06, 0, 2.04, 0],        // top rail
-        [5.75, 1.66, 0.04, 0, 1.18, 0],       // center panel
-      ];
-      const list = parts.map(([w, h, d, x, y, z]) => {
+      const list = [];
+      const addPart = (w, h, d, x, y, z, cr, cg, cb, verticalGrain, rz) => {
         const g = new THREE.BoxGeometry(w, h, d);
+        const uvs = g.attributes.uv;
+        for (let i = 0; i < uvs.count; i++) {
+          const u = uvs.getX(i), v = uvs.getY(i);
+          if (verticalGrain) uvs.setXY(i, v * 0.85, u * 0.45);
+          else uvs.setXY(i, u * 1.4, v * 0.35);
+        }
+        if (rz) g.rotateZ(rz);
         g.translate(x, y, z);
-        return g.index ? g.toNonIndexed() : g;
+        const nonIdx = g.index ? g.toNonIndexed() : g;
+        if (g.index) g.dispose();
+        const cnt = nonIdx.attributes.position.count;
+        const col = new Float32Array(cnt * 3);
+        for (let i = 0; i < cnt; i++) {
+          col[i * 3] = cr; col[i * 3 + 1] = cg; col[i * 3 + 2] = cb;
+        }
+        nonIdx.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        list.push(nonIdx);
+      };
+      // heavy posts & post caps at -2.91 and 0.00
+      [-2.91, 0.0].forEach(px => {
+        addPart(0.18, 2.34, 0.18, px, 1.17, 0, 0.44, 0.40, 0.36, true, 0);
+        addPart(0.22, 0.07, 0.22, px, 2.375, 0, 0.36, 0.33, 0.30, false, 0);
+      });
+      // lower & upper horizontal stringer rails (cleanly behind slats at z = -0.04)
+      addPart(5.96, 0.10, 0.06, 0, 0.44, -0.04, 0.56, 0.51, 0.45, false, 0);
+      addPart(5.96, 0.10, 0.06, 0, 1.92, -0.04, 0.56, 0.51, 0.45, false, 0);
+      // subtle dark iron top security rail between post caps
+      addPart(5.96, 0.035, 0.035, 0, 2.28, 0, 0.24, 0.25, 0.27, false, 0);
+      // 12 spaced vertical wooden slats/pickets with clear 0.23m see-through gaps
+      const slatXs = [-2.55, -2.10, -1.65, -1.20, -0.75, -0.30, 0.30, 0.75, 1.20, 1.65, 2.10, 2.55];
+      slatXs.forEach((sx, idx) => {
+        const jH = ((idx * 37) % 5 - 2) * 0.03;
+        const jTilt = ((idx * 53) % 5 - 2) * 0.009;
+        const shade = 0.62 + ((idx * 29) % 5) * 0.045;
+        const sh = 2.04 + jH;
+        addPart(0.22, sh, 0.045, sx, 0.12 + sh * 0.5, 0.03, shade, shade * 0.94, shade * 0.85, true, jTilt);
       });
       let n = 0; list.forEach(g => { n += g.attributes.position.count; });
-      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2), col = new Float32Array(n * 3);
       let o = 0;
       list.forEach(g => {
         pos.set(g.attributes.position.array, o * 3);
         nor.set(g.attributes.normal.array, o * 3);
+        uv.set(g.attributes.uv.array, o * 2);
+        col.set(g.attributes.color.array, o * 3);
         o += g.attributes.position.count;
         g.dispose();
       });
       const merged = new THREE.BufferGeometry();
       merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      merged.setAttribute('color', new THREE.BufferAttribute(col, 3));
       merged.computeBoundingSphere();
       return merged;
     })();
@@ -1189,6 +1382,11 @@
           broken: false,
         });
       }
+    });
+    // corner & entrance end-posts so every fence run terminates cleanly on a post
+    [[-E + 0.5, -E + 0.5], [E - 0.5, -E + 0.5], [-E + 0.5, E - 0.5], [E - 0.5, E - 0.5], [-8, -E + 0.5], [4, -E + 0.5]].forEach(([ex, ez]) => {
+      decoBox(M.trim, 0.20, 2.38, 0.20, ex, 1.19, ez);
+      decoBox(M.trim, 0.24, 0.08, 0.24, ex, 2.41, ez);
     });
     // road block at the entrance (behind the player's car)
     for (let i = -1; i <= 1; i++) {
@@ -1649,7 +1847,7 @@
         if (r() < 0.5) {
           const b = takeFront();
           let a = (r() - 0.5) * (b.L - 8); if (Math.abs(a - b.doorA) < 3) a = b.doorA + (a < b.doorA ? -3 : 3);
-          const p = b.F.point(a, b.D / 2 + 0.12), y = Math.min(4.4, b.H * 0.5);
+          const p = b.F.point(a, b.D / 2 + 0.17), y = Math.min(4.4, b.H * 0.5);
           const cm = new THREE.Mesh(new THREE.PlaneGeometry(7, Math.min(8, b.H * 0.85)), decalMat(clawTex));
           cm.position.set(p.x, y, p.z); cm.rotation.y = b.F.yawFront(); W.evGroup.add(cm);
           W.evidence.push({ id: 'claws', name: 'Giant claw marks', pos: new THREE.Vector3(p.x, y, p.z), maxDist: 22, found: false });
@@ -1670,7 +1868,7 @@
         } else {
           const b = takeFront();
           let a = (r() - 0.5) * (b.L - 7); if (Math.abs(a - b.doorA) < 3) a = b.doorA + (a < b.doorA ? -3 : 3);
-          const p = b.F.point(a, b.D / 2 + 0.12);
+          const p = b.F.point(a, b.D / 2 + 0.17);
           const pm = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), decalMat(sprayTex));
           pm.position.set(p.x, 2.4, p.z); pm.rotation.y = b.F.yawFront(); W.evGroup.add(pm);
           W.evidence.push({ id: 'warning', name: 'Survivor\'s warning', pos: new THREE.Vector3(p.x, 2.4, p.z), maxDist: 16, found: false });
