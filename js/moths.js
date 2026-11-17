@@ -176,14 +176,27 @@
   };
 
   Moths.prototype.reset = function () {
-    this.moths.forEach(m => { m.active = false; m.g.visible = false; m.cooldown = 0; m.spot = null; });
-    this.moths.forEach(m => this.place(m));
-    this.root.visible = true;
+    const V = LO.ver ? LO.ver() : { moths: true, mothCount: COUNT };
+    const limit = V.moths ? (V.mothCount || COUNT) : 0;
+    this.moths.forEach((m, i) => {
+      m.active = false; m.g.visible = false; m.cooldown = 0; m.spot = null;
+      if (i < limit) this.place(m);
+    });
+    this.root.visible = V.moths;
     this.maxLit = 0;
   };
 
   const _fwd = new V3(), _to = new V3(), _chest = new V3();
   Moths.prototype.update = function (dt, player, camera, time) {
+    const V = LO.ver ? LO.ver() : { moths: true, mothCount: COUNT, mothLimit: LIGHT_LIMIT, mothDamage: DAMAGE };
+    if (!V.moths) {
+      this.root.visible = false;
+      LO.audio.setMothFlutter(0);
+      return;
+    }
+    this.root.visible = true;
+    const activeLimit = V.mothCount || COUNT;
+    const stareLimit = V.mothLimit || LIGHT_LIMIT;
     const W = this.world;
     camera.getWorldDirection(_fwd);
     this.maxLit = 0;
@@ -195,7 +208,9 @@
       LO.audio.setMothFlutter(0);
       return;
     }
-    for (const m of this.moths) {
+    for (let idx = 0; idx < this.moths.length; idx++) {
+      const m = this.moths[idx];
+      if (idx >= activeLimit) { m.g.visible = false; continue; }
       m.g.visible = m.active && show;
       if (!m.active) {
         m.cooldown -= dt;
@@ -218,7 +233,7 @@
         }
       }
       if (inBeam) m.lit += dt; else m.lit = Math.max(0, m.lit - dt * 0.7);
-      const k = m.lit / LIGHT_LIMIT;
+      const k = m.lit / stareLimit;
       if (k > this.maxLit) { this.maxLit = k; this.nearestLit = m; }
 
       // reacts to the light: turns its faceless head to you, wings start to quiver
@@ -234,18 +249,19 @@
       });
       m.head.rotation.z = quiver > 0.2 ? Math.sin(time * 23) * 0.25 * quiver : 0;
 
-      if (m.lit >= LIGHT_LIMIT) this.shriek(m, player);
+      if (m.lit >= stareLimit) this.shriek(m, player);
     }
     LO.audio.setMothFlutter(Math.min(1, this.maxLit));
   };
 
   Moths.prototype.shriek = function (m, player) {
+    const V = LO.ver ? LO.ver() : { mothDamage: DAMAGE };
     const pos = m.g.position.clone(); pos.y = 2;
     LO.audio.mothShriek(pos);
     m.active = false; m.g.visible = false;
     m.cooldown = 50 + Math.random() * 30;
     this.onShriek && this.onShriek(pos);
-    player.damage(DAMAGE, 'moth');
+    player.damage(V.mothDamage || DAMAGE, 'moth');
   };
 
   Moths.prototype.dispose = function () {

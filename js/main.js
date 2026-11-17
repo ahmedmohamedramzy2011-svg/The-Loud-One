@@ -7,7 +7,7 @@
   const $ = id => document.getElementById(id);
   const EVIDENCE_NEEDED = 5;
 
-  let sneaky = null;
+  let sneaky = null, fastone = null;
   let renderer, scene, camera, world, siren, player, moths, deathRoom, deathShown = false, deathTimer = null, titleSpot = null;
   let state = 'gate';          // gate | title | opening | play | paused | dying | dead | ending | credits
   let cutscene = null, cutCtx = null;
@@ -21,11 +21,13 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
-  function hintReady() { return state === 'play' && !endingQueued && gameTime - lastEvidenceTime >= HINT_DELAY; }
+  function hintReady() { return V().hint && state === 'play' && !endingQueued && gameTime - lastEvidenceTime >= HINT_DELAY; }
   function useHint() {
+    if (!V().hint) return;
     if (!hintReady()) {
       if (state === 'play') showHint('Keep looking. A hint unlocks after 3 minutes without finding evidence.');
       return;
@@ -46,6 +48,15 @@
   LO.useHint = useHint;
   function updateHintUI() {
     const btn = $('hint-btn');
+    const tb = $('t-hint');
+    if (!V().hint) {
+      btn.style.display = 'none';
+      if (tb) tb.style.display = 'none';
+      $('hint-arrow').style.display = 'none';
+      return;
+    }
+    btn.style.display = '';
+    if (tb) tb.style.display = '';
     const ready = hintReady();
     btn.classList.toggle('ready', ready);
     if (ready) btn.textContent = LO.isTouch ? 'HINT' : 'HINT [H]';
@@ -53,7 +64,7 @@
       const left = Math.max(0, Math.ceil(HINT_DELAY - (gameTime - lastEvidenceTime)));
       btn.textContent = `HINT ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
     }
-    const tb = $('t-hint'); if (tb) { tb.textContent = btn.textContent; tb.classList.toggle('on', ready); }
+    if (tb) { tb.textContent = btn.textContent; tb.classList.toggle('on', ready); }
     const box = $('hint-arrow');
     if (hintTarget && hintTarget.found) hintTarget = null;
     if (hintTarget) {
@@ -123,11 +134,14 @@
     siren = new LO.SirenHead(scene, world);
     if (moths) moths.dispose();
     if (sneaky) scene && sneaky.root.parent && sneaky.root.parent.remove(sneaky.root);
+    if (fastone) fastone.dispose();
+    LO.ambush = { active: null, gapUntil: 0, now: 0 };
     moths = new LO.Moths(scene, world);
     sneaky = new LO.Sneaky(scene, world);
     sneaky.onAttack = lightOff => {
       if (lightOff) showHint('Your equipment is flickering...', 3000);
     };
+    fastone = new LO.FastOne(scene, world);
     titleSpot = new THREE.SpotLight(0xfff1d6, 0, 90, 0.42, 0.5, 1.2);
     scene.add(titleSpot, titleSpot.target);
     moths.onShriek = pos => {
@@ -181,6 +195,16 @@
       if (state !== 'play') return;
       const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z);
       if (d < 80) player.shake = Math.max(player.shake, Math.pow(1 - d / 80, 1.4) * 0.95);
+    };
+    siren.onSmash = (b, pos) => {
+      if (state !== 'play') return;
+      if (b && b.hideSpots && b.hideSpots.length && (player.hidden || player.hideAnim)) {
+        const curSpot = player.hidden || (player.hideAnim && player.hideAnim.spot);
+        if (curSpot && b.hideSpots.includes(curSpot)) player.ejectFromHide();
+      }
+      const d = Math.hypot(pos.x - player.pos.x, pos.z - player.pos.z);
+      if (d < 120) player.shake = Math.max(player.shake, Math.max(0.4, 1.25 * (1 - d / 120)));
+      if (d < 100) player.triggerDizzy(Math.max(0.45, 1.15 * (1 - d / 100)));
     };
     siren.onStateChange = s => {
       if (state !== 'play') return;
@@ -287,11 +311,60 @@
     applyDisplay();
   }
 
+  function syncVersionUI() {
+    const cur = S.gameVersion || '2.4.2';
+    const btn = $('version-btn');
+    if (btn) btn.textContent = 'v' + cur;
+    document.querySelectorAll('#updates .upd').forEach(u => {
+      const match = u.dataset.ver === cur;
+      u.classList.toggle('active-ver', match);
+      const h3 = u.querySelector('h3');
+      if (!h3) return;
+      let sp = h3.querySelector('span');
+      if (match) {
+        if (!sp) { sp = document.createElement('span'); h3.appendChild(sp); }
+        sp.textContent = cur === '2.4.2' ? 'current' : 'playing';
+      } else if (sp) {
+        sp.remove();
+      }
+    });
+  }
+
+  function renderVersions() {
+    const list = $('version-list');
+    if (!list || !LO.VERSIONS) return;
+    list.innerHTML = '';
+    const cur = S.gameVersion || '2.4.2';
+    LO.VERSIONS.forEach((v, idx) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ver-item' + (v.id === cur ? ' selected' : '');
+      const top = document.createElement('div'); top.className = 'ver-top';
+      const num = document.createElement('span'); num.className = 'ver-num'; num.textContent = v.label;
+      const badge = document.createElement('span'); badge.className = 'ver-badge';
+      badge.textContent = v.id === cur ? 'ACTIVE' : idx === 0 ? 'LATEST' : 'SELECT';
+      top.append(num, badge);
+      const era = document.createElement('div'); era.className = 'ver-era'; era.textContent = v.era;
+      b.append(top, era);
+      b.onclick = () => {
+        A.click(true);
+        LO.Settings.set('gameVersion', v.id);
+        syncVersionUI();
+        renderVersions();
+        if (moths) moths.reset();
+        closePanel();
+      };
+      list.appendChild(b);
+    });
+  }
+
   function openPanel(id, from) {
     menuReturn = from;
     hideAllScreens();
     if (id === 'graphics') renderOptions('graphics-list', LO.Settings.GRAPHICS_OPTIONS);
     if (id === 'audio') renderOptions('audio-list', LO.Settings.AUDIO_OPTIONS);
+    if (id === 'versions') renderVersions();
+    if (id === 'updates') syncVersionUI();
     show(id);
   }
   function closePanel() {
@@ -355,7 +428,12 @@
     siren.root.visible = true;
     siren.scripted = true;
     const S0 = world.STREETS;
-    if (shot === 0) {                                  // looking up at him in the street
+    if (!V().moths && (shot === 2 || shot === 4)) {
+      siren.pos.set(S0[2], 0, -40 + k * 14); siren.yaw = 0; siren.speedNow = 2.2; siren.glowOverride = 0.3;
+      camera.position.set(S0[2] - 3.5, 2.2, -72 + k * 3);
+      camera.lookAt(S0[2] + 5, 8, -34 + k * 14);
+      titleSpot.position.set(S0[2] - 3.5, 1.5, -70); titleSpot.target.position.set(S0[2], 9, -34 + k * 14); titleSpot.intensity = 10;
+    } else if (shot === 0) {                                  // looking up at him in the street
       siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.35;
       camera.position.set(S0[3] - 3, 1.3 + k * 0.8, -6 + k * 5);
       camera.lookAt(S0[3] + 7, 9 + k * 3, 20);
@@ -427,7 +505,11 @@
     if (worldDirty) buildWorld();
     world.placeEvidence();          // every game the evidence moves (except the sheriff's tape)
     titleSpot.intensity = 0; siren.root.visible = true; $('title-fade').style.opacity = 0;
-    world.pickups.forEach(p => { p.taken = false; p.mesh.visible = true; });
+    const showRocks = V().rocks;
+    world.pickups.forEach(p => {
+      p.taken = (p.type === 'rock' && !showRocks);
+      p.mesh.visible = !p.taken;
+    });
     evidenceCount = 0; endingQueued = false;
     siren.scripted = false;
     siren.root.rotation.x = 0;
@@ -436,7 +518,9 @@
     siren.spawnFar();
     player.reset(world.spawn, Math.PI);
     moths.reset();
+    LO.ambush = { active: null, gapUntil: 0, now: 0 };
     sneaky.reset();
+    if (fastone) fastone.reset();
     gameTime = 0;
     lastEvidenceTime = 0; hintUntil = 0; hintTarget = null;
     updateEvidenceUI();
@@ -489,7 +573,14 @@
     siren.spawnFar();
     siren.state = 'wander'; siren.path = [];
     player.reset(world.spawn, Math.PI);
-    world.hemi.intensity = world.baseLight.hemi; world.moonLight.intensity = world.baseLight.moon;
+    const ver = V();
+    const lightBoost = ver.darkLight ? 1 : 1.45;
+    world.hemi.intensity = world.baseLight.hemi * lightBoost;
+    world.moonLight.intensity = world.baseLight.moon * lightBoost;
+    const hpRow = $('health-fill') && $('health-fill').closest('.bar-row');
+    if (hpRow) hpRow.style.display = ver.health ? '' : 'none';
+    const throwBtn = $('t-throw');
+    if (throwBtn) throwBtn.style.display = ver.rocks ? '' : 'none';
     lastEvidenceTime = gameTime; hintUntil = 0; hintTarget = null;
     player.enabled = true;
     state = 'play';
@@ -497,7 +588,7 @@
     ui.fadeIn(1.5);
     A.playMusic('explore', 3);
     windStrength = 1;
-    A.setWind(0.26, 0.5);
+    A.setWind(ver.wind ? 0.26 : 0, 0.5);
     lockPointer();
     setTimeout(() => {
       if (state !== 'play') return;
@@ -524,6 +615,7 @@
     if (state !== 'play') return;
     state = 'paused';
     player.enabled = false;
+    if (sneaky && sneaky.pause) sneaky.pause();
     show('pause');
     if (window.speechSynthesis) try { speechSynthesis.pause(); } catch (e) {}
     A.setFlashlightBuzz(false); A.setBreathing(0); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
@@ -579,6 +671,7 @@
     player.calm = true;
     player.noSilent = true;
     player.exposure = 0;
+    if (fastone) fastone.clearHighlight();
     A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0); A.setExposure(0);
     setTimeout(async () => {
       await A.say('player', 'That\'s enough. Sending everything to the county sheriff now.');
@@ -590,6 +683,7 @@
 
   function startEnding() {
     if (sneaky) sneaky.reset();
+    if (fastone) fastone.reset();
     if (moths) { moths.root.visible = false; A.setMothFlutter(0); }
     state = 'ending';
     player.enabled = false;
@@ -647,6 +741,16 @@
       'The Tenant takes 30 HP every time it throws you out. Leave before the red bar fills.',
       'Your health never comes back. Every hit counts.',
     ] },
+    sneaky: { title: 'NEVER LOOKED BACK', tips: [
+      'When your flashlight flickers and you hear breathing behind you, turn around within ~2.5 seconds.',
+    ] },
+    exposure: { title: 'IN THE VIEWFINDER', tips: [
+      'Do not keep your camera raised for too long. Lower it and use your flashlight to see.',
+    ] },
+    fastone: { title: 'TOO SLOW', tips: [
+      'When The Fast One breaches the perimeter fence, sprint straight to the blue-outlined locker or dumpster.',
+      'If safety is far away, an adrenaline surge doubles your sprint speed.',
+    ] },
   };
   // death by damage (the Silent One / the Tenant)
   function clearGlitch() { document.getElementById('game-root').style.filter = ''; $('viewfinder').style.opacity = ''; }
@@ -654,10 +758,13 @@
     clearGlitch();
     if (state === 'play') A.silenceWorld(true);
     if (sneaky && cause !== 'sneaky' && sneaky.attacking) sneaky.vanish(player, false);
+    if (fastone) { fastone.clearHighlight(); if (cause !== 'fastone') fastone.reset(); }
     if (state !== 'play') return;
     dieCause = cause;
     state = 'dying';
     dieT = 0;
+    player.alive = false;
+    player.adrenaline = 0;
     player.enabled = false;
     player.flashOn = false;
     A.stopVoices();
@@ -670,11 +777,14 @@
   function onCaught() {
     clearGlitch();
     if (sneaky && sneaky.attacking) sneaky.vanish(player, false);
+    if (fastone) fastone.reset();
     if (state === 'play' && !siren.catchDisabled) A.silenceWorld(true);
     if (state !== 'play' || siren.catchDisabled) return;
     dieCause = 'siren';
     state = 'dying';
     dieT = 0;
+    player.alive = false;
+    player.adrenaline = 0;
     player.enabled = false;
     player.flashOn = false;
     A.stopVoices();
@@ -719,6 +829,22 @@
       A.setSilentOne(0); A.setExposure(0); A.setMothFlutter(0); A.setTenant(0);
       A.setStillness(false); document.body.classList.remove('still');
       $('silent-one').style.opacity = 0;
+      const deathEl = $('death');
+      if (!V().deathRoom) {
+        LO.TVFX.clear();
+        hideAllScreens();
+        deathEl.classList.add('legacy');
+        const D = DEATHS[dieCause] || DEATHS.siren;
+        $('death-title').textContent = D.title;
+        $('death-tip').textContent = D.tips[(Math.random() * D.tips.length) | 0] || '';
+        show('death');
+        $('damage').style.opacity = 0;
+        $('fade').style.transition = 'none'; $('fade').style.opacity = 0;
+        A.playMusic('title', 1.5);
+        A.stopRinging();
+        return;
+      }
+      deathEl.classList.remove('legacy');
       // the picture switches off like an old TV, then flicks back on in the death room
       LO.TVFX.off(() => {
         hideAllScreens();
@@ -744,7 +870,15 @@
   const WIND_STOP = 15;
   let windStrength = 1, gustT = 0;
   function updateWindState(dt) {
-    const still = player.silentTime >= WIND_STOP;
+    const ver = V();
+    if (!ver.wind) {
+      A.setWind(0, 0, 1.2);
+      A.setStillness(false);
+      document.body.classList.remove('still');
+      world.updateWind(dt, 0.35, camera.position, gameTime);
+      return;
+    }
+    const still = ver.windStillness && player.silentTime >= WIND_STOP;
     const target = still ? 0 : 1;
     // it stops quickly and eerily, and comes back gradually
     windStrength += (target - windStrength) * Math.min(1, dt * (still ? 2.5 : 0.6));
@@ -833,10 +967,17 @@
       A.setSilentOne(0);
     }
     show('viewfinder', player.zoom > 0.5);
-    // the Sneaky One makes your camera glitch too
+    // the Sneaky One makes your camera glitch too, and Siren Head smashes cause brief dizziness blur
     const glitch = sneaky && sneaky.attacking && player.zoom > 0.5;
     $('viewfinder').style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
-    document.getElementById('game-root').style.filter = glitch && Math.random() < 0.3 ? 'brightness(0.15) contrast(1.6)' : '';
+    const rootEl = document.getElementById('game-root');
+    if (glitch && Math.random() < 0.3) {
+      rootEl.style.filter = 'brightness(0.15) contrast(1.6)';
+    } else if (!glitch && player.dizzy > 0.04) {
+      rootEl.style.filter = `blur(${(Math.min(1, player.dizzy) * 2.5).toFixed(2)}px)`;
+    } else {
+      rootEl.style.filter = '';
+    }
     if (player.zoom > 0.5) {
       const vf = player.vfTarget;
       $('viewfinder').classList.toggle('locked', !!(vf && vf.ok));
@@ -874,23 +1015,27 @@
       updateTitle(dt);
     } else if (state === 'play') {
       gameTime += dt;
+      LO.ambush.now = gameTime;
       player.update(dt, gameTime);
       siren.update(dt, player, gameTime);
       if (state === 'play') moths.update(dt, player, camera, gameTime);
       if (state === 'play' && sneaky.update(dt, player, camera, siren) === 'kill') dieBy('sneaky');
+      if (state === 'play' && fastone.update(dt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
       world.update(dt, gameTime);
-      updateHUD();
-      updateHintUI();
-      updateWindState(dt);
-      // music & heartbeat follow the danger
-      const d = siren.distToPlayer || 999;
-      const near = Math.max(0, 1 - d / 70);
-      // the ground trembles when he's right on top of you
-      if (d < 35 && !A.still) player.shake = Math.max(player.shake, Math.pow(1 - d / 35, 1.5) * 0.3);
-      if (siren.state === 'hunt') A.playMusic('chase', 1);
-      else A.playMusic('explore', 4);
-      A.intensity = Math.min(1, near * 0.7 + (siren.state === 'investigate' ? 0.4 : siren.state === 'search' ? 0.5 : 0));
-      A.setHeartbeat(siren.state === 'wander' ? near * 0.5 : Math.max(0.35, near));
+      if (state === 'play') {
+        updateHUD();
+        updateHintUI();
+        updateWindState(dt);
+        // music & heartbeat follow the danger
+        const d = siren.distToPlayer || 999;
+        const near = Math.max(0, 1 - d / 70);
+        // the ground trembles when he's right on top of you
+        if (d < 35 && !A.still) player.shake = Math.max(player.shake, Math.pow(1 - d / 35, 1.5) * 0.3);
+        if (siren.state === 'hunt') A.playMusic('chase', 1);
+        else A.playMusic('explore', 4);
+        A.intensity = Math.min(1, near * 0.7 + (siren.state === 'investigate' ? 0.4 : siren.state === 'search' ? 0.5 : 0));
+        A.setHeartbeat(siren.state === 'wander' ? near * 0.5 : Math.max(0.35, near));
+      }
     } else if (state === 'dying') {
       updateDying(dt);
       world.update(dt, gameTime);
@@ -908,7 +1053,7 @@
 
     if (world && world.sky) { world.sky.position.copy(camera.position); world.stars.position.copy(camera.position); }
     if (state === 'dead') {
-      if (deathShown) { deathRoom.update(dt, window.innerWidth / window.innerHeight, A.deathMusicTime()); deathRoom.render(renderer); }
+      if (deathShown && V().deathRoom) { deathRoom.update(dt, window.innerWidth / window.innerHeight, A.deathMusicTime()); deathRoom.render(renderer); }
     } else if (state !== 'credits') renderer.render(scene, camera);
     if (pendingCapture) capturePhoto();
 
@@ -940,6 +1085,7 @@
         case 'graphics': openPanel('graphics', inPause ? 'pause' : 'title'); break;
         case 'audio': openPanel('audio', inPause ? 'pause' : 'title'); break;
         case 'updates': openPanel('updates', 'title'); break;
+        case 'versions': openPanel('versions', 'title'); break;
         case 'back': closePanel(); break;
         case 'resume': resume(); break;
         case 'retry': startGame(true); break;
@@ -967,6 +1113,7 @@
     try { document.fonts && document.fonts.load('40px Caveat'); } catch (e) { /* fallback fonts are fine */ }
     buildWorld();
     setupTitleScene();
+    syncVersionUI();
     wireMenus();
     ui.fadeIn(0.1);
     clock.start();
@@ -988,7 +1135,7 @@
     gate.addEventListener('click', leaveGate);
     window.addEventListener('keydown', leaveGate);
     // expose for debugging
-    LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, startGame, startEnding, beginPlay };
+    LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, startGame, startEnding, beginPlay };
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

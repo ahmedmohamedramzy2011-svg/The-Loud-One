@@ -100,6 +100,41 @@
       [-1, 1].forEach(d => { g.beginPath(); g.ellipse(d * s * 0.08, -s * 0.1, s * 0.035, s * 0.06, 0, 0, 7); g.fill(); });
       g.beginPath(); g.ellipse(0, s * 0.12, s * 0.06, s * 0.035, 0, 0, 7); g.fill();
     },
+    fastone(g, s, k) {
+      // speed afterimage streaks behind a low lunging hound
+      g.strokeStyle = 'rgba(20,0,0,0.55)'; g.lineWidth = s * 0.014; g.lineCap = 'round';
+      for (let i = 0; i < 6; i++) {
+        const y = -s * 0.18 + i * s * 0.08;
+        g.beginPath(); g.moveTo(-s * 0.6, y); g.lineTo(-s * 0.15 - (i % 2) * s * 0.1, y); g.stroke();
+      }
+      g.fillStyle = 'rgba(10,0,0,0.93)'; g.strokeStyle = 'rgba(10,0,0,0.93)';
+      // gaunt crouching torso & spine spikes
+      g.beginPath();
+      g.moveTo(-s * 0.32, s * 0.05);
+      g.lineTo(s * 0.12, -s * 0.08);
+      g.lineTo(s * 0.22, s * 0.08);
+      g.lineTo(-s * 0.26, s * 0.16);
+      g.closePath(); g.fill();
+      for (let i = 0; i < 4; i++) {
+        const bx = -s * 0.2 + i * s * 0.09;
+        const by = 0.02 * s - i * s * 0.02;
+        g.beginPath(); g.moveTo(bx - s * 0.02, by); g.lineTo(bx - s * 0.04, by - s * 0.08); g.lineTo(bx + s * 0.02, by - s * 0.01); g.fill();
+      }
+      // canine skull and wide open fanged jaws lunging right
+      g.beginPath();
+      g.moveTo(s * 0.08, -s * 0.09); g.lineTo(s * 0.42, -s * 0.06); g.lineTo(s * 0.22, s * 0.03); g.closePath(); g.fill();
+      g.beginPath();
+      g.moveTo(s * 0.14, s * 0.02); g.lineTo(s * 0.39, s * 0.13); g.lineTo(s * 0.18, s * 0.1); g.closePath(); g.fill();
+      // ears swept back
+      g.beginPath(); g.moveTo(s * 0.08, -s * 0.08); g.lineTo(-s * 0.03, -s * 0.2); g.lineTo(s * 0.15, -s * 0.09); g.fill();
+      // lunging forelegs & hind legs
+      g.lineWidth = s * 0.03;
+      g.beginPath(); g.moveTo(s * 0.14, s * 0.07); g.lineTo(s * 0.34, s * 0.24); g.lineTo(s * 0.46, s * 0.34); g.stroke();
+      g.beginPath(); g.moveTo(-s * 0.26, s * 0.12); g.lineTo(-s * 0.44, s * 0.28); g.lineTo(-s * 0.52, s * 0.38); g.stroke();
+      // glowing red eye
+      g.fillStyle = 'rgba(255,45,20,0.85)';
+      g.beginPath(); g.ellipse(s * 0.21, -s * 0.035, s * 0.032, s * 0.018, -0.2, 0, 7); g.fill();
+    },
   };
 
   const FX = {

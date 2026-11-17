@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=50">
+<link rel="stylesheet" href="css/style.css?v=52">
 </head>
 <body>
 
@@ -42,16 +42,21 @@
       <button data-action="updates">UPDATE LOG</button>
     </nav>
   </div>
-  <div class="title-footer">v2.3 &nbsp;·&nbsp; stay quiet</div>
+  <div class="title-footer">
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.4.2</button>
+    <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
+  </div>
 </div>
 
 <!-- Graphics options -->
 <div id="graphics" class="screen panel-screen">
   <div class="panel">
-    <h2>GRAPHICS</h2>
-    <div class="opt-list" id="graphics-list"></div>
-    <div class="panel-buttons">
-      <button data-action="back">BACK</button>
+    <div class="panel-head">
+      <h2>GRAPHICS</h2>
+      <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="opt-list" id="graphics-list"></div>
     </div>
   </div>
 </div>
@@ -59,25 +64,27 @@
 <!-- Audio & controls options -->
 <div id="audio" class="screen panel-screen">
   <div class="panel">
-    <h2>AUDIO &amp; CONTROLS</h2>
-    <div class="opt-list" id="audio-list"></div>
-    <div class="opt-section">KEYS</div>
-    <table class="keys">
-      <tr><td>W A S D</td><td>Move</td></tr>
-      <tr><td>Mouse</td><td>Look</td></tr>
-      <tr><td>Shift</td><td>Sprint (loud, uses stamina)</td></tr>
-      <tr><td>Space</td><td>Jump (very loud)</td></tr>
-      <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
-      <tr><td>F</td><td>Flashlight (buzzes)</td></tr>
-      <tr><td>Right mouse / Q</td><td>Raise camera</td></tr>
-      <tr><td>Left mouse</td><td>Take photo (while camera raised)</td></tr>
-      <tr><td>E</td><td>Hide / leave hiding spot</td></tr>
-      <tr><td>G</td><td>Throw a rock</td></tr>
-      <tr><td>H</td><td>Hint (after 3 minutes without new evidence)</td></tr>
-      <tr><td>Esc</td><td>Pause</td></tr>
-    </table>
-    <div class="panel-buttons">
-      <button data-action="back">BACK</button>
+    <div class="panel-head">
+      <h2>AUDIO &amp; CONTROLS</h2>
+      <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="opt-list" id="audio-list"></div>
+      <div class="opt-section">KEYS</div>
+      <table class="keys">
+        <tr><td>W A S D</td><td>Move</td></tr>
+        <tr><td>Mouse</td><td>Look</td></tr>
+        <tr><td>Shift</td><td>Sprint (loud, uses stamina)</td></tr>
+        <tr><td>Space</td><td>Jump (very loud)</td></tr>
+        <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
+        <tr><td>F</td><td>Flashlight (buzzes)</td></tr>
+        <tr><td>Right mouse / Q</td><td>Raise camera</td></tr>
+        <tr><td>Left mouse</td><td>Take photo (while camera raised)</td></tr>
+        <tr><td>E</td><td>Hide / leave hiding spot</td></tr>
+        <tr><td>G</td><td>Throw a rock</td></tr>
+        <tr><td>H</td><td>Hint (after 3 minutes without new evidence)</td></tr>
+        <tr><td>Esc</td><td>Pause</td></tr>
+      </table>
     </div>
   </div>
 </div>
@@ -85,46 +92,79 @@
 <!-- Update log -->
 <div id="updates" class="screen panel-screen">
   <div class="panel howto updates">
-    <h2>UPDATE LOG</h2>
-    <div class="upd"><h3>v2.3 <span>current</span></h3><ul>
-      <li>Remodeled buildings, furniture, cars, Moths, helicopter and power winches</li>
-      <li>Locker and dumpster opening animations</li>
-      <li>More natural dispatcher voice</li>
-    </ul></div>
-    <div class="upd"><h3>v2.2</h3><ul>
-      <li>New entity: The Sneaky One</li>
-      <li>More Moths, and they react faster</li>
-      <li>Update log cleanup</li>
-    </ul></div>
-    <div class="upd"><h3>v2.1</h3><ul>
-      <li>Recorded voice lines</li>
-      <li>New death sequence and death screen music</li>
-      <li>Fast Death option</li>
-      <li>New title screen</li>
-      <li>Tenant rework</li>
-      <li>Hint and balance changes</li>
-      <li>Bug fixes</li>
-    </ul></div>
-    <div class="upd"><h3>v2.0</h3><ul>
-      <li>New entity: The Exposure</li>
-      <li>New death screen</li>
-      <li>Sheriff's station and randomised evidence</li>
-      <li>Siren Head model and animation overhaul</li>
-      <li>Darker, denser town</li>
-      <li>Bug fixes</li>
-    </ul></div>
-    <div class="upd"><h3>v1.9</h3><ul><li>New entity: The Moths</li></ul></div>
-    <div class="upd"><h3>v1.8</h3><ul><li>Echolocation</li><li>Throwable rocks</li><li>Silence mechanic</li></ul></div>
-    <div class="upd"><h3>v1.7</h3><ul><li>Update and version fixes</li></ul></div>
-    <div class="upd"><h3>v1.6</h3><ul><li>Wind</li></ul></div>
-    <div class="upd"><h3>v1.5</h3><ul><li>Health</li><li>New entity: The Silent One</li></ul></div>
-    <div class="upd"><h3>v1.4</h3><ul><li>Siren Head difficulty increase</li><li>New entity: The Tenant</li></ul></div>
-    <div class="upd"><h3>v1.3</h3><ul><li>Hint system</li><li>Darker lighting</li></ul></div>
-    <div class="upd"><h3>v1.2</h3><ul><li>Mobile controls</li></ul></div>
-    <div class="upd"><h3>v1.1</h3><ul><li>Bug fixes</li></ul></div>
-    <div class="upd"><h3>v1.0</h3><ul><li>Base game released</li></ul></div>
-    <div class="panel-buttons">
-      <button data-action="back">BACK</button>
+    <div class="panel-head">
+      <h2>UPDATE LOG</h2>
+      <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="upd" data-ver="2.4.2"><h3>v2.4.2 <span>current</span></h3><ul>
+        <li>Added version switcher — click the version label at the bottom left of the title screen to play older versions</li>
+        <li>Added mechanic doodles and handwritten notes to every entity sketch in the death screen notebook</li>
+        <li>Upgraded Phenomenon-241's CRT TV survival tape with the locker rear-up &amp; slam animation</li>
+        <li>Fixed mobile touch scrolling in panels and replaced bottom Back buttons with top-right X buttons</li>
+      </ul></div>
+      <div class="upd" data-ver="2.4.1"><h3>v2.4.1</h3><ul>
+        <li>Reworked Siren Head AI to smash through non-evidence buildings into scattered debris with heavy camera shake &amp; dizziness, while pathing around evidence buildings</li>
+        <li>Remodeled perimeter fences, fire escapes, building windows and trees with lower polygon counts</li>
+        <li>Removed floating planks bug</li>
+      </ul></div>
+      <div class="upd" data-ver="2.4"><h3>v2.4</h3><ul>
+        <li>New entity: The Fast One (Phenomenon-241)</li>
+        <li>Fence breach splinters, fading afterimage trail, blue-lit closest hiding spot &amp; adrenaline surge</li>
+        <li>Fixed The Sneaky One's death screen trigger</li>
+        <li>Buffed The Silent One to 10 damage per tick and lowered Tenant blind battery cost to 90%</li>
+      </ul></div>
+      <div class="upd" data-ver="2.3"><h3>v2.3</h3><ul>
+        <li>Remodeled buildings, furniture, cars, Moths, helicopter and power winches</li>
+        <li>Locker and dumpster opening animations</li>
+        <li>More natural dispatcher voice</li>
+      </ul></div>
+      <div class="upd" data-ver="2.2"><h3>v2.2</h3><ul>
+        <li>New entity: The Sneaky One</li>
+        <li>More Moths, and they react faster</li>
+        <li>Update log cleanup</li>
+      </ul></div>
+      <div class="upd" data-ver="2.1"><h3>v2.1</h3><ul>
+        <li>Recorded voice lines</li>
+        <li>New death sequence and death screen music</li>
+        <li>Fast Death option</li>
+        <li>New title screen</li>
+        <li>Tenant rework</li>
+        <li>Hint and balance changes</li>
+        <li>Bug fixes</li>
+      </ul></div>
+      <div class="upd" data-ver="2.0"><h3>v2.0</h3><ul>
+        <li>New entity: The Exposure</li>
+        <li>New death screen</li>
+        <li>Sheriff's station and randomised evidence</li>
+        <li>Siren Head model and animation overhaul</li>
+        <li>Darker, denser town</li>
+        <li>Bug fixes</li>
+      </ul></div>
+      <div class="upd" data-ver="1.9"><h3>v1.9</h3><ul><li>New entity: The Moths</li></ul></div>
+      <div class="upd" data-ver="1.8"><h3>v1.8</h3><ul><li>Echolocation</li><li>Throwable rocks</li><li>Silence mechanic</li></ul></div>
+      <div class="upd" data-ver="1.7"><h3>v1.7</h3><ul><li>Update and version fixes</li></ul></div>
+      <div class="upd" data-ver="1.6"><h3>v1.6</h3><ul><li>Wind</li></ul></div>
+      <div class="upd" data-ver="1.5"><h3>v1.5</h3><ul><li>Health</li><li>New entity: The Silent One</li></ul></div>
+      <div class="upd" data-ver="1.4"><h3>v1.4</h3><ul><li>Siren Head difficulty increase</li><li>New entity: The Tenant</li></ul></div>
+      <div class="upd" data-ver="1.3"><h3>v1.3</h3><ul><li>Hint system</li><li>Darker lighting</li></ul></div>
+      <div class="upd" data-ver="1.2"><h3>v1.2</h3><ul><li>Mobile controls</li></ul></div>
+      <div class="upd" data-ver="1.1"><h3>v1.1</h3><ul><li>Bug fixes</li></ul></div>
+      <div class="upd" data-ver="1.0"><h3>v1.0</h3><ul><li>Base game released</li></ul></div>
+    </div>
+  </div>
+</div>
+
+<!-- Version selector -->
+<div id="versions" class="screen panel-screen">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>GAME VERSION</h2>
+      <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <p class="ver-intro">Choose a version to play. Active entities, difficulty, HUD elements and death behavior revert to match that release.</p>
+      <div id="version-list" class="ver-list"></div>
     </div>
   </div>
 </div>
@@ -275,6 +315,10 @@
 <!-- Death -->
 <div id="death" class="screen">
   <div class="death-inner">
+    <div id="death-legacy" class="death-legacy" style="display:none">
+      <h2 id="death-title">YOU DIED</h2>
+      <p id="death-tip"></p>
+    </div>
     <nav class="menu">
       <button data-action="retry">TRY AGAIN</button>
       <button data-action="quit">QUIT TO TITLE</button>
@@ -304,20 +348,21 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=50"></script>
+<script src="js/settings.js?v=52"></script>
 <script src="audio/sounds.js?v=25"></script>
 <script src="audio/voice.js?v=16"></script>
 <script src="js/audio.js?v=50"></script>
 <script src="js/textures.js?v=50"></script>
-<script src="js/world.js?v=51"></script>
-<script src="js/sirenhead.js?v=50"></script>
-<script src="js/player.js?v=51"></script>
-<script src="js/moths.js?v=50"></script>
-<script src="js/deathroom.js?v=52"></script>
-<script src="js/sneaky.js?v=50"></script>
+<script src="js/world.js?v=52"></script>
+<script src="js/sirenhead.js?v=52"></script>
+<script src="js/player.js?v=52"></script>
+<script src="js/moths.js?v=52"></script>
+<script src="js/deathroom.js?v=53"></script>
+<script src="js/sneaky.js?v=52"></script>
+<script src="js/fastone.js?v=52"></script>
 <script src="js/cutscenes.js?v=50"></script>
 <script src="js/tvfx.js?v=52"></script>
-<script src="js/main.js?v=50"></script>
+<script src="js/main.js?v=52"></script>
 <script src="js/touch.js?v=50"></script>
 </body>
 </html>

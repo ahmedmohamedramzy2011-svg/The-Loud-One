@@ -26,13 +26,69 @@ window.LO = window.LO || {};
     // controls
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
+    // playable version
+    gameVersion: '2.4.2',
   }, PRESETS.medium);
+
+  const VERSIONS = [
+    { id: '2.4.2', label: 'v2.4.2', era: 'Version selector, full notebook notes, CRT locker-slam tape, mobile scrolling UI' },
+    { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building smash & evidence pathing, low-poly fences & buildings' },
+    { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-241), Sneaky fix, Silent 10 dmg, Tenant 90% blind' },
+    { id: '2.3',   label: 'v2.3',   era: 'Remodeled props & hiding animations (before The Fast One)' },
+    { id: '2.2',   label: 'v2.2',   era: 'The Sneaky One + 24 faster Moths (1s stare limit)' },
+    { id: '2.1',   label: 'v2.1',   era: 'Tenant 1-eye rework & blind, Fast Death option, 12 slower Moths' },
+    { id: '2.0',   label: 'v2.0',   era: 'The Exposure & 3D Death Room (before Tenant blind & voice lines)' },
+    { id: '1.9',   label: 'v1.9',   era: 'The Moths added; classic game-over screen' },
+    { id: '1.8',   label: 'v1.8',   era: 'Echolocation, throwable rocks, wind-stop silence mechanic' },
+    { id: '1.6',   label: 'v1.6',   era: 'Wind atmosphere (before echolocation & rocks)' },
+    { id: '1.5',   label: 'v1.5',   era: '100 HP Health bar & The Silent One' },
+    { id: '1.4',   label: 'v1.4',   era: 'The Tenant hiding danger & faster Siren Head' },
+    { id: '1.3',   label: 'v1.3',   era: 'Hint system & darker lighting (safe lockers)' },
+    { id: '1.0',   label: 'v1.0',   era: 'Original base game — Siren Head only, brighter night, no hints' },
+  ];
+
+  function verNum(id) {
+    const parts = String(id || '2.4.2').split('.').map(n => parseInt(n, 10) || 0);
+    return parts[0] * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
+  }
+
+  function versionFeatures(id) {
+    const v = verNum(id || S.gameVersion);
+    return {
+      id: id || S.gameVersion || '2.4.2',
+      hint: v >= 10300,
+      darkLight: v >= 10300,
+      tenant: v >= 10400,
+      sirenFast: v >= 10400,
+      health: v >= 10500,
+      silent: v >= 10500,
+      wind: v >= 10600,
+      windStillness: v >= 10800,
+      rocks: v >= 10800,
+      echo: v >= 10800,
+      moths: v >= 10900,
+      exposure: v >= 20000,
+      deathRoom: v >= 20000,
+      tenantBlind: v >= 20100,
+      fastDeathAllowed: v >= 20100,
+      sneaky: v >= 20200,
+      fastMoths: v >= 20200,
+      mothCount: v >= 20200 ? 24 : 12,
+      mothLimit: v >= 20200 ? 1.0 : 2.0,
+      mothDamage: v >= 20200 ? 20 : 10,
+      fastone: v >= 20400,
+      silentDamage: v >= 20400 ? 10 : 5,
+      tenantCost: v >= 20400 ? 90 : 95,
+      sirenSmash: v >= 20401,
+    };
+  }
 
   const S = Object.assign({}, DEFAULTS);
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) Object.assign(S, JSON.parse(raw));
   } catch (e) { /* storage unavailable — defaults are fine */ }
+  if (!VERSIONS.some(x => x.id === S.gameVersion)) S.gameVersion = '2.4.2';
 
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ }
@@ -95,6 +151,9 @@ window.LO = window.LO || {};
 
   LO.events = LO.events || new EventTarget();
   LO.settings = S;
+  LO.VERSIONS = VERSIONS;
+  LO.versionFeatures = versionFeatures;
+  LO.ver = () => versionFeatures(S.gameVersion);
   LO.Settings = { set, save, PRESETS, DEFAULTS, GRAPHICS_OPTIONS, AUDIO_OPTIONS };
 })();
 

@@ -528,12 +528,115 @@
     const lg = ctx.createGain(); lg.gain.value = 0.9;
     lfo.connect(lg); lg.connect(amp.gain);
     const g = ctx.createGain(); g.gain.value = 0; g.gain.setTargetAtTime(1.1, ctx.currentTime, 0.15);
-    n.connect(f); f.connect(amp); amp.connect(g); g.connect(p); p.connect(sfxBus);
+    n.connect(f); f.connect(amp); amp.connect(g); g.connect(p); p.connect(worldBus);
     n.start(); lfo.start();
     return {
       move(pp) { setPannerPos(p, pp); },
-      stop() { const t = ctx.currentTime; g.gain.setTargetAtTime(0, t, 0.05); n.stop(t + 0.4); lfo.stop(t + 0.4); },
+      stop() { const t = ctx.currentTime; g.gain.setTargetAtTime(0, t, 0.05); try { n.stop(t + 0.4); lfo.stop(t + 0.4); } catch (e) {} },
     };
+  };
+
+  // ---------- THE FAST ONE: fence smash, hound howl, rapid paws, locker slam, adrenaline ----------
+  A.fenceSmash = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 26, 0.55); p.connect(worldBus);
+    // heavy metallic fence crunch + splintering crackle
+    const o = ctx.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(32, t + 0.45);
+    const g = ctx.createGain(); env(g, t, 0.002, 1.2, 0.5, 0.0001);
+    o.connect(g); g.connect(p); o.start(t); o.stop(t + 0.55);
+    for (let i = 0; i < 4; i++) {
+      const tt = t + i * 0.045;
+      const n = noiseSrc(false, false);
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 950 + i * 500; f.Q.value = 1.4;
+      const gn = ctx.createGain(); env(gn, tt, 0.002, 0.85 - i * 0.15, 0.18, 0.0001);
+      n.connect(f); f.connect(gn); gn.connect(p); n.start(tt); n.stop(tt + 0.25);
+    }
+  };
+  A.fastHowl = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 24, 0.55); p.connect(worldBus);
+    const dist = distortion(4);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 780; f.Q.value = 1.5;
+    dist.connect(f); f.connect(p);
+    [1, 1.07].forEach((mul, i) => {
+      const o = ctx.createOscillator(); o.type = i ? 'sawtooth' : 'square';
+      o.frequency.setValueAtTime(220 * mul, t);
+      o.frequency.linearRampToValueAtTime(580 * mul, t + 0.22);
+      o.frequency.exponentialRampToValueAtTime(170 * mul, t + 1.15);
+      const g = ctx.createGain(); env(g, t, 0.03, 0.45, 1.1, 0.0001);
+      o.connect(g); g.connect(dist); o.start(t); o.stop(t + 1.25);
+    });
+  };
+  A.fastStep = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 10, 0.9); p.connect(worldBus);
+    const n = noiseSrc(false, false);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 500 + Math.random() * 250; f.Q.value = 1.1;
+    const g = ctx.createGain(); env(g, t, 0.002, 0.55, 0.06, 0.0001);
+    n.connect(f); f.connect(g); g.connect(p); n.start(t); n.stop(t + 0.09);
+  };
+  A.fastSlam = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 8, 0.8); p.connect(worldBus);
+    // metallic locker slam + sub impact
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(28, t + 0.45);
+    const g = ctx.createGain(); env(g, t, 0.002, 1.3, 0.5, 0.0001);
+    o.connect(g); g.connect(p); o.start(t); o.stop(t + 0.55);
+    const cl = ctx.createOscillator(); cl.type = 'square';
+    cl.frequency.setValueAtTime(340, t); cl.frequency.exponentialRampToValueAtTime(95, t + 0.25);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 650; f.Q.value = 2;
+    const cg = ctx.createGain(); env(cg, t, 0.002, 0.7, 0.28, 0.0001);
+    cl.connect(f); f.connect(cg); cg.connect(p); cl.start(t); cl.stop(t + 0.35);
+    const n = noiseSrc(false, false);
+    const nf = ctx.createBiquadFilter(); nf.type = 'lowpass'; nf.frequency.value = 1800;
+    const ng = ctx.createGain(); env(ng, t, 0.002, 0.85, 0.22, 0.0001);
+    n.connect(nf); nf.connect(ng); ng.connect(p); n.start(t); n.stop(t + 0.3);
+  };
+  A.adrenaline = function () {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    [0, 0.14].forEach((dt, i) => {
+      const o = ctx.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(85, t + dt); o.frequency.exponentialRampToValueAtTime(36, t + dt + 0.16);
+      const g = ctx.createGain(); env(g, t + dt, 0.004, i ? 0.65 : 0.8, 0.18, 0.0001);
+      o.connect(g); g.connect(sfxBus); o.start(t + dt); o.stop(t + dt + 0.22);
+    });
+    const n = noiseSrc(false, false);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+    f.frequency.setValueAtTime(350, t); f.frequency.exponentialRampToValueAtTime(1600, t + 0.5); f.Q.value = 1.5;
+    const g = ctx.createGain(); env(g, t, 0.04, 0.35, 0.55, 0.0001);
+    n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t); n.stop(t + 0.7);
+  };
+
+  // ---------- SIREN HEAD: smashing through a non-evidence building ----------
+  A.buildingSmash = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 26, 0.45); p.connect(worldBus);
+    // massive structural sub boom
+    const sub = ctx.createOscillator(); sub.type = 'sine';
+    sub.frequency.setValueAtTime(115, t); sub.frequency.exponentialRampToValueAtTime(24, t + 0.85);
+    const sg = ctx.createGain(); env(sg, t, 0.004, 1.5, 0.9, 0.0001);
+    sub.connect(sg); sg.connect(p); sub.start(t); sub.stop(t + 0.95);
+    // splintering timber & collapsing masonry bursts
+    for (let i = 0; i < 6; i++) {
+      const tt = t + i * 0.075;
+      const n = noiseSrc(false, false);
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 380 + i * 260; f.Q.value = 0.85;
+      const g = ctx.createGain(); env(g, tt, 0.003, 1.15 - i * 0.14, 0.34, 0.0001);
+      n.connect(f); f.connect(g); g.connect(p); n.start(tt); n.stop(tt + 0.42);
+    }
+    // settling rubble rumble tail
+    const tail = noiseSrc(true, false);
+    const lf = ctx.createBiquadFilter(); lf.type = 'lowpass'; lf.frequency.value = 420;
+    const tg = ctx.createGain(); env(tg, t + 0.1, 0.08, 0.85, 1.5, 0.0001);
+    tail.connect(lf); lf.connect(tg); tg.connect(p); tail.start(t + 0.1); tail.stop(t + 1.65);
   };
 
   // ---------- THE EXPOSURE ----------

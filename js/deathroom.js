@@ -45,6 +45,12 @@
       'Creeps closer the longer your camera is up',
       'Lower your camera, use your flashlight to see',
     ] },
+    fastone: { name: 'THE FAST ONE', label: 'PHENOMENON-241', tips: [
+      'A gaunt, low hound that leaves red afterimages',
+      'Smashes through the farthest perimeter fence',
+      'If safety is far away, adrenaline lets you sprint twice as fast',
+      'Reach the blue-lit locker or dumpster within 6 seconds',
+    ] },
   };
   LO.DEATH_ENTRIES = ENTRIES;
 
@@ -88,11 +94,22 @@
       pencil(g, [[cx + 34, h * 0.41], [cx + 52, h * 0.62], [cx + 56, h * 0.8]], 3);
       pencil(g, [[cx - 14, h * 0.58], [cx - 22, h * 0.76], [cx - 20, h * 0.95]], 3);
       pencil(g, [[cx + 14, h * 0.58], [cx + 22, h * 0.76], [cx + 20, h * 0.95]], 3);
-      // sound lines
+      // sound lines & echolocation / hearing mechanic note
       for (let i = 0; i < 3; i++) { pencil(g, [[cx - 92 - i * 12, h * 0.15], [cx - 98 - i * 12, h * 0.2], [cx - 92 - i * 12, h * 0.25]], 1, 1.5); }
+      for (let i = 0; i < 3; i++) { pencil(g, [[cx + 92 + i * 12, h * 0.15], [cx + 98 + i * 12, h * 0.2], [cx + 92 + i * 12, h * 0.25]], 1, 1.5); }
+      // tiny crossed-out footstep note
+      ellipse(g, w * 0.15, h * 0.82, 10, 14, 2);
+      pencil(g, [[w * 0.1, h * 0.77], [w * 0.2, h * 0.87]], 2, 1.5);
+      g.save();
+      g.fillStyle = '#2d2924'; g.font = `26px ${HAND}`;
+      g.fillText('he hears', w * 0.06, h * 0.08);
+      g.fillText('everything...', w * 0.06, h * 0.13);
+      g.fillStyle = '#9e1c16'; g.font = `24px ${HAND}`;
+      g.fillText('crouch!', w * 0.06, h * 0.93);
+      g.restore();
     },
     tenant(g, w, h) {
-      // a locker with slats and two eyes inside
+      // a locker with slats and a single red eye inside
       pencil(g, [[w * 0.3, h * 0.12], [w * 0.7, h * 0.12], [w * 0.7, h * 0.92], [w * 0.3, h * 0.92]], 3, 3, true);
       for (let i = 0; i < 9; i++) pencil(g, [[w * 0.36, h * (0.2 + i * 0.07)], [w * 0.64, h * (0.2 + i * 0.07)]], 1, 2);
       hatch(g, w * 0.32, h * 0.14, w * 0.68, h * 0.9, 120, 0.9);
@@ -100,6 +117,18 @@
       g.fillStyle = '#a31515'; g.beginPath(); g.ellipse(w * 0.5, h * 0.42, 22, 18, 0, 0, 7); g.fill();
       g.fillStyle = '#111'; g.beginPath(); g.ellipse(w * 0.5, h * 0.42, 5, 15, 0, 0, 7); g.fill(); g.restore();
       ellipse(g, w * 0.5, h * 0.42, 47, 21, 3);
+      // mechanic notes: 14s limit & [F] flashlight blind
+      pencil(g, [[w * 0.72, h * 0.42], [w * 0.78, h * 0.42]], 2, 1.5);
+      pencil(g, [[w * 0.77, h * 0.37], [w * 0.85, h * 0.34]], 1, 1);
+      pencil(g, [[w * 0.77, h * 0.42], [w * 0.86, h * 0.42]], 1, 1);
+      pencil(g, [[w * 0.77, h * 0.47], [w * 0.85, h * 0.50]], 1, 1);
+      g.save();
+      g.fillStyle = '#9e1c16'; g.font = `28px ${HAND}`; g.fillText('14s...', w * 0.06, h * 0.22);
+      g.fillStyle = '#333'; g.font = `24px ${HAND}`;
+      g.fillText('get out!', w * 0.05, h * 0.30);
+      g.fillText('F = blind', w * 0.73, h * 0.60);
+      g.fillText('(-90% bat)', w * 0.72, h * 0.66);
+      g.restore();
     },
     silent(g, w, h) {
       const cx = w / 2;
@@ -109,8 +138,15 @@
       pencil(g, [[cx - 22, h * 0.28], [cx - 34, h * 0.55], [cx - 38, h * 0.76]], 3);
       pencil(g, [[cx + 22, h * 0.28], [cx + 34, h * 0.55], [cx + 38, h * 0.76]], 3);
       pencil(g, [[cx - 9, h * 0.58], [cx - 13, h * 0.95]], 3); pencil(g, [[cx + 9, h * 0.58], [cx + 13, h * 0.95]], 3);
-      // "shh" — no sound lines, a crossed-out speaker
-      g.save(); g.font = `28px ${HAND}`; g.fillStyle = '#333'; g.fillText('shh...', w * 0.08, h * 0.2); g.restore();
+      // "shh..." + crossed speaker + wind mechanic clue
+      pencil(g, [[w * 0.74, h * 0.18], [w * 0.80, h * 0.18], [w * 0.86, h * 0.13], [w * 0.86, h * 0.27], [w * 0.80, h * 0.22], [w * 0.74, h * 0.22]], 2, 1.5, true);
+      pencil(g, [[w * 0.72, h * 0.12], [w * 0.90, h * 0.29]], 2, 1.5);
+      g.save();
+      g.fillStyle = '#333'; g.font = `28px ${HAND}`; g.fillText('shh...', w * 0.08, h * 0.2);
+      g.font = `23px ${HAND}`; g.fillText('wind stops?', w * 0.66, h * 0.37);
+      g.fillStyle = '#9e1c16'; g.fillText('make noise!', w * 0.64, h * 0.43);
+      g.fillStyle = '#444'; g.fillText('30s...', w * 0.08, h * 0.28);
+      g.restore();
     },
     moth(g, w, h) {
       const cx = w / 2;
@@ -140,6 +176,15 @@
         pencil(g, [[cx + sd * 6, h * 0.165], [cx + sd * 25, h * 0.09], [cx + sd * 55, h * 0.06]], 2, 1.5);
         for (let i = 1; i < 7; i++) { const x = cx + sd * (6 + i * 7), y = h * (0.165 - i * 0.015); pencil(g, [[x, y], [x + sd * 4, y - 9]], 1, 1); }
       });
+      // tiny flashlight beam doodle + mechanic warning
+      pencil(g, [[w * 0.08, h * 0.88], [w * 0.14, h * 0.84], [w * 0.16, h * 0.88], [w * 0.10, h * 0.92]], 2, 1, true);
+      pencil(g, [[w * 0.15, h * 0.85], [w * 0.34, h * 0.72]], 1, 1.5);
+      pencil(g, [[w * 0.16, h * 0.88], [w * 0.36, h * 0.86]], 1, 1.5);
+      g.save();
+      g.fillStyle = '#9e1c16'; g.font = `24px ${HAND}`; g.fillText("don't stare!", w * 0.06, h * 0.73);
+      g.fillStyle = '#333'; g.font = `22px ${HAND}`; g.fillText('keep moving', w * 0.62, h * 0.82);
+      g.fillText('dark only...', w * 0.64, h * 0.88);
+      g.restore();
     },
     exposure(g, w, h) {
       // a viewfinder with a blurred figure inside
@@ -151,7 +196,96 @@
       g.fillRect(w / 2 - 30, h * 0.36, 60, h * 0.42);
       g.restore();
       for (let i = 0; i < 5; i++) ellipse(g, w / 2, h * 0.3, 26 + i * 3, 34 + i * 3, 1);
-      g.save(); g.fillStyle = '#b22'; g.font = `24px ${HAND}`; g.fillText('REC', w * 0.16, h * 0.18); g.restore();
+      // downward arrow + camera mechanic note
+      pencil(g, [[w * 0.77, h * 0.66], [w * 0.77, h * 0.79]], 2, 1.5);
+      pencil(g, [[w * 0.73, h * 0.74], [w * 0.77, h * 0.80], [w * 0.81, h * 0.74]], 2, 1.5);
+      g.save();
+      g.fillStyle = '#b22'; g.font = `24px ${HAND}`; g.fillText('REC', w * 0.16, h * 0.18);
+      g.fillText('10s!', w * 0.70, h * 0.22);
+      g.fillStyle = '#333'; g.font = `23px ${HAND}`;
+      g.fillText('lower cam!', w * 0.61, h * 0.62);
+      g.fillText('use light', w * 0.15, h * 0.84);
+      g.restore();
+    },
+    sneaky(g, w, h) {
+      const cx = w / 2, cy = h * 0.48;
+      // dark hatching cloud around the floating eyes and smile
+      hatch(g, w * 0.14, h * 0.18, w * 0.86, h * 0.78, 180, 0.7);
+      hatch(g, w * 0.2, h * 0.24, w * 0.8, h * 0.72, 140, 2.3);
+      // two narrow pale glowing eyes
+      g.save();
+      g.fillStyle = '#faf6e8';
+      [-1, 1].forEach(d => {
+        g.beginPath(); g.ellipse(cx + d * 64, cy - 52, 32, 13, d * -0.06, 0, 7); g.fill();
+      });
+      // wide grin from cheek to cheek with jagged teeth
+      g.beginPath();
+      g.moveTo(cx - 135, cy + 12);
+      g.quadraticCurveTo(cx, cy + 135, cx + 135, cy + 12);
+      g.quadraticCurveTo(cx, cy + 64, cx - 135, cy + 12);
+      g.fill();
+      g.restore();
+      [-1, 1].forEach(d => ellipse(g, cx + d * 64, cy - 52, 33, 14, 2));
+      for (let i = -5; i <= 5; i++) {
+        const tx = cx + i * 22, ty = cy + 44 + (1 - (i * i) / 36) * 28;
+        pencil(g, [[tx, ty - 16], [tx, ty + 14]], 2, 1.5);
+      }
+      // curved turn-around arrow & light-flicker note
+      pencil(g, [[w * 0.76, h * 0.14], [w * 0.85, h * 0.12], [w * 0.88, h * 0.20], [w * 0.80, h * 0.23]], 2, 1.5);
+      pencil(g, [[w * 0.84, h * 0.19], [w * 0.79, h * 0.24], [w * 0.85, h * 0.26]], 2, 1.5);
+      g.save();
+      g.fillStyle = '#333'; g.font = `24px ${HAND}`; g.fillText('light flickers...', w * 0.07, h * 0.14);
+      g.fillStyle = '#9e1c16'; g.font = `26px ${HAND}`; g.fillText('turn around!', w * 0.45, h * 0.89);
+      g.fillStyle = '#333'; g.font = `22px ${HAND}`; g.fillText('2.5s...', w * 0.10, h * 0.89);
+      g.restore();
+    },
+    fastone(g, w, h) {
+      // faint afterimage echo outline trailing behind the hound
+      g.save();
+      g.strokeStyle = 'rgba(155, 35, 30, 0.35)'; g.lineWidth = 2.5;
+      pencil(g, [[w * 0.13, h * 0.49], [w * 0.42, h * 0.43], [w * 0.47, h * 0.53], [w * 0.15, h * 0.56]], 1, 2, true);
+      pencil(g, [[w * 0.42, h * 0.43], [w * 0.54, h * 0.36], [w * 0.67, h * 0.39], [w * 0.53, h * 0.46]], 1, 2, true);
+      g.restore();
+      // speed streaks
+      for (let i = 0; i < 6; i++) {
+        const y = h * (0.36 + i * 0.055);
+        pencil(g, [[w * 0.04, y], [w * 0.22, y]], 2, 2);
+      }
+      // body & waist
+      pencil(g, [[w * 0.24, h * 0.48], [w * 0.56, h * 0.42], [w * 0.62, h * 0.53], [w * 0.26, h * 0.56]], 3, 3, true);
+      hatch(g, w * 0.26, h * 0.45, w * 0.58, h * 0.55, 65, 0.8);
+      // spine spikes
+      for (let i = 0; i < 5; i++) {
+        const sx = w * (0.29 + i * 0.06), sy = h * (0.47 - i * 0.01);
+        pencil(g, [[sx - 8, sy], [sx - 12, sy - 22], [sx + 6, sy - 2]], 2, 2);
+      }
+      // canine skull, ears, open fanged jaws
+      pencil(g, [[w * 0.56, h * 0.42], [w * 0.68, h * 0.34], [w * 0.88, h * 0.37], [w * 0.72, h * 0.44]], 3, 2, true);
+      pencil(g, [[w * 0.62, h * 0.46], [w * 0.84, h * 0.54], [w * 0.65, h * 0.52]], 3, 2, true);
+      pencil(g, [[w * 0.58, h * 0.39], [w * 0.50, h * 0.26], [w * 0.65, h * 0.35]], 3, 2);
+      for (let i = 0; i < 4; i++) {
+        const fx = w * (0.72 + i * 0.036);
+        pencil(g, [[fx, h * 0.42], [fx + 2, h * 0.46]], 2, 1);
+        pencil(g, [[fx - 2, h * 0.50], [fx, h * 0.47]], 2, 1);
+      }
+      g.save(); g.fillStyle = '#b41b15'; g.beginPath(); g.ellipse(w * 0.70, h * 0.38, 9, 5, -0.2, 0, 7); g.fill(); g.restore();
+      // 4 legs & whip tail
+      pencil(g, [[w * 0.58, h * 0.52], [w * 0.68, h * 0.66], [w * 0.78, h * 0.78]], 3);
+      pencil(g, [[w * 0.52, h * 0.52], [w * 0.48, h * 0.68], [w * 0.54, h * 0.80]], 3);
+      pencil(g, [[w * 0.28, h * 0.54], [w * 0.18, h * 0.68], [w * 0.12, h * 0.80]], 3);
+      pencil(g, [[w * 0.34, h * 0.54], [w * 0.32, h * 0.69], [w * 0.26, h * 0.80]], 3);
+      pencil(g, [[w * 0.24, h * 0.49], [w * 0.12, h * 0.42], [w * 0.06, h * 0.32]], 3);
+      // tiny blue locker doodle + broken fence plank + mechanic annotations
+      g.save();
+      g.strokeStyle = '#1f5b99'; g.lineWidth = 3;
+      pencil(g, [[w * 0.74, h * 0.12], [w * 0.88, h * 0.12], [w * 0.88, h * 0.28], [w * 0.74, h * 0.28]], 2, 1.5, true);
+      pencil(g, [[w * 0.77, h * 0.16], [w * 0.85, h * 0.16]], 1, 1);
+      pencil(g, [[w * 0.77, h * 0.19], [w * 0.85, h * 0.19]], 1, 1);
+      g.fillStyle = '#1f5b99'; g.font = `26px ${HAND}`; g.fillText('6s!', w * 0.08, h * 0.16);
+      g.font = `23px ${HAND}`; g.fillText('hide!', w * 0.61, h * 0.22);
+      g.fillStyle = '#333'; g.fillText('broken fence...', w * 0.07, h * 0.24);
+      g.fillStyle = '#9e1c16'; g.fillText('adrenaline x2', w * 0.50, h * 0.91);
+      g.restore();
     },
   };
 
@@ -278,6 +412,166 @@
       }
       caption(g, W, H, up ? 'IT CREEPS CLOSER IN THE LENS...' : 'LOWER IT. USE YOUR FLASHLIGHT');
     },
+    fastone(g, W, H, T) {
+      // screen shake during the locker slam impact
+      const slamming = T >= 4.15 && T < 5.15;
+      const slamK = slamming ? Math.max(0, 1 - (T - 4.15) / 1.0) : 0;
+      const shx = slamming ? Math.sin(T * 75) * 4 * slamK : 0;
+      const shy = slamming ? Math.cos(T * 62) * 3 * slamK : 0;
+      g.save();
+      g.translate(shx, shy);
+      g.fillStyle = '#141616'; g.fillRect(-6, -6, W + 12, H + 12);
+      g.fillStyle = '#1d2020'; g.fillRect(-6, H * 0.74, W + 12, H);
+
+      // perimeter fence on far left (breaks when T > 0.35)
+      const fx = W * 0.08;
+      if (T < 0.35 || T > 6.4) {
+        g.fillStyle = '#3e3932';
+        g.fillRect(fx, H * 0.48, 5, H * 0.26);
+        g.fillRect(fx + 10, H * 0.49, 5, H * 0.25);
+        g.fillRect(fx - 4, H * 0.54, 24, 3);
+        g.fillRect(fx - 4, H * 0.65, 24, 3);
+      } else if (T < 1.3 || (T > 5.75 && T < 6.4)) {
+        // flying splinters on breach / exit breach
+        const spT = T < 1.3 ? T - 0.35 : T - 5.75;
+        g.fillStyle = '#5a5044';
+        for (let i = 0; i < 6; i++) {
+          const sx = fx + (T < 1.3 ? 1 : -1) * spT * (40 + i * 18);
+          const sy = H * 0.56 - Math.sin(Math.min(1, spT) * Math.PI) * (14 + (i % 3) * 10) + spT * 28;
+          g.fillRect(sx, sy, 8, 3);
+        }
+      }
+
+      // blue-highlighted locker on the right (tilts & rattles on impact)
+      const lx = W * 0.74, ly = H * 0.35, lw = W * 0.14, lh = H * 0.39;
+      const lockTilt = slamming ? Math.sin((T - 4.15) * 32) * 0.09 * slamK : 0;
+      g.save();
+      g.translate(lx + lw / 2, ly + lh);
+      g.rotate(lockTilt);
+      g.translate(-(lx + lw / 2), -(ly + lh));
+      const pulse = 0.6 + 0.4 * Math.sin(T * 8);
+      g.fillStyle = '#2c3135'; g.fillRect(lx, ly, lw, lh);
+      // locker slats
+      g.fillStyle = '#141719';
+      for (let i = 0; i < 5; i++) g.fillRect(lx + 6, ly + 10 + i * 8, lw - 12, 3);
+      // swinging door open slightly as player dives in (T 2.7..3.45)
+      if (T >= 2.7 && T < 3.45) {
+        const op = T < 3.1 ? (T - 2.7) / 0.4 : 1 - (T - 3.1) / 0.35;
+        g.fillStyle = '#121518'; g.fillRect(lx + 2, ly + 4, lw - 4, lh - 6);
+        g.fillStyle = '#383e44'; g.fillRect(lx - op * 14, ly + 2, 10, lh - 4);
+      }
+      g.strokeStyle = `rgba(56, 170, 255, ${T < 5.5 ? 0.55 + pulse * 0.45 : 0.25})`;
+      g.lineWidth = 3;
+      g.strokeRect(lx - 3, ly - 3, lw + 6, lh + 6);
+      g.restore();
+
+      // stick figure sprinting into the locker
+      if (T < 3.35) {
+        const k = Math.min(1, T / 3.15);
+        const px = W * 0.26 + k * (W * 0.48);
+        // bobbing sprint stride + adrenaline speed streaks
+        const bob = Math.abs(Math.sin(T * 18)) * 3;
+        fig(g, px, H * 0.74 - bob, 1);
+        g.strokeStyle = 'rgba(140,220,255,0.65)'; g.lineWidth = 1.5;
+        for (let i = 0; i < 3; i++) {
+          g.beginPath();
+          g.moveTo(px - 12 - i * 8, H * (0.56 + i * 0.05));
+          g.lineTo(px - 26 - i * 8, H * (0.56 + i * 0.05));
+          g.stroke();
+        }
+      }
+
+      // fast hound silhouette helper (supports facing, crouch/rear-up angle, fanged jaw)
+      const drawHound = (cx, cy, dir, pitch, jawOpen, alpha, redTint) => {
+        g.save();
+        g.translate(cx, cy);
+        g.scale(dir, 1);
+        g.rotate(pitch);
+        g.globalAlpha = alpha;
+        g.fillStyle = redTint ? '#8c1919' : '#0f0e0e';
+        // low torso + spine spikes
+        g.fillRect(-18, -7, 32, 11);
+        for (let i = 0; i < 4; i++) {
+          g.beginPath(); g.moveTo(-14 + i * 7, -7); g.lineTo(-16 + i * 7, -13); g.lineTo(-10 + i * 7, -7); g.fill();
+        }
+        // head & open jaw
+        g.fillRect(10, -10, 14, 7);
+        g.beginPath(); g.moveTo(14, -3); g.lineTo(25, -2 + jawOpen * 6); g.lineTo(14, 1 + jawOpen * 3); g.fill();
+        // ears & legs
+        g.beginPath(); g.moveTo(11, -10); g.lineTo(7, -16); g.lineTo(15, -10); g.fill();
+        g.strokeStyle = redTint ? '#8c1919' : '#0f0e0e'; g.lineWidth = 3;
+        g.beginPath();
+        g.moveTo(10, 3); g.lineTo(16, 13);
+        g.moveTo(-14, 3); g.lineTo(-20, 13);
+        g.stroke();
+        // glowing red eye
+        g.fillStyle = '#ff3b22';
+        g.fillRect(16, -8, 4, 2.5);
+        g.restore();
+      };
+
+      // hound timeline: breach/chase (0..3.6) -> rear-up & locker slam (3.6..5.35) -> exit dash (5.35..8)
+      if (T >= 0.35 && T < 3.6) {
+        const k = (T - 0.35) / 3.25;
+        const hx = W * 0.04 + k * (W * 0.60);
+        for (let i = 3; i >= 1; i--) {
+          drawHound(hx - i * 16, H * 0.67, 1, 0, 0.4, 0.14 * (4 - i), true);
+        }
+        drawHound(hx, H * 0.67, 1, Math.sin(T * 22) * 0.08, 0.6, 1, false);
+      } else if (T >= 3.6 && T < 5.35) {
+        const hx = W * 0.67;
+        let hy = H * 0.67, pitch = 0, jaw = 0.7;
+        if (T < 4.08) {
+          // rear up high against the locker!
+          const rk = (T - 3.6) / 0.48;
+          const e = rk * rk * (3 - 2 * rk);
+          pitch = -0.92 * e;
+          hy = H * 0.67 - e * 12;
+          jaw = 0.4 + e * 0.6;
+        } else if (T < 4.26) {
+          // slam violently down into the door!
+          const sk = (T - 4.08) / 0.18;
+          const e = sk * sk;
+          pitch = -0.92 + e * 1.12;
+          hy = H * 0.67 - 12 + e * 11;
+          jaw = 1.0 - e * 0.6;
+        } else if (T < 5.05) {
+          // rattle impact recoil
+          const rk = (T - 4.26) / 0.79;
+          pitch = 0.2 * (1 - rk);
+          hy = H * 0.67;
+          jaw = 0.3 + Math.abs(Math.sin(T * 26)) * 0.3;
+        }
+        drawHound(hx, hy, 1, pitch, jaw, 1, false);
+        // impact sparks & SLAM! burst at the moment of collision
+        if (T >= 4.18 && T < 4.65) {
+          const ik = 1 - (T - 4.18) / 0.47;
+          g.strokeStyle = `rgba(255,210,120,${ik})`;
+          g.lineWidth = 2;
+          for (let i = 0; i < 7; i++) {
+            const a = -Math.PI * 0.65 + (i / 6) * Math.PI * 1.3;
+            g.beginPath();
+            g.moveTo(lx + Math.cos(a) * 6, H * 0.56 + Math.sin(a) * 6);
+            g.lineTo(lx + Math.cos(a) * (18 + (1 - ik) * 14), H * 0.56 + Math.sin(a) * (18 + (1 - ik) * 14));
+            g.stroke();
+          }
+          g.fillStyle = `rgba(255,95,70,${ik})`;
+          g.font = 'bold 13px Courier New, monospace';
+          g.fillText('SLAM!', lx - 36, H * 0.38 - (1 - ik) * 8);
+        }
+      } else if (T >= 5.35 && T < 6.7) {
+        // dashes back out left and breaks out of the fence
+        const k = (T - 5.35) / 1.35;
+        const hx = W * 0.64 - k * (W * 0.76);
+        for (let i = 3; i >= 1; i--) {
+          drawHound(hx + i * 16, H * 0.67, -1, 0, 0.4, 0.14 * (4 - i), true);
+        }
+        drawHound(hx, H * 0.67, -1, Math.sin(T * 22) * 0.08, 0.5, 1, false);
+      }
+
+      g.restore();
+      caption(g, W, H, T < 3.45 ? 'RUN FOR THE BLUE LOCKER!' : T < 5.35 ? 'WAIT OUT THE SLAM...' : 'IT BREAKS BACK OUT');
+    },
   };
 
   // ============================================================
@@ -373,7 +667,7 @@
     g = this.sketchCanvas.getContext('2d');
     paper(g, 512, 680);
     g.strokeStyle = 'rgba(25,25,25,0.95)'; g.lineWidth = 4; g.lineCap = 'round';
-    g.save(); g.translate(26, 60); SKETCH[this.cause](g, 460, 560); g.restore();
+    g.save(); g.translate(26, 60); (SKETCH[this.cause] || SKETCH.siren)(g, 460, 560); g.restore();
     g.fillStyle = '#333'; g.font = `34px ${HAND}`; g.fillText('fig. 1', 30, 650);
     this.sketchTex.needsUpdate = true;
     // tips page

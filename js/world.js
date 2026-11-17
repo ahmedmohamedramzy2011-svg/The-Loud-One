@@ -45,12 +45,15 @@
 
     const W = {
       root: new THREE.Group(),
-      colliders: [], occluders: [], hideSpots: [], pickups: [], evidence: [],
+      colliders: [], occluders: [], baseOccluders: [], hideSpots: [], pickups: [], evidence: [],
       interiors: [], flickers: [], animated: [], STREETS, HALF,
       enterables: [], closedFronts: [], openLots: [], fixedEvidence: [],
-      evColliders: [], evOccluders: [],
+      evColliders: [], evOccluders: [], buildings: [], flyingDebris: [],
+      debrisGroup: new THREE.Group(),
     };
+    W.root.add(W.debrisGroup);
     scene.add(W.root);
+    let curB = null;
 
     // ---------- materials ----------
     function mat(o) {
@@ -107,15 +110,22 @@
     W.mat = mat; W.M = M;
 
     // ---------- helpers ----------
+    function addOccluder(mesh) {
+      if (curB) curB.occluders.push(mesh);
+      else W.baseOccluders.push(mesh);
+    }
     function add(mesh, opts) {
       opts = opts || {};
       if (shadows) { mesh.castShadow = opts.cast !== false; mesh.receiveShadow = true; }
-      (opts.parent || W.root).add(mesh);
-      if (opts.occlude) W.occluders.push(mesh);
+      (opts.parent || (curB ? curB.group : W.root)).add(mesh);
+      if (opts.occlude) addOccluder(mesh);
       return mesh;
     }
     function collider(minX, maxX, minZ, maxZ, maxY, minY) {
-      W.colliders.push({ minX, maxX, minZ, maxZ, maxY: maxY === undefined ? 50 : maxY, minY: minY || 0 });
+      const c = { minX, maxX, minZ, maxZ, maxY: maxY === undefined ? 50 : maxY, minY: minY || 0, disabled: false };
+      W.colliders.push(c);
+      if (curB) curB.colliders.push(c);
+      return c;
     }
     // axis aligned box from world extents
     function boxAt(x0, x1, y0, y1, z0, z1, material, opts) {
@@ -263,7 +273,7 @@
           g2.rotateY(-Math.PI / 2); g2.translate(0.77, 0, 0);
           return g2;
         })(),
-        door: B(0.025, 0.4, 1.8), tire: new THREE.CylinderGeometry(0.36, 0.36, 0.24, 14), rim: new THREE.CylinderGeometry(0.21, 0.21, 0.26, 10),
+        door: B(0.025, 0.4, 1.8), tire: new THREE.CylinderGeometry(0.36, 0.36, 0.24, 8), rim: new THREE.CylinderGeometry(0.21, 0.21, 0.26, 6),
         chrome: mat({ color: 0xa8a8a8, roughness: 0.35, metalness: 0.8 }),
         tailOn: new THREE.MeshBasicMaterial({ color: 0xd01212 }), tailOff: mat({ color: 0x6a0c0c, roughness: 0.4 }),
         tailRimMat: mat({ color: 0xd9b0b0, roughness: 0.5 }),
@@ -339,12 +349,12 @@
       g.position.set(x, 0, z); g.rotation.y = ry || 0;
       if (opts.flipped) { g.rotation.z = Math.PI; g.position.y = 1.45; }
       g.traverse(o => { if (o.isMesh && shadows) { o.castShadow = true; o.receiveShadow = true; } });
-      (opts.parent || W.root).add(g);
+      (opts.parent || (curB ? curB.group : W.root)).add(g);
       if (!opts.noCollide) {
         const c = Math.abs(Math.cos(ry || 0)), s2 = Math.abs(Math.sin(ry || 0));
         const hw = (2 * c + 4.5 * s2) / 2 + 0.1, hd = (2 * s2 + 4.5 * c) / 2 + 0.1;
         collider(x - hw, x + hw, z - hd, z + hd, 1.6);
-        W.occluders.push(body);
+        addOccluder(body);
       }
       return g;
     }
@@ -352,7 +362,7 @@
 
     function streetLamp(x, z, ry, state) {
       const g = new THREE.Group();
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 7, 8), M.pole);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 7, 6, 1, true), M.pole);
       pole.position.y = 3.5; g.add(pole);
       const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 2), M.pole);
       arm.position.set(0, 6.9, 0.9); g.add(arm);
@@ -382,7 +392,7 @@
       [-1, 1].forEach(sd => { const bar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 1.0), M.pole); bar.position.set(sd * 1.16, 1.05, 0); g.add(bar); });
       // casters
       [[-0.95, -0.5], [0.95, -0.5], [-0.95, 0.5], [0.95, 0.5]].forEach(([wx, wz]) => {
-        const w = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.08, 10), M.tire); w.rotation.z = Math.PI / 2; w.position.set(wx, 0.11, wz); g.add(w);
+        const w = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.08, 6), M.tire); w.rotation.z = Math.PI / 2; w.position.set(wx, 0.11, wz); g.add(w);
       });
       // the lid: hinged along the back edge
       const hinge = new THREE.Group(); hinge.position.set(0, 1.45, -0.66); g.add(hinge);
@@ -390,17 +400,19 @@
       const lidRidge = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.05, 0.1), M.dark); lidRidge.position.set(0, 0.07, 1.25); hinge.add(lidRidge);
       hinge.rotation.x = -0.03;
       g.position.set(x, 0, z); g.rotation.y = ry; add(g);
-      W.occluders.push(b);
+      addOccluder(b);
       const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
       collider(x - (2.2 * c + 1.3 * s) / 2, x + (2.2 * c + 1.3 * s) / 2, z - (2.2 * s + 1.3 * c) / 2, z + (2.2 * s + 1.3 * c) / 2, 1.45);
       const front = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
-      W.hideSpots.push({
-        type: 'dumpster', mesh: g,
+      const spot = {
+        type: 'dumpster', mesh: g, disabled: false,
         pos: new THREE.Vector3(x, 1.05, z), yaw: ry,
         interact: new THREE.Vector3(x, 1, z).addScaledVector(front, 1.3),
         exit: new THREE.Vector3(x, 0, z).addScaledVector(front, 1.6),
         setOpen(a) { hinge.rotation.x = -0.03 - a * 1.5; },
-      });
+      };
+      W.hideSpots.push(spot);
+      if (curB) curB.hideSpots.push(spot);
     }
 
     // locker: an open-fronted cabinet with a hinged, vented door
@@ -416,34 +428,36 @@
       // the door, hinged on the left edge
       const hinge = new THREE.Group(); hinge.position.set(-W2 / 2, 0, D2 / 2); g.add(hinge);
       const door = new THREE.Mesh(new THREE.BoxGeometry(W2, H2 - 0.02, 0.025), M.locker); door.position.set(W2 / 2, H2 / 2, 0); hinge.add(door);
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 4; i++) {
         const slot = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.02), M.dark);
-        slot.position.set(W2 / 2, 1.55 + i * 0.07, 0.015); hinge.add(slot);
+        slot.position.set(W2 / 2, 1.55 + i * 0.08, 0.015); hinge.add(slot);
       }
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 2; i++) {
         const slot = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.02), M.dark);
-        slot.position.set(W2 / 2, 0.25 + i * 0.07, 0.015); hinge.add(slot);
+        slot.position.set(W2 / 2, 0.25 + i * 0.08, 0.015); hinge.add(slot);
       }
       const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.04), M.pole); handle.position.set(W2 - 0.1, 1.05, 0.03); hinge.add(handle);
       g.position.set(x, 0.12, z); g.rotation.y = ry; add(g);
-      W.occluders.push(back, door);
+      addOccluder(back); addOccluder(door);
       const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
       collider(x - (0.9 * c + 0.6 * s) / 2, x + (0.9 * c + 0.6 * s) / 2, z - (0.9 * s + 0.6 * c) / 2, z + (0.9 * s + 0.6 * c) / 2, 2.1);
       const front = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
-      W.hideSpots.push({
-        type: 'locker', mesh: g,
+      const spot = {
+        type: 'locker', mesh: g, disabled: false,
         pos: new THREE.Vector3(x, 1.65, z), yaw: ry,
         interact: new THREE.Vector3(x, 1, z).addScaledVector(front, 0.9),
         exit: new THREE.Vector3(x, 0, z).addScaledVector(front, 1.1),
         setOpen(a) { hinge.rotation.y = -a * 1.85; },
-      });
+      };
+      W.hideSpots.push(spot);
+      if (curB) curB.hideSpots.push(spot);
     }
 
     const batteryMat = new THREE.MeshBasicMaterial({ color: 0xffe066 });
     function battery(x, y, z) {
       const g = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.26, 10), mat({ color: 0x222222 }));
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.072, 0.08, 10), batteryMat);
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.26, 6), mat({ color: 0x222222 }));
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.072, 0.08, 6), batteryMat);
       cap.position.y = 0.09; g.add(body, cap);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex('rgba(255,230,120,0.45)'), depthWrite: false, transparent: true }));
       glow.scale.set(0.9, 0.9, 1); g.add(glow);
@@ -451,18 +465,32 @@
       W.pickups.push({ type: 'battery', mesh: g, pos: g.position, baseY: y, taken: false });
     }
 
+    // shared low-poly tree geometries for weak devices
+    const treeTrunkGeo = new THREE.CylinderGeometry(0.14, 0.28, 5, 4, 1, true);
+    treeTrunkGeo.translate(0, 2.5, 0);
+    const treeCanopyGeo = new THREE.ConeGeometry(2.2, 6, 4);
+    treeCanopyGeo.translate(0, 6.0, 0);
+    const deadBranchGeo = new THREE.BoxGeometry(0.1, 2.0, 0.1);
+    deadBranchGeo.translate(0, 1.0, 0);
+
     function tree(x, z, s, dead) {
       const g = new THREE.Group();
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15 * s, 0.3 * s, 5 * s, 6), M.bark);
-      trunk.position.y = 2.5 * s; g.add(trunk);
+      const trunk = new THREE.Mesh(treeTrunkGeo, M.bark);
+      trunk.scale.set(s, s, s);
+      g.add(trunk);
       if (!dead) {
-        const top = new THREE.Mesh(new THREE.ConeGeometry(2.2 * s, 6 * s, 7), M.leaves);
-        top.position.y = 6 * s; g.add(top);
+        const top = new THREE.Mesh(treeCanopyGeo, M.leaves);
+        top.scale.set(s, s, s);
+        top.rotation.y = R(0, Math.PI);
+        g.add(top);
       } else {
-        for (let i = 0; i < 4; i++) {
-          const br = new THREE.Mesh(new THREE.CylinderGeometry(0.03 * s, 0.09 * s, 2.4 * s, 4), M.bark);
-          br.position.y = (3 + i * 0.5) * s; br.rotation.z = (i % 2 ? 1 : -1) * R(0.5, 1.0); br.rotation.y = i * 1.6;
-          br.position.x = Math.sin(i * 1.6) * 0.6 * s; br.position.z = Math.cos(i * 1.6) * 0.6 * s;
+        for (let i = 0; i < 3; i++) {
+          const br = new THREE.Mesh(deadBranchGeo, M.bark);
+          const a = i * 2.1 + R(-0.3, 0.3);
+          br.scale.set(s, s * R(0.75, 1.05), s);
+          br.position.set(0, (3.1 + i * 0.45) * s, 0);
+          br.rotation.y = a;
+          br.rotation.z = (i % 2 ? 1 : -1) * R(0.55, 0.9);
           g.add(br);
         }
       }
@@ -472,9 +500,10 @@
 
     function rubblePile(x, z, r, n, parent) {
       for (let i = 0; i < n; i++) {
-        const s = R(0.4, 1.6);
-        const m = box(s * R(0.8, 2), s * R(0.4, 1), s * R(0.8, 1.6), rand() < 0.6 ? M.rubble : M.brick,
-          x + R(-r, r), s * 0.3, z + R(-r, r), { ry: R(0, 3), rx: R(-0.3, 0.3), rz: R(-0.3, 0.3), parent });
+        const s = R(0.4, 1.45);
+        const h = s * R(0.35, 0.85);
+        const m = box(s * R(0.8, 1.9), h, s * R(0.8, 1.5), rand() < 0.6 ? M.rubble : M.brick,
+          x + R(-r, r), h * 0.42, z + R(-r, r), { ry: R(0, 3), rx: R(-0.14, 0.14), rz: R(-0.14, 0.14), parent });
         m.userData.rubble = true;
       }
     }
@@ -540,6 +569,18 @@
       const inner = pick(M.plaster);
       const floorMat = kind === 'shop' || kind === 'police' ? M.tile : M.wood;
       const hl = L / 2, hd = D / 2;
+      const [fx0, fx1, fz0, fz1] = F.rect(-hl, hl, -hd, hd);
+      const b = {
+        id: W.buildings.length, type: 'enter', sheriff: !!(opts && opts.sheriff),
+        cx, cz, minX: fx0, maxX: fx1, minZ: fz0, maxZ: fz1, L, D, H,
+        group: new THREE.Group(), deco: new Map(), colliders: [], occluders: [], hideSpots: [],
+        interior: null, debrisGroup: null, debrisColliders: [], debrisOccluders: [],
+        smashed: false, hasEvidence: !!(opts && opts.sheriff),
+      };
+      W.root.add(b.group);
+      W.buildings.push(b);
+      curB = b;
+
       // front wall with door
       wall(F, -hl, -doorW / 2, hd - t, hd, 0, H, facade, inner, 'front');
       wall(F, doorW / 2, hl, hd - t, hd, 0, H, facade, inner, 'front');
@@ -555,7 +596,6 @@
       wall(F, gapA + gw / 2, hl - t, pb - 0.1, pb + 0.1, 0, ceil, inner, inner, 'front');
       wall(F, gapA - gw / 2, gapA + gw / 2, pb - 0.1, pb + 0.1, 2.5, ceil, inner, inner, 'front');
       // floor, ceiling, roof
-      const [fx0, fx1, fz0, fz1] = F.rect(-hl, hl, -hd, hd);
       boxAt(fx0 + t, fx1 - t, 0, 0.14, fz0 + t, fz1 - t, floorMat, { collide: false, tile: 3, cast: false });
       boxAt(fx0, fx1, ceil, ceil + 0.15, fz0, fz1, inner, { collide: false, tile: 4 });
       boxAt(fx0 - 0.3, fx1 + 0.3, H, H + 0.4, fz0 - 0.3, fz1 + 0.3, M.roof, { collide: false, tile: 6 });
@@ -564,7 +604,9 @@
       const frameMesh = box(axis === 'z' ? doorW + 0.3 : 0.1, 0.2, axis === 'z' ? 0.1 : doorW + 0.3, M.trim, dp.x, doorH + 0.1, dp.z);
       void frameMesh;
 
-      W.interiors.push({ minX: fx0, maxX: fx1, minZ: fz0, maxZ: fz1, ceil });
+      const intr = { minX: fx0, maxX: fx1, minZ: fz0, maxZ: fz1, ceil, disabled: false };
+      W.interiors.push(intr);
+      b.interior = intr;
 
       // furniture along the side walls (keeping the centre path clear)
       const placeAlong = (b0, b1, side) => {
@@ -636,7 +678,7 @@
         battery(p.x, 0.5, p.z);
       }
 
-      const info = { F, hl, hd, t, pb, gapA, axis, sign, kind, sheriff: !!(opts && opts.sheriff), cx, cz };
+      const info = { F, hl, hd, t, pb, gapA, axis, sign, kind, sheriff: !!(opts && opts.sheriff), cx, cz, building: b };
       W.enterables.push(info);
       decorate(fx0, fx1, fz0, fz1, H, F, { doorGap: true, doorA: 0, awning: kind === 'shop' || kind === 'office', awningMat: kind === 'shop' ? mat({ color: 0x5a1f1a }) : mat({ color: 0x1f3a5a }) });
 
@@ -674,6 +716,8 @@
         add(tape);
         W.fixedEvidence.push({ id: 'tape', name: 'Sheriff\'s security tape', pos: new THREE.Vector3(tp.x, 0.95, tp.z), maxDist: 4, found: false, margin: 0.6 });
       }
+      flushDeco(b.deco, b.group);
+      curB = null;
     }
 
     function buildClosed(cx, cz, L, D, H, axis, sign) {
@@ -681,6 +725,17 @@
       const facade = pick(M.facades);
       const [x0, x1, z0, z1] = F.rect(-L / 2, L / 2, -D / 2, D / 2);
       const w = x1 - x0, d = z1 - z0;
+      const b = {
+        id: W.buildings.length, type: 'closed', sheriff: false,
+        cx, cz, minX: x0, maxX: x1, minZ: z0, maxZ: z1, L, D, H,
+        group: new THREE.Group(), deco: new Map(), colliders: [], occluders: [], hideSpots: [],
+        interior: null, debrisGroup: null, debrisColliders: [], debrisOccluders: [],
+        smashed: false, hasEvidence: false,
+      };
+      W.root.add(b.group);
+      W.buildings.push(b);
+      curB = b;
+
       const g = new THREE.BoxGeometry(w, H, d);
       // facade on sides, roof on top
       worldUV(g, w, H, d, 12);
@@ -688,19 +743,22 @@
       m.position.set((x0 + x1) / 2, H / 2, (z0 + z1) / 2);
       add(m, { occlude: true });
       collider(x0, x1, z0, z1, H);
-      // boarded door on the front
+      // boarded door flush on the front face
       const doorA = R(-L / 4, L / 4);
       const dp = F.point(doorA, D / 2 + 0.05);
-      W.closedFronts.push({ F, L, D, H, doorA, axis });
+      const bp = F.point(doorA, D / 2 + 0.11);
+      W.closedFronts.push({ F, L, D, H, doorA, axis, building: b });
       decorate(x0, x1, z0, z1, H, F, { awning: rand() < 0.25, doorA, awningMat: pick([mat({ color: 0x5a1f1a }), mat({ color: 0x2c4a2a }), mat({ color: 0x4a3f1f })]) });
       const door = box(axis === 'z' ? 1.6 : 0.1, 2.6, axis === 'z' ? 0.1 : 1.6, M.wood, dp.x, 1.3, dp.z);
       for (let i = 0; i < 3; i++) {
-        box(axis === 'z' ? 2.0 : 0.12, 0.22, axis === 'z' ? 0.12 : 2.0, M.wood, dp.x, 0.7 + i * 0.8, dp.z, { rz: axis === 'z' ? R(-0.25, 0.25) : 0, rx: axis === 'x' ? R(-0.25, 0.25) : 0 });
+        box(axis === 'z' ? 1.85 : 0.08, 0.2, axis === 'z' ? 0.08 : 1.85, M.wood, bp.x, 0.68 + i * 0.78, bp.z, { rz: axis === 'z' ? R(-0.1, 0.1) : 0, rx: axis === 'x' ? R(-0.1, 0.1) : 0 });
       }
       void door;
       // rooftop details
       if (rand() < 0.6) box(2, 1.4, 2, M.metal, m.position.x + R(-w / 4, w / 4), H + 0.7, m.position.z + R(-d / 4, d / 4));
-      return { F, mesh: m, x0, x1, z0, z1 };
+      flushDeco(b.deco, b.group);
+      curB = null;
+      return { F, mesh: m, x0, x1, z0, z1, building: b };
     }
 
     function buildRuin(cx, cz, L, D) {
@@ -717,14 +775,14 @@
         const len = along === 'x' ? x1 - x0 : z1 - z0;
         const n = Math.max(1, Math.round(len / 2));
         for (let i = 0; i < n; i++) {
-          const h = R(0.6, 4.5);
+          const h = R(0.6, 4.2);
           if (along === 'x') boxAt(x0 + i * len / n, x0 + (i + 1) * len / n, 0, h, z0, z1, M.brick, { occlude: true, tile: 4 });
           else boxAt(x0, x1, 0, h, z0 + i * len / n, z0 + (i + 1) * len / n, M.brick, { occlude: true, tile: 4 });
         }
       });
-      rubblePile(cx, cz, Math.min(L, D) / 2.5, 14);
-      // broken beams
-      for (let i = 0; i < 3; i++) box(0.3, 0.3, R(4, 7), M.wood, cx + R(-4, 4), 0.6, cz + R(-4, 4), { ry: R(0, 3), rx: R(-0.4, 0.4), collide: false });
+      rubblePile(cx, cz, Math.min(L, D) / 2.5, 12);
+      // grounded fallen beams resting on the concrete slab (no floating planks)
+      for (let i = 0; i < 3; i++) box(0.3, 0.28, R(4, 6.5), M.wood, cx + R(-3.5, 3.5), 0.44, cz + R(-3.5, 3.5), { ry: R(0, 3), collide: false });
     }
 
     function buildLot(cx, cz, kind) {
@@ -733,8 +791,21 @@
         for (let i = 0; i < 2; i++) car(cx + R(-4, 4), cz + R(-4, 4), R(0, 6.28), { flipped: rand() < 0.2 });
       } else if (kind === 'park') {
         for (let i = 0; i < 4; i++) tree(cx + R(-6, 6), cz + R(-6, 6), R(0.8, 1.3), rand() < 0.7);
-        const bench = box(2, 0.1, 0.6, M.wood, cx + R(-3, 3), 0.5, cz + R(-3, 3), { ry: R(0, 3), collide: true });
-        void bench;
+        // grounded park bench with legs and backrest
+        const bx = cx + R(-3, 3), bz = cz + R(-3, 3), bry = R(0, 3);
+        const bg = new THREE.Group();
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.1, 0.56), M.wood); seat.position.y = 0.48; bg.add(seat);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.36, 0.08), M.wood); back.position.set(0, 0.76, -0.24); bg.add(back);
+        [-0.78, 0.78].forEach(lx => {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.46, 0.5), M.pole);
+          leg.position.set(lx, 0.23, 0); bg.add(leg);
+        });
+        bg.position.set(bx, 0, bz); bg.rotation.y = bry;
+        if (shadows) bg.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        add(bg);
+        const c = Math.abs(Math.cos(bry)), s = Math.abs(Math.sin(bry));
+        const hw = (2.0 * c + 0.6 * s) / 2, hd = (2.0 * s + 0.6 * c) / 2;
+        collider(bx - hw, bx + hw, bz - hd, bz + hd, 0.95);
       }
     }
 
@@ -743,22 +814,28 @@
     // =========================================================
     const DECO = new Map();   // material -> list of transformed geometries
     const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+    function decoMap() { return curB ? curB.deco : DECO; }
     function decoBox(material, w, h, d, x, y, z, rx, ry, rz) {
       const g = new THREE.BoxGeometry(w, h, d);
       _q.setFromEuler(_e.set(rx || 0, ry || 0, rz || 0));
       g.applyMatrix4(_m4.compose(_p.set(x, y, z), _q, _s.set(1, 1, 1)));
-      if (!DECO.has(material)) DECO.set(material, []);
-      DECO.get(material).push(g.index ? g.toNonIndexed() : g);
+      const map = decoMap();
+      if (!map.has(material)) map.set(material, []);
+      map.get(material).push(g.index ? g.toNonIndexed() : g);
     }
     function decoCyl(material, rt, rb, h, x, y, z, seg) {
-      const g = new THREE.CylinderGeometry(rt, rb, h, seg || 10);
+      const g = new THREE.CylinderGeometry(rt, rb, h, seg || 8);
       g.applyMatrix4(_m4.makeTranslation(x, y, z));
-      if (!DECO.has(material)) DECO.set(material, []);
-      DECO.get(material).push(g.toNonIndexed());
+      const map = decoMap();
+      if (!map.has(material)) map.set(material, []);
+      map.get(material).push(g.toNonIndexed());
     }
-    function flushDeco() {
-      DECO.forEach((list, material) => {
+    function flushDeco(map, target) {
+      map = map || DECO;
+      target = target || W.root;
+      map.forEach((list, material) => {
         let n = 0; list.forEach(g => n += g.attributes.position.count);
+        if (!n) return;
         const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2);
         let o = 0;
         list.forEach(g => {
@@ -773,9 +850,9 @@
         geo.computeBoundingSphere();
         const mesh = new THREE.Mesh(geo, material);
         if (shadows) { mesh.castShadow = true; mesh.receiveShadow = true; }
-        W.root.add(mesh);
+        target.add(mesh);
       });
-      DECO.clear();
+      map.clear();
     }
     // parapet, cornice, floor bands, plinth, rooftop clutter, fire escape, awning
     function decorate(x0, x1, z0, z1, H, F, opts) {
@@ -805,32 +882,45 @@
           } else strip(face, lo, hi);
         });
       };
-      ring(H - 0.25, 0.22, 0.28, false);                                   // cornice
-      for (let y = 3.6; y < H - 1.5; y += 3.2) ring(y, 0.12, 0.08, false); // floor bands
-      ring(0.27, 0.55, 0.07, !!opts.doorGap);                              // plinth (gap at the door)
+      ring(H - 0.25, 0.22, 0.26, false);                                   // cornice
+      // low-poly front window sill strip per upper floor instead of 4-sided rings
+      if (F) {
+        const along = F.axis === 'z';
+        for (let y = 3.5; y < H - 1.5; y += 3.2) {
+          const sp = F.point(0, F.D / 2 + 0.06);
+          decoBox(M.trim, along ? w : 0.12, 0.1, along ? 0.12 : d, sp.x, y, sp.z);
+        }
+      }
+      ring(0.275, 0.55, 0.07, !!opts.doorGap);                             // plinth (gap at the door)
       // rooftop clutter
       const r = rand();
-      if (r < 0.45) {   // water tank on stilts
+      if (r < 0.45) {   // water tank on stilts (low-poly 8-sided)
         const tx = cx + R(-w / 4, w / 4), tz = cz + R(-d / 4, d / 4);
-        decoCyl(M.wood, 1.1, 1.1, 2.0, tx, H + 2.4, tz, 12); decoCyl(M.roof, 0.05, 1.2, 0.6, tx, H + 3.7, tz, 12);
+        decoCyl(M.wood, 1.1, 1.1, 2.0, tx, H + 2.4, tz, 8); decoCyl(M.roof, 0.05, 1.2, 0.6, tx, H + 3.7, tz, 8);
         [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]].forEach(([a, b]) => decoBox(M.pole, 0.1, 1.4, 0.1, tx + a, H + 0.7, tz + b));
       } else {
         for (let i = 0; i < 2 + (rand() * 2 | 0); i++) decoBox(M.metal, R(1, 1.8), R(0.7, 1.1), R(1, 1.6), cx + R(-w / 3, w / 3), H + 0.45, cz + R(-d / 3, d / 3));
       }
       if (rand() < 0.5) { decoBox(M.pole, 0.06, R(2.5, 4.5), 0.06, cx + R(-w / 3, w / 3), H + 1.8, cz + R(-d / 3, d / 3)); }   // antenna
       decoBox(M.brick, 0.7, 1.4, 0.7, cx + R(-w / 3, w / 3), H + 0.7, cz + R(-d / 3, d / 3));                                  // chimney / vent stack
-      // fire escape on a side wall of taller buildings
+      // low-poly fire escape on a side wall of taller buildings (open rail + proper stair orientation)
       if (H > 9 && F && rand() < 0.75) {
         const side = rand() < 0.5 ? -1 : 1;
-        const L2 = F.L, D2 = F.D;
-        for (let y = 3.6; y < H - 1; y += 3.2) {
-          const p0 = F.point(side * (L2 / 2 + 0.55), 0), along = F.axis === 'z';
-          const a = 2.8, b = 1.0;
-          decoBox(M.pole, along ? b : a, 0.06, along ? a : b, p0.x, y, p0.z);                          // landing
-          decoBox(M.pole, along ? 0.04 : a, 0.9, along ? a : 0.04, p0.x + (along ? side * 0.48 : 0), y + 0.45, p0.z + (along ? 0 : side * 0.48)); // railing
-          decoBox(M.pole, along ? 0.05 : 0.05, 3.4, 0.05, p0.x, y - 1.5, p0.z, along ? 0.75 : 0, 0, along ? 0 : 0.75);   // stair
+        const L2 = F.L, along = F.axis === 'z';
+        const p0 = F.point(side * (L2 / 2 + 0.52), 0);
+        const a = 2.6, b = 0.96, ox = along ? side * 0.46 : 0, oz = along ? 0 : side * 0.46;
+        for (let y = 3.6; y < H - 1.2; y += 3.2) {
+          decoBox(M.pole, along ? b : a, 0.06, along ? a : b, p0.x, y, p0.z);                                            // landing
+          decoBox(M.pole, along ? 0.04 : a, 0.04, along ? a : 0.04, p0.x + ox, y + 0.88, p0.z + oz);                     // top rail
+          [-1.2, 1.2].forEach(dOff => {                                                                                  // 2 corner posts
+            decoBox(M.pole, 0.04, 0.88, 0.04, p0.x + ox + (along ? 0 : dOff), y + 0.44, p0.z + oz + (along ? dOff : 0));
+          });
+          if (y > 4.2) {
+            decoBox(M.pole, 0.06, 3.9, 0.06, p0.x, y - 1.6, p0.z, along ? 0.62 : 0, 0, along ? 0 : 0.62);                // stair between landings
+          } else {
+            decoBox(M.pole, 0.05, 1.9, 0.05, p0.x + ox, y - 0.95, p0.z + oz);                                            // drop ladder stub
+          }
         }
-        void D2;
       }
       // awning over a shop door
       if (opts.awning && F) {
@@ -850,7 +940,7 @@
     function furniture(type, x, z, yaw, len, kind) {
       const g = new THREE.Group();
       const P = (w, h, d, m, px, py, pz, rx, ry, rz) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(px, py, pz); o.rotation.set(rx || 0, ry || 0, rz || 0); g.add(o); return o; };
-      const C = (rt, rb, h, m, px, py, pz) => { const o = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 8), m); o.position.set(px, py, pz); g.add(o); return o; };
+      const C = (rt, rb, h, m, px, py, pz) => { const o = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 6), m); o.position.set(px, py, pz); g.add(o); return o; };
       const fy = 0.14;  // floor height inside
       if (type === 'bookshelf') {
         const H2 = R(1.8, 2.2), D2 = 0.38;
@@ -861,12 +951,12 @@
           const y = fy + 0.06 + sh * (H2 - 0.1) / 4.6;
           P(D2, 0.03, len - 0.08, M.wood, D2 / 2, y, 0);
           if (sh < 4) {
-            let zz = -len / 2 + 0.08;
-            while (zz < len / 2 - 0.12) {
-              const bw = R(0.03, 0.07), bh = R(0.2, 0.3);
-              if (rand() < 0.85) P(R(0.18, 0.26), bh, bw, pick(BOOKS), 0.16, y + bh / 2 + 0.015, zz + bw / 2, 0, 0, rand() < 0.08 ? 0.3 : 0);
-              zz += bw + 0.005;
-              if (rand() < 0.04) zz += R(0.1, 0.3);
+            let zz = -len / 2 + 0.1;
+            while (zz < len / 2 - 0.16) {
+              const bw = R(0.06, 0.14), bh = R(0.2, 0.3);
+              if (rand() < 0.85) P(R(0.18, 0.26), bh, bw, pick(BOOKS), 0.16, y + bh / 2 + 0.015, zz + bw / 2, 0, 0, rand() < 0.08 ? 0.25 : 0);
+              zz += bw + 0.015;
+              if (rand() < 0.08) zz += R(0.12, 0.28);
             }
           }
         }
@@ -915,11 +1005,11 @@
         for (let sh = 0; sh < 4; sh++) {
           const y = fy + 0.12 + sh * 0.48;
           P(D2, 0.03, len - 0.08, M.metal, ox, y, 0);
-          let zz = -len / 2 + 0.1;
-          while (zz < len / 2 - 0.15) {
-            const pm = pick(PRODUCTS), ph = R(0.15, 0.3);
-            if (rand() < 0.75) { if (rand() < 0.5) P(D2 * 0.6, ph, 0.14, pm, ox, y + ph / 2 + 0.015, zz); else C(0.05, 0.05, ph, pm, ox + R(-0.1, 0.1), y + ph / 2 + 0.015, zz); }
-            zz += R(0.14, 0.24);
+          let zz = -len / 2 + 0.12;
+          while (zz < len / 2 - 0.16) {
+            const pm = pick(PRODUCTS), ph = R(0.16, 0.3);
+            if (rand() < 0.72) { if (rand() < 0.6) P(D2 * 0.6, ph, 0.16, pm, ox, y + ph / 2 + 0.015, zz); else C(0.05, 0.05, ph, pm, ox + R(-0.1, 0.1), y + ph / 2 + 0.015, zz); }
+            zz += R(0.22, 0.34);
           }
         }
       } else if (type === 'counter') {
@@ -930,11 +1020,12 @@
       g.position.set(x, 0, z); g.rotation.y = yaw;
       g.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(g);
+      const map = decoMap();
       g.traverse(o => {
         if (!o.isMesh) return;
         const geo = o.geometry.clone().applyMatrix4(o.matrixWorld);
-        if (!DECO.has(o.material)) DECO.set(o.material, []);
-        DECO.get(o.material).push(geo.index ? geo.toNonIndexed() : geo);
+        if (!map.has(o.material)) map.set(o.material, []);
+        map.get(o.material).push(geo.index ? geo.toNonIndexed() : geo);
         o.geometry.dispose();
       });
       collider(bb.min.x, bb.max.x, bb.min.z, bb.max.z, bb.max.y);
@@ -1038,11 +1129,11 @@
         W.pickups.push({ type: 'rock', mesh: m, pos: m.position, baseY: 0.12, taken: false, still: true });
       }
     }
-    // debris
+    // debris (grounded flush on street)
     for (let i = 0; i < 40; i++) {
       const s = pick(STREETS), a = R(-HALF + 8, HALF - 8);
-      const v = rand() < 0.5;
-      box(R(0.3, 1.2), R(0.1, 0.5), R(0.3, 1.2), rand() < 0.5 ? M.rubble : M.wood, v ? s + R(-5, 5) : a, 0.15, v ? a : s + R(-5, 5), { ry: R(0, 3) });
+      const v = rand() < 0.5, h = R(0.1, 0.4);
+      box(R(0.3, 1.2), h, R(0.3, 1.2), rand() < 0.5 ? M.rubble : M.wood, v ? s + R(-5, 5) : a, h * 0.5, v ? a : s + R(-5, 5), { ry: R(0, 3) });
     }
 
     // =========================================================
@@ -1052,14 +1143,51 @@
     const E = HALF + 3;
     collider(-E - 5, -E, -E - 5, E + 5); collider(E, E + 5, -E - 5, E + 5);
     collider(-E, E, E, E + 5); collider(-E, E, -E - 5, -E);
-    // barricade fence around the edge (visual)
-    const fenceMat = mat({ color: 0x3b3b38, roughness: 0.6, metalness: 0.4, transparent: true, opacity: 0.85 });
+    // break-ready perimeter fence (low-poly shared opaque geometry, grounded at y = 0)
+    W.fences = [];
+    const fenceMat = mat({ color: 0x3b3b38, roughness: 0.72, metalness: 0.3 });
+    const fenceGeo = (() => {
+      const parts = [
+        [0.14, 2.25, 0.14, -2.9, 1.125, 0],   // post
+        [5.8, 0.08, 0.06, 0, 0.32, 0],        // bottom rail
+        [5.8, 0.08, 0.06, 0, 2.04, 0],        // top rail
+        [5.75, 1.66, 0.04, 0, 1.18, 0],       // center panel
+      ];
+      const list = parts.map(([w, h, d, x, y, z]) => {
+        const g = new THREE.BoxGeometry(w, h, d);
+        g.translate(x, y, z);
+        return g.index ? g.toNonIndexed() : g;
+      });
+      let n = 0; list.forEach(g => { n += g.attributes.position.count; });
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+      let o = 0;
+      list.forEach(g => {
+        pos.set(g.attributes.position.array, o * 3);
+        nor.set(g.attributes.normal.array, o * 3);
+        o += g.attributes.position.count;
+        g.dispose();
+      });
+      const merged = new THREE.BufferGeometry();
+      merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      merged.computeBoundingSphere();
+      return merged;
+    })();
     [[0, E - 0.5, 0], [0, -E + 0.5, 0], [E - 0.5, 0, Math.PI / 2], [-E + 0.5, 0, Math.PI / 2]].forEach(([x, z, r]) => {
       for (let k = -HALF; k < HALF; k += 6) {
         if (z < 0 && r === 0 && Math.abs(k + 3) < 7) continue; // entrance gap
-        const p = new THREE.Mesh(new THREE.BoxGeometry(5.8, 2.2, 0.08), fenceMat);
-        if (r) p.position.set(x, 1.1, k + 3); else p.position.set(k + 3, 1.1, z);
-        p.rotation.y = r; p.rotation.z = R(-0.06, 0.06); add(p);
+        const p = new THREE.Mesh(fenceGeo, fenceMat);
+        const px = r ? x : k + 3, pz = r ? k + 3 : z;
+        p.position.set(px, 0, pz);
+        p.rotation.y = r;
+        add(p);
+        W.fences.push({
+          mesh: p,
+          pos: new THREE.Vector3(px, 1.1, pz),
+          basePos: p.position.clone(),
+          baseRot: p.rotation.clone(),
+          broken: false,
+        });
       }
     });
     // road block at the entrance (behind the player's car)
@@ -1073,15 +1201,15 @@
       const g = new THREE.Group();
       const s = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), M.sign);
       s.position.y = 2.6; g.add(s);
-      [-2.6, 2.6].forEach(x => { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4), M.pole); p.position.set(x, 1.6, -0.05); g.add(p); });
+      [-2.6, 2.6].forEach(x => { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4, 6), M.pole); p.position.set(x, 1.6, -0.05); g.add(p); });
       g.position.set(-8, 0, -150); g.rotation.y = 0.15; add(g);
       W.sign = g;
     }
-    // forest outside town (instanced)
+    // forest outside town (instanced low-poly 4-sided trees, no distant shadow casting)
     {
-      const n = S.viewDistance === 'near' ? 500 : 1100;
-      const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.35, 6, 5), M.bark, n);
-      const top = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 8, 6), M.leaves, n);
+      const n = S.viewDistance === 'near' ? 380 : 760;
+      const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.35, 6, 4, 1, true), M.bark, n);
+      const top = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 8, 4), M.leaves, n);
       const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
       let i = 0;
       while (i < n) {
@@ -1095,7 +1223,6 @@
         m4.compose(p.set(x, 8.5 * s, z), q, sc.set(s, s * R(0.9, 1.3), s)); top.setMatrixAt(i, m4);
         i++;
       }
-      if (shadows) { trunk.castShadow = top.castShadow = true; }
       W.root.add(trunk, top);
     }
     // outskirts: a ring of dark buildings beyond the fence
@@ -1112,10 +1239,10 @@
         decoBox(M.rubble, w + 0.3, 0.6, dd + 0.3, x, h + 0.3, z); decoBox(M.trim, w + 0.5, 0.2, dd + 0.5, x, h - 0.2, z);
       }
     }
-    // distant hills silhouette
+    // distant hills silhouette (low-poly 4-sided cones)
     for (let i = 0; i < 14; i++) {
       const a = i / 14 * Math.PI * 2;
-      const h = new THREE.Mesh(new THREE.ConeGeometry(R(120, 220), R(40, 90), 6), M.leaves);
+      const h = new THREE.Mesh(new THREE.ConeGeometry(R(120, 220), R(40, 90), 4), M.leaves);
       h.position.set(Math.cos(a) * 640, 0, Math.sin(a) * 640); W.root.add(h);
     }
 
@@ -1159,7 +1286,178 @@
       return out;
     };
     W.isIndoor = function (p) {
-      return W.interiors.some(r => p.x > r.minX && p.x < r.maxX && p.z > r.minZ && p.z < r.maxZ);
+      return W.interiors.some(r => !r.disabled && p.x > r.minX && p.x < r.maxX && p.z > r.minZ && p.z < r.maxZ);
+    };
+
+    // =========================================================
+    //  BUILDING SMASHING & EVIDENCE PATH QUERIES
+    // =========================================================
+    W.syncOccluders = function () {
+      W.occluders.length = 0;
+      for (let i = 0; i < W.baseOccluders.length; i++) W.occluders.push(W.baseOccluders[i]);
+      for (let i = 0; i < W.buildings.length; i++) {
+        const b = W.buildings[i];
+        const list = b.smashed ? b.debrisOccluders : b.occluders;
+        for (let j = 0; j < list.length; j++) W.occluders.push(list[j]);
+      }
+    };
+
+    W.segmentHitsBox = function (ax, az, bx, bz, x0, x1, z0, z1, pad) {
+      pad = pad || 0;
+      const minX = x0 - pad, maxX = x1 + pad, minZ = z0 - pad, maxZ = z1 + pad;
+      const dx = bx - ax, dz = bz - az;
+      let tmin = 0, tmax = 1;
+      if (Math.abs(dx) < 1e-6) {
+        if (ax < minX || ax > maxX) return false;
+      } else {
+        const inv = 1 / dx;
+        let t1 = (minX - ax) * inv, t2 = (maxX - ax) * inv;
+        if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+        tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+        if (tmin > tmax) return false;
+      }
+      if (Math.abs(dz) < 1e-6) {
+        if (az < minZ || az > maxZ) return false;
+      } else {
+        const inv = 1 / dz;
+        let t1 = (minZ - az) * inv, t2 = (maxZ - az) * inv;
+        if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+        tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+        if (tmin > tmax) return false;
+      }
+      return true;
+    };
+
+    W.hitsEvidenceBuilding = function (from, to, pad) {
+      pad = pad === undefined ? 1.8 : pad;
+      for (let i = 0; i < W.buildings.length; i++) {
+        const b = W.buildings[i];
+        if (!b.hasEvidence) continue;
+        if (W.segmentHitsBox(from.x, from.z, to.x, to.z, b.minX, b.maxX, b.minZ, b.maxZ, pad)) return b;
+      }
+      return null;
+    };
+
+    W.evidenceBuildingAt = function (x, z, pad) {
+      pad = pad === undefined ? 1.5 : pad;
+      for (let i = 0; i < W.buildings.length; i++) {
+        const b = W.buildings[i];
+        if (b.hasEvidence && x > b.minX - pad && x < b.maxX + pad && z > b.minZ - pad && z < b.maxZ + pad) return b;
+      }
+      return null;
+    };
+
+    W.smashableBuildingAt = function (x, z, pad) {
+      pad = pad === undefined ? 1.3 : pad;
+      for (let i = 0; i < W.buildings.length; i++) {
+        const b = W.buildings[i];
+        if (!b.hasEvidence && !b.smashed && x > b.minX - pad && x < b.maxX + pad && z > b.minZ - pad && z < b.maxZ + pad) return b;
+      }
+      return null;
+    };
+
+    const _debrisGeo = new THREE.BoxGeometry(1, 1, 1);
+    W.smashBuilding = function (b, impactPos, dir) {
+      if (!b || b.smashed || b.hasEvidence) return false;
+      b.smashed = true;
+      b.group.visible = false;
+      b.colliders.forEach(c => { c.disabled = true; });
+      if (b.interior) b.interior.disabled = true;
+      b.hideSpots.forEach(sp => { sp.disabled = true; sp.setOpen && sp.setOpen(0); });
+
+      if (!b.debrisGroup) {
+        const dg = new THREE.Group();
+        const x0 = b.minX, x1 = b.maxX, z0 = b.minZ, z1 = b.maxZ;
+        const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, w = x1 - x0, d = z1 - z0;
+
+        // grounded concrete foundation slab
+        const slabGeo = worldUV(new THREE.BoxGeometry(w, 0.3, d), w, 0.3, d, 4);
+        const slab = new THREE.Mesh(slabGeo, M.concrete);
+        slab.position.set(cx, 0.15, cz);
+        if (shadows) { slab.receiveShadow = true; }
+        dg.add(slab);
+
+        // low jagged corner wall stubs (center path kept open for Siren Head / player)
+        const corners = [
+          [x0, x0 + 0.42, z0, z0 + Math.min(3.5, d * 0.25)],
+          [x1 - 0.42, x1, z1 - Math.min(3.5, d * 0.25), z1],
+          [x0, x0 + Math.min(3.5, w * 0.25), z1 - 0.42, z1],
+          [x1 - Math.min(3.5, w * 0.25), x1, z0, z0 + 0.42],
+        ];
+        corners.forEach(([cx0, cx1, cz0, cz1]) => {
+          const ch = 0.9 + Math.random() * 1.9;
+          const cw = cx1 - cx0, cd = cz1 - cz0;
+          const wm = new THREE.Mesh(worldUV(new THREE.BoxGeometry(cw, ch, cd), cw, ch, cd, 4), M.brick);
+          wm.position.set((cx0 + cx1) / 2, ch / 2, (cz0 + cz1) / 2);
+          if (shadows) { wm.castShadow = true; wm.receiveShadow = true; }
+          dg.add(wm);
+          b.debrisOccluders.push(wm);
+          const col = { minX: cx0, maxX: cx1, minZ: cz0, maxZ: cz1, maxY: ch, minY: 0, disabled: false };
+          W.colliders.push(col);
+          b.debrisColliders.push(col);
+        });
+
+        // grounded scattered brick/concrete chunks and fallen timber beams on the slab
+        for (let i = 0; i < 14; i++) {
+          const sx = 0.5 + Math.random() * 1.3, sy = 0.22 + Math.random() * 0.42, sz = 0.5 + Math.random() * 1.2;
+          const cm = new THREE.Mesh(_debrisGeo, i % 3 === 0 ? M.brick : M.rubble);
+          cm.scale.set(sx, sy, sz);
+          cm.position.set(cx + (Math.random() - 0.5) * (w - 2), 0.3 + sy * 0.45, cz + (Math.random() - 0.5) * (d - 2));
+          cm.rotation.set((Math.random() - 0.5) * 0.12, Math.random() * Math.PI, (Math.random() - 0.5) * 0.12);
+          if (shadows) { cm.castShadow = true; cm.receiveShadow = true; }
+          dg.add(cm);
+        }
+        for (let i = 0; i < 3; i++) {
+          const bm = new THREE.Mesh(_debrisGeo, M.wood);
+          bm.scale.set(0.28, 0.24, 3.2 + Math.random() * 2.5);
+          bm.position.set(cx + (Math.random() - 0.5) * (w * 0.45), 0.42, cz + (Math.random() - 0.5) * (d * 0.45));
+          bm.rotation.y = Math.random() * Math.PI;
+          if (shadows) { bm.castShadow = true; bm.receiveShadow = true; }
+          dg.add(bm);
+        }
+
+        W.root.add(dg);
+        b.debrisGroup = dg;
+        b.restore = function () {
+          b.smashed = false;
+          b.group.visible = true;
+          b.colliders.forEach(c => { c.disabled = false; });
+          if (b.interior) b.interior.disabled = false;
+          b.hideSpots.forEach(sp => { sp.disabled = false; sp.setOpen && sp.setOpen(0); });
+          if (b.debrisGroup) b.debrisGroup.visible = false;
+          b.debrisColliders.forEach(c => { c.disabled = true; });
+        };
+      } else {
+        b.debrisGroup.visible = true;
+        b.debrisColliders.forEach(c => { c.disabled = false; });
+      }
+      W.syncOccluders();
+
+      // erupting flying debris parts pushed in Siren Head's travel direction
+      const ox = impactPos ? impactPos.x : b.cx, oz = impactPos ? impactPos.z : b.cz;
+      const dx = dir ? dir.x : 0, dz = dir ? dir.z : 1;
+      const mats = [M.brick, M.rubble, M.wood, M.trim];
+      for (let i = 0; i < 20; i++) {
+        const sx = 0.28 + Math.random() * 0.65, sy = 0.18 + Math.random() * 0.4, sz = 0.28 + Math.random() * 0.9;
+        const m = new THREE.Mesh(_debrisGeo, mats[i % mats.length]);
+        m.scale.set(sx, sy, sz);
+        m.position.set(ox + (Math.random() - 0.5) * 5, 1.5 + Math.random() * Math.min(7, b.H * 0.6), oz + (Math.random() - 0.5) * 5);
+        m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        W.debrisGroup.add(m);
+        const fwdSp = 5 + Math.random() * 14, sideSp = (Math.random() - 0.5) * 14;
+        W.flyingDebris.push({
+          mesh: m, halfY: sy * 0.5,
+          vx: dx * fwdSp + (-dz) * sideSp,
+          vy: 3 + Math.random() * 10,
+          vz: dz * fwdSp + dx * sideSp,
+          rx: (Math.random() - 0.5) * 10,
+          ry: (Math.random() - 0.5) * 10,
+          rz: (Math.random() - 0.5) * 10,
+          settled: false,
+          life: 9.0,
+        });
+      }
+      return true;
     };
 
     // =========================================================
@@ -1227,6 +1525,36 @@
         p.mesh.position.y = p.baseY + Math.sin(time * 2 + p.pos.x) * 0.06;
         p.mesh.rotation.y += dt;
       });
+      for (let i = W.flyingDebris.length - 1; i >= 0; i--) {
+        const d = W.flyingDebris[i];
+        d.life -= dt;
+        if (d.life <= 0) {
+          W.debrisGroup.remove(d.mesh);
+          W.flyingDebris.splice(i, 1);
+          continue;
+        }
+        if (d.settled) continue;
+        d.vy -= 22 * dt;
+        d.mesh.position.x += d.vx * dt;
+        d.mesh.position.y += d.vy * dt;
+        d.mesh.position.z += d.vz * dt;
+        d.mesh.rotation.x += d.rx * dt;
+        d.mesh.rotation.y += d.ry * dt;
+        d.mesh.rotation.z += d.rz * dt;
+        const floorY = 0.22 + d.halfY;
+        if (d.mesh.position.y <= floorY) {
+          d.mesh.position.y = floorY;
+          if (Math.abs(d.vy) > 3.2) {
+            d.vy = -d.vy * 0.32;
+            d.vx *= 0.55; d.vz *= 0.55;
+            d.rx *= 0.4; d.ry *= 0.4; d.rz *= 0.4;
+          } else {
+            d.vy = 0; d.vx = 0; d.vz = 0;
+            d.mesh.rotation.x = 0; d.mesh.rotation.z = 0;
+            d.settled = true;
+          }
+        }
+      }
     };
 
     // =========================================================
@@ -1262,10 +1590,24 @@
       W.evGroup.clear();
       W.evColliders.length = 0; W.evOccluders.length = 0;
       W.evidence = [];
+      for (let i = W.flyingDebris.length - 1; i >= 0; i--) W.debrisGroup.remove(W.flyingDebris[i].mesh);
+      W.flyingDebris.length = 0;
+      W.buildings.forEach(b => {
+        if (b.smashed && b.restore) b.restore();
+        b.hasEvidence = b.sheriff;
+      });
+      if (W.fences) {
+        W.fences.forEach(f => {
+          f.broken = false;
+          f.mesh.visible = true;
+          f.mesh.position.copy(f.basePos);
+          f.mesh.rotation.copy(f.baseRot);
+        });
+      }
       const r = Math.random, pk = a => a[(r() * a.length) | 0];
       const used = new Set();
-      const takeEnter = () => { const c = W.enterables.filter(b => !b.sheriff && !used.has(b)); const b = pk(c); used.add(b); return b; };
-      const takeFront = () => { const c = W.closedFronts.filter(b => !used.has(b) && b.H >= 7); const b = pk(c); used.add(b); return b; };
+      const takeEnter = () => { const c = W.enterables.filter(b => !b.sheriff && !used.has(b)); const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b; };
+      const takeFront = () => { const c = W.closedFronts.filter(b => !used.has(b) && b.H >= 7); const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b; };
       const evCol = (x0, x1, z0, z1, maxY) => W.evColliders.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1, maxY, minY: 0 });
       const streetPoint = () => {
         const s0 = pk(STREETS), along = pk(BLOCK_C) + (r() - 0.5) * 22, off = (r() - 0.5) * 6;
@@ -1358,9 +1700,9 @@
           const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.25, 12, 6), M.pole);
           leg.position.set(ox, 6, oz); tg.add(leg);
         }
-        const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.5, 6, 16), M.water);
+        const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.5, 6, 10), M.water);
         tank.position.y = 15; tank.scale.set(1, 1, 0.85); tank.rotation.z = 0.12; tg.add(tank);
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(4.8, 2.5, 16), M.roof); cone.position.y = 19.2; cone.rotation.z = 0.12; tg.add(cone);
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(4.8, 2.5, 10), M.roof); cone.position.y = 19.2; cone.rotation.z = 0.12; tg.add(cone);
         const txt = document.createElement('canvas'); txt.width = 512; txt.height = 256;
         const g = txt.getContext('2d');
         g.fillStyle = 'rgba(230,230,220,0.9)'; g.font = 'bold 70px Arial'; g.textAlign = 'center';
@@ -1384,8 +1726,9 @@
       // 7. the sheriff's tape — always in the sheriff's station
       W.fixedEvidence.forEach(e => { e.found = false; W.evidence.push(e); });
       if (shadows) W.evGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      W.syncOccluders();
     };
-    flushDeco();
+    flushDeco(DECO, W.root);
     W.placeEvidence();
 
     W.spawn = new THREE.Vector3(1.2, 0, -HALF + 6);

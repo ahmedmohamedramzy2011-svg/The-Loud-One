@@ -54,33 +54,56 @@
     halo.scale.set(1.8, 1.0, 1); halo.position.set(0, 1.97, 0.3); R.add(halo);
   };
 
+  LO.ambush = LO.ambush || { active: null, gapUntil: 0, now: 0 };
+
   Sneaky.prototype.reset = function () {
-    lastReal = performance.now();
+    this.lastReal = performance.now();
     this.timer = nextTime();
     this.attacking = false;
     this.t = 0;
     this.root.visible = false;
     if (this.breath) { this.breath.stop(); this.breath = null; }
+    if (LO.ambush.active === 'sneaky') LO.ambush.active = null;
+  };
+
+  Sneaky.prototype.pause = function () {
+    if (this.breath) { this.breath.stop(); this.breath = null; }
   };
 
   // returns 'kill' when it gets you
   // counts in real seconds (the game's own clock slows down on low frame rates)
-  let lastReal = performance.now();
-  function realDt() { const n = performance.now(), d = Math.min(0.5, (n - lastReal) / 1000); lastReal = n; return d; }
+  Sneaky.prototype.realDt = function (dt) {
+    const n = performance.now();
+    const raw = (n - (this.lastReal || n)) / 1000;
+    this.lastReal = n;
+    return raw > 0.25 ? Math.min(0.1, dt || 0.016) : Math.min(0.1, raw);
+  };
+
   Sneaky.prototype.update = function (dt, player, camera, siren) {
-    dt = realDt();
-    if (player.calm || !player.alive) { if (this.attacking) this.vanish(player, false); return; }
+    dt = this.realDt(dt);
+    if ((LO.ver && !LO.ver().sneaky) || player.calm || !player.alive) {
+      if (this.attacking) this.vanish(player, false);
+      return;
+    }
     const fwd = new V3(); camera.getWorldDirection(fwd);
     if (!this.attacking) {
       // it won't come while Siren Head is close enough to hear the flashlight
       const hearFlash = LO.NOISE.flashlight * 1.3 * (player.indoor ? 0.6 : 1);
       const sirenNear = siren && siren.distToPlayer !== undefined && siren.distToPlayer < hearFlash + 4;
-      if (sirenNear || player.hidden) return;
+      if (sirenNear || player.hidden || player.hideAnim) return;
       this.timer -= dt;
       if (this.timer > 0) return;
+      // mandatory 10-20s minimum gap from The Fast One (and never overlap)
+      if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {
+        this.timer = 0;
+        return;
+      }
       // creep up right behind you
       this.attacking = true; this.t = 0;
-      const back = new V3(-fwd.x, 0, -fwd.z).normalize();
+      LO.ambush.active = 'sneaky';
+      const back = new V3(-fwd.x, 0, -fwd.z);
+      if (back.lengthSq() < 1e-4) back.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      back.normalize();
       this.root.position.set(player.pos.x + back.x * 1.5, 0, player.pos.z + back.z * 1.5);
       this.root.lookAt(player.pos.x, 0, player.pos.z);
       this.root.visible = true;
@@ -92,6 +115,7 @@
       this.onAttack && this.onAttack(this.lightWasOff);
       return;
     }
+    if (!this.breath) this.breath = LO.audio.sneakyBreath(this.root.position);
     this.t += dt;
     // keep it pressed close behind you if you back away
     const toIt = new V3(this.root.position.x - camera.position.x, 0, this.root.position.z - camera.position.z);
@@ -105,9 +129,12 @@
     if (this.breath) this.breath.move(this.root.position);
     this.eyes.forEach(e => { e.scale.y = 0.7 * (Math.random() < 0.03 ? 0.1 : 1); });
     // facing it in time makes it vanish
-    const f2 = new V3(fwd.x, 0, fwd.z).normalize();
-    toIt.normalize();
-    if (f2.dot(toIt) > FACE_COS) { this.vanish(player, true); return; }
+    const f2 = new V3(fwd.x, 0, fwd.z);
+    if (f2.lengthSq() > 1e-4 && toIt.lengthSq() > 1e-4) {
+      f2.normalize();
+      toIt.normalize();
+      if (f2.dot(toIt) > FACE_COS) { this.vanish(player, true); return; }
+    }
     if (this.t >= (this.window || WINDOW)) { this.vanish(player, false); return 'kill'; }
   };
 
@@ -117,6 +144,10 @@
     player.flickerForce = false;
     if (this.breath) { this.breath.stop(); this.breath = null; }
     if (seen) LO.audio.staticBurst(null, 0.35, 0.35);
+    if (LO.ambush.active === 'sneaky') {
+      LO.ambush.active = null;
+      LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;
+    }
     this.timer = nextTime();
   };
 })();

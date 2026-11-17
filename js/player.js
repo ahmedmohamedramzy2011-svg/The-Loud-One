@@ -20,7 +20,7 @@
   LO.EXPO = EXPO;
   LO.MAX_ROCKS = MAX_ROCKS;
   // THE SILENT ONE (Phenomenon-249): drawn to complete silence
-  const SILENT_WARN = 20, SILENT_ATTACK = 30, SILENT_DAMAGE = 5, SILENT_TICK = 1.0;
+  const SILENT_WARN = 20, SILENT_ATTACK = 30, SILENT_DAMAGE = 10, SILENT_TICK = 1.0;
   LO.SILENT = { WARN: SILENT_WARN, ATTACK: SILENT_ATTACK };   // seconds you can hide before the Tenant loses patience
   LO.TENANT_LIMIT = TENANT_LIMIT;
   LO.NOISE = NOISE;
@@ -99,6 +99,9 @@
     this.prompt = '';
     this.alive = true;
     this.zoom = 0;
+    this.adrenaline = 0;
+    this.dizzy = 0;
+    this.dizzyT = 0;
   };
 
   Player.prototype.bindInput = function () {
@@ -133,15 +136,21 @@
   };
 
   // inside a hiding spot the flashlight is a last resort against the Tenant:
-  // one blinding burst drives it off, but it drains 95% of the battery
-  const TENANT_BANISH_COST = 95;
+  // one blinding burst drives it off, draining 90% battery (95% in v2.1-v2.3)
   Player.prototype.blindTenant = function () {
-    if (this.battery < TENANT_BANISH_COST) {
+    const V = LO.ver ? LO.ver() : { tenant: true, tenantBlind: true, tenantCost: 90 };
+    if (!V.tenant || !V.tenantBlind) {
       LO.audio.click(false);
-      this.hint && this.hint(`Not enough battery (needs ${TENANT_BANISH_COST}%).`);
+      this.hint && this.hint('Cannot use flashlight while hiding.');
       return;
     }
-    this.battery -= TENANT_BANISH_COST;
+    const cost = V.tenantCost || 90;
+    if (this.battery < cost) {
+      LO.audio.click(false);
+      this.hint && this.hint(`Not enough battery (needs ${cost}%).`);
+      return;
+    }
+    this.battery -= cost;
     this.hideTime = 0;
     this.tenantTick = 0;
     this.burst.intensity = 18;
@@ -158,6 +167,11 @@
   Player.prototype.update = function (dt, time) {
     const W = this.world, k = this.keys;
     this.photoCooldown = Math.max(0, this.photoCooldown - dt);
+    this.adrenaline = Math.max(0, (this.adrenaline || 0) - dt);
+    if (this.dizzy > 0) {
+      this.dizzy = Math.max(0, this.dizzy - dt * 0.22);
+      this.dizzyT = (this.dizzyT || 0) + dt;
+    }
     this.spike *= Math.exp(-dt * 3.2);
     if (this.spike < 0.5) this.spike = 0;
 
@@ -191,19 +205,24 @@
       this.flashOn = false;
       this.cameraUp = false;
       this.stamina = Math.min(100, this.stamina + 18 * dt);
-      // THE TENANT: something already lives in every hiding spot.
+      // THE TENANT: something already lives in every hiding spot (v1.4+).
       // Stay too long and it throws you out.
-      if (!this.calm) this.hideTime += dt;
-      // after ~10s of hiding it starts hurting you every second, harder the closer it gets
-      const eyeK = (this.hideTime - TENANT_HURT) / (TENANT_LIMIT - TENANT_HURT);
-      if (eyeK >= 0 && !this.calm) {
-        this.tenantTick = (this.tenantTick || 0) - dt;
-        if (this.tenantTick <= 0) {
-          this.tenantTick = 1;
-          this.damage(Math.round(2 + eyeK * 6), 'tenant');
-        }
-      } else this.tenantTick = 0;   // first hit lands the moment it starts
-      if (this.hideTime >= TENANT_LIMIT) { this.damage(9999, 'tenant'); }   // it reached you
+      const Vh = LO.ver ? LO.ver() : { tenant: true };
+      if (!Vh.tenant) {
+        this.hideTime = 0;
+      } else {
+        if (!this.calm) this.hideTime += dt;
+        // after ~10s of hiding it starts hurting you every second, harder the closer it gets
+        const eyeK = (this.hideTime - TENANT_HURT) / (TENANT_LIMIT - TENANT_HURT);
+        if (eyeK >= 0 && !this.calm) {
+          this.tenantTick = (this.tenantTick || 0) - dt;
+          if (this.tenantTick <= 0) {
+            this.tenantTick = 1;
+            this.damage(Math.round(2 + eyeK * 6), 'tenant');
+          }
+        } else this.tenantTick = 0;   // first hit lands the moment it starts
+        if (this.hideTime >= TENANT_LIMIT) { this.damage(9999, 'tenant'); }   // it reached you
+      }
       this.panting = Math.max(0, this.panting - dt * 0.5);
     } else {
       this.hideTime = Math.max(0, this.hideTime - dt * 0.5);
@@ -218,9 +237,11 @@
       if (tm && Math.hypot(tm.x, tm.y) > 0.15) { fwd = -tm.y; str = tm.x; analog = Math.min(1, Math.hypot(tm.x, tm.y)); }
       moving = fwd !== 0 || str !== 0;
       const wantSprint = (k.ShiftLeft || k.ShiftRight) && moving && fwd > 0.3 && !wantCrouch && !this.cameraUp;
+      if (this.adrenaline > 0) this.exhausted = false;
       if (this.exhausted && this.stamina > 35) this.exhausted = false;
       sprinting = wantSprint && !this.exhausted && this.stamina > 0;
-      let speed = (wantCrouch ? 1.6 : sprinting ? 6.9 : 3.3) * (sprinting ? 1 : Math.max(0.5, analog));
+      const sprintSpeed = this.adrenaline > 0 ? 13.8 : 6.9;
+      let speed = (wantCrouch ? 1.6 : sprinting ? sprintSpeed : 3.3) * (sprinting ? 1 : Math.max(0.5, analog));
       if (this.cameraUp) speed *= 0.6;
       const sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw);
       let mx = -sinY * fwd + cosY * str, mz = -cosY * fwd - sinY * str;
@@ -253,7 +274,7 @@
 
       // stamina
       if (sprinting) {
-        this.stamina -= 21 * dt;
+        this.stamina -= (this.adrenaline > 0 ? 4.5 : 21) * dt;
         if (this.stamina <= 0) { this.stamina = 0; this.exhausted = true; this.panting = 1; }
       } else {
         this.stamina = Math.min(100, this.stamina + (moving ? 9 : 15) * dt);
@@ -300,14 +321,15 @@
 
     // ---------- THE SILENT ONE ----------
     // any sound at all resets it; total silence (including hiding) feeds it
-    if (n > 0 || this.noSilent || this.calm) { this.silentTime = 0; this.silentTick = 0; }
+    const Vs = LO.ver ? LO.ver() : { silent: true, silentDamage: SILENT_DAMAGE, rocks: true, exposure: true };
+    if (!Vs.silent || n > 0 || this.noSilent || this.calm) { this.silentTime = 0; this.silentTick = 0; }
     else {
       this.silentTime += dt;
       if (this.silentTime >= SILENT_ATTACK) {
         this.silentTick -= dt;
         if (this.silentTick <= 0) {
           this.silentTick = SILENT_TICK;
-          this.damage(SILENT_DAMAGE, 'silent');
+          this.damage(Vs.silentDamage || SILENT_DAMAGE, 'silent');
         }
       }
     }
@@ -316,6 +338,7 @@
     // ---------- pickups ----------
     W.pickups.forEach(p => {
       if (p.taken) return;
+      if (p.type === 'rock' && !Vs.rocks) return;
       if (Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < 1.4) {
         if (p.type === 'rock') {
           if (this.hidden) return;
@@ -352,10 +375,10 @@
 
     // ---------- THE EXPOSURE ----------
     // it lives in the lens: the longer the camera is up, the closer it gets
-    if (this.calm) this.exposure = 0;
+    if (!Vs.exposure || this.calm) this.exposure = 0;
     else if (this.zoom > 0.5) this.exposure += dt;
     else this.exposure = Math.max(0, this.exposure - dt * EXPO.DECAY);
-    if (this.exposure >= EXPO.LUNGE) {
+    if (Vs.exposure && this.exposure >= EXPO.LUNGE) {
       this.exposure = 0;
       this.cameraUp = false;
       this.damage(EXPO.LUNGE_DMG, 'exposure');
@@ -368,22 +391,41 @@
     this.applyCamera(dt, time);
   };
 
+  Player.prototype.triggerDizzy = function (strength) {
+    this.dizzy = Math.max(this.dizzy || 0, Math.min(1.4, strength || 1));
+  };
+
+  Player.prototype.ejectFromHide = function () {
+    const s = this.hidden || (this.hideAnim && this.hideAnim.spot);
+    this.hidden = null;
+    this.hideAnim = null;
+    this.hideView = false;
+    if (s) {
+      this.pos.set(s.exit.x, 0, s.exit.z);
+    }
+    this.pos.y = 0;
+    this.onGround = true;
+  };
+
   Player.prototype.applyCamera = function (dt, time) {
     const cam = this.camera;
     const eye = this.hidden ? this.hidden.pos.y : (1.62 - this.crouch * 0.67);
     const bobAmt = LO.settings.headBob ? 1 : 0;
     this.shake = Math.max(0, this.shake - dt * 0.8);
     const sh = this.shake;
+    const dz = Math.min(1, this.dizzy || 0);
+    const dtz = this.dizzyT || 0;
     cam.position.set(
       this.pos.x + (Math.random() - 0.5) * sh,
       this.pos.y + eye + this.bob * 0.05 * bobAmt + (Math.random() - 0.5) * sh,
       this.pos.z + (Math.random() - 0.5) * sh,
     );
     cam.rotation.order = 'YXZ';
-    cam.rotation.y = this.yaw;
-    cam.rotation.x = this.pitch;
-    cam.rotation.z = Math.sin(this.stepPhase * Math.PI * 0.5) * 0.006 * bobAmt * (this.moving ? 1 : 0);
-    const fov = LO.settings.fov * (1 - this.zoom * 0.35);
+    cam.rotation.y = this.yaw + dz * Math.cos(dtz * 2.1) * 0.055;
+    cam.rotation.x = this.pitch + dz * Math.sin(dtz * 3.1) * 0.045;
+    cam.rotation.z = Math.sin(this.stepPhase * Math.PI * 0.5) * 0.006 * bobAmt * (this.moving ? 1 : 0)
+      + dz * (Math.sin(dtz * 2.5) * 0.14 + Math.sin(dtz * 5.2) * 0.045);
+    const fov = LO.settings.fov * (1 - this.zoom * 0.35) + dz * Math.sin(dtz * 3.7) * 5.5;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
   };
 
@@ -391,6 +433,7 @@
     const p = this.pos;
     const all = this.world.evColliders.length ? this.world.colliders.concat(this.world.evColliders) : this.world.colliders;
     for (const c of all) {
+      if (c.disabled) continue;
       if (c.maxY < p.y + 0.3) continue;
       if (c.minY > p.y + 1.75) continue;   // e.g. the wall above a doorway
       const cx = Math.max(c.minX, Math.min(p.x, c.maxX));
@@ -435,6 +478,7 @@
   const rockGeo = new THREE.DodecahedronGeometry(0.14);
   const rockMat = new THREE.MeshLambertMaterial({ color: 0x77736c });
   Player.prototype.throwRock = function () {
+    if (LO.ver && !LO.ver().rocks) return;
     if (!this.enabled || this.hidden) return;
     if (this.rocks <= 0) { this.hint && this.hint('No rocks. Look for them on the ground.'); return; }
     this.rocks--;
@@ -455,7 +499,7 @@
       r.vel.y -= 13 * dt;
       const nx = p.x + r.vel.x * dt, nz = p.z + r.vel.z * dt;
       // hit a wall: drop straight down
-      const hit = W.colliders.concat(W.evColliders).some(c => p.y < c.maxY && p.y > (c.minY || 0) && nx > c.minX && nx < c.maxX && nz > c.minZ && nz < c.maxZ);
+      const hit = W.colliders.concat(W.evColliders).some(c => !c.disabled && p.y < c.maxY && p.y > (c.minY || 0) && nx > c.minX && nx < c.maxX && nz > c.minZ && nz < c.maxZ);
       if (hit) { r.vel.x *= -0.15; r.vel.z *= -0.15; } else { p.x = nx; p.z = nz; }
       p.y += r.vel.y * dt;
       r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt;
@@ -472,7 +516,8 @@
 
   Player.prototype.damage = function (amount, cause) {
     if (this.health <= 0) return;
-    this.health = Math.max(0, this.health - amount);
+    const hasHealth = !LO.ver || LO.ver().health;
+    this.health = hasHealth ? Math.max(0, this.health - amount) : 0;
     this.shake = Math.max(this.shake, 0.3);
     this.onDamage && this.onDamage(amount, cause);
     if (this.health <= 0) this.onDeath && this.onDeath(cause);
@@ -482,6 +527,7 @@
     let best = null, bd = 1.7;
     const fwd = new V3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.world.hideSpots.forEach(s => {
+      if (s.disabled) return;
       const dx = s.interact.x - this.pos.x, dz = s.interact.z - this.pos.z;
       const d = Math.hypot(dx, dz);
       const tx = s.pos.x - this.pos.x, tz = s.pos.z - this.pos.z;
@@ -595,12 +641,13 @@
     this.spike = Math.max(this.spike, NOISE.shutter);
     const res = this.findEvidence();
     const ev = res && res.ok ? res.ev : null;
-    if (!this.calm && this.exposure >= EXPO.SHOW) {
+    const Vp = LO.ver ? LO.ver() : { exposure: true };
+    if (Vp.exposure && !this.calm && this.exposure >= EXPO.SHOW) {
       // photographing the Exposure banishes it — but the flash burns you
       this.exposure = 0;
       this.damage(EXPO.BANISH_DMG, 'exposure');
       if (this.health > 0) this.onExposure && this.onExposure('banish');
-    } else if (!ev && !this.calm) {
+    } else if (Vp.exposure && !ev && !this.calm) {
       // wasted flashes (using the camera as a light) draw it in faster
       this.exposure += EXPO.WASTED;
     }

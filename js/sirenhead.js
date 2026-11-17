@@ -41,6 +41,7 @@
     this.hunting = false;
     this.echoTimer = 50 + Math.random() * 15;
     this.echoCount = 0;
+    this.smashPulse = 0;
     this.voice = LO.audio.createMonsterVoice();
     this.spawnFar();
   }
@@ -200,6 +201,7 @@
   SirenHead.prototype.spawnFar = function () {
     const n = this.world.nodeAt(4, 4);
     this.pos.set(n.x, 0, n.z);
+    this.smashPulse = 0;
   };
 
   SirenHead.prototype.setState = function (s) {
@@ -262,33 +264,35 @@
     // ---------- ECHOLOCATION ----------
     // roughly once a minute he pings the town. It finds you even if you are
     // silent or hidden, and every ping narrows down where you are.
-    this.echoTimer -= dt;
-    if (this.echoTimer <= 0 && this.state !== 'hunt') {
-      this.echoTimer = 52 + Math.random() * 16;
-      this.echoCount++;
-      LO.audio.echoPing(this.voice);
-      const err = Math.max(6, Math.min(45, dist * 0.45) * Math.pow(0.8, this.echoCount - 1));
-      const a = Math.random() * Math.PI * 2, r = Math.random() * err;
-      this.lastHeard.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
-      this.lastHeardTime = time;
-      this.echoApproach = true;
-      this.setState('investigate');
-      this.onEcho && this.onEcho(dist);
+    const V = LO.ver ? LO.ver() : { echo: true, sirenFast: true, sirenSmash: true };
+    if (V.echo) {
+      this.echoTimer -= dt;
+      if (this.echoTimer <= 0 && this.state !== 'hunt') {
+        this.echoTimer = 52 + Math.random() * 16;
+        this.echoCount++;
+        LO.audio.echoPing(this.voice);
+        const err = Math.max(6, Math.min(45, dist * 0.45) * Math.pow(0.8, this.echoCount - 1));
+        const a = Math.random() * Math.PI * 2, r = Math.random() * err;
+        this.lastHeard.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
+        this.lastHeardTime = time;
+        this.echoApproach = true;
+        this.setState('investigate');
+        this.onEcho && this.onEcho(dist);
+      }
     }
     if (heard) this.echoApproach = false;
 
     // ---------- STATE MACHINE ----------
     switch (this.state) {
       case 'wander':
-        this.speed = 3.1;
+        this.speed = V.sirenFast ? 3.1 : 2.6;
         if (heard) { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); break; }
         // he "senses" the living: every so often he heads straight for your area
         if (this.stalkTimer > 40) {
           this.stalkTimer = 0;
           const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 18;
           const p = W.projectToStreet({ x: player.pos.x + Math.cos(a) * r, z: player.pos.z + Math.sin(a) * r });
-          this.path = W.path(this.pos, p).map(n => new V3(n.x, 0, n.z));
-          this.path.push(new V3(p.x, 0, p.z));
+          this.path = this.buildSafeStreetPath(this.pos, p);
           break;
         }
         if (!this.path.length) {
@@ -300,19 +304,19 @@
             const j = Math.max(0, Math.min(4, near.j + ((Math.random() * 3) | 0) - 1));
             n = W.nodeAt(i, j);
           }
-          this.path = W.path(this.pos, n).map(n => new V3(n.x, 0, n.z));
+          this.path = this.buildSafeStreetPath(this.pos, n);
         }
         break;
       case 'investigate':
         // an echo only gives him a rough idea: he creeps closer slowly
-        this.speed = this.echoApproach ? 2.6 : 5.0;
+        this.speed = this.echoApproach ? 2.6 : (V.sirenFast ? 5.0 : 4.2);
         if (this.anger >= 100) { this.startHunt(dist); break; }
         this.goTo(this.lastHeard, dt);
         if (this.reached && sinceHeard > 2.5) this.setState('search');
         if (sinceHeard > 18) this.setState('search');
         break;
       case 'hunt':
-        this.speed = 7.4; // faster than you can sprint
+        this.speed = V.sirenFast ? 7.4 : 6.0; // faster than you can sprint (or classic v1.0 speed)
         this.goTo(this.lastHeard, dt);
         if (sinceHeard > 9 && this.anger < 60 && this.stateTime > 6) {
           this.setState('search');
@@ -337,7 +341,15 @@
         if (!this.path.length && this.searchPause <= 0) {
           const a = Math.random() * Math.PI * 2, r = 4 + Math.random() * 14;
           const p = W.projectToStreet({ x: this.lastHeard.x + Math.cos(a) * r, z: this.lastHeard.z + Math.sin(a) * r });
-          this.path = [new V3(p.x, 0, p.z)];
+          const safeP = this.clampOutsideEvidence(p);
+          const ev = W.hitsEvidenceBuilding && W.hitsEvidenceBuilding(this.pos, safeP, 1.8);
+          if (ev) {
+            const det = this.detourPoint(this.pos, safeP, ev);
+            det.push(safeP);
+            this.path = det;
+          } else {
+            this.path = [safeP];
+          }
           this.searchPause = 2 + Math.random() * 2;
         }
         if (this.path.length) this.followPath(dt); else this.speedNow = 0;
@@ -392,33 +404,113 @@
     this.say('hunt', dist);
   };
 
-  // go toward a point: through the street graph when far, straight when close
+  // compute 1- or 2-corner padded detour around an evidence building
+  SirenHead.prototype.detourPoint = function (from, to, b) {
+    const W = this.world;
+    const pad = 2.4;
+    const x0 = b.minX - pad, x1 = b.maxX + pad, z0 = b.minZ - pad, z1 = b.maxZ + pad;
+    const corners = [
+      new V3(x0, 0, z0),
+      new V3(x1, 0, z0),
+      new V3(x1, 0, z1),
+      new V3(x0, 0, z1),
+    ];
+    const clear = (a, c) => !W.segmentHitsBox(a.x, a.z, c.x, c.z, b.minX, b.maxX, b.minZ, b.maxZ, 1.5);
+    let best = null, bestLen = Infinity;
+    for (let i = 0; i < 4; i++) {
+      const c = corners[i];
+      if (clear(from, c) && clear(c, to)) {
+        const len = Math.hypot(c.x - from.x, c.z - from.z) + Math.hypot(to.x - c.x, to.z - c.z);
+        if (len < bestLen) { bestLen = len; best = [c]; }
+      }
+    }
+    if (best) return best;
+    for (let i = 0; i < 4; i++) {
+      for (const step of [1, 3]) {
+        const c1 = corners[i], c2 = corners[(i + step) & 3];
+        if (clear(from, c1) && clear(c2, to)) {
+          const len = Math.hypot(c1.x - from.x, c1.z - from.z) +
+            Math.hypot(c2.x - c1.x, c2.z - c1.z) +
+            Math.hypot(to.x - c2.x, to.z - c2.z);
+          if (len < bestLen) { bestLen = len; best = [c1, c2]; }
+        }
+      }
+    }
+    return best || [corners[0]];
+  };
+
+  SirenHead.prototype.clampOutsideEvidence = function (pt) {
+    const W = this.world;
+    const out = new V3(pt.x, 0, pt.z);
+    const b = W.evidenceBuildingAt && W.evidenceBuildingAt(out.x, out.z, 1.6);
+    if (!b) return out;
+    const pad = 1.9;
+    const dL = Math.abs(out.x - (b.minX - pad)), dR = Math.abs((b.maxX + pad) - out.x);
+    const dB = Math.abs(out.z - (b.minZ - pad)), dF = Math.abs((b.maxZ + pad) - out.z);
+    const m = Math.min(dL, dR, dB, dF);
+    if (m === dL) out.x = b.minX - pad;
+    else if (m === dR) out.x = b.maxX + pad;
+    else if (m === dB) out.z = b.minZ - pad;
+    else out.z = b.maxZ + pad;
+    return out;
+  };
+
+  SirenHead.prototype.buildSafeStreetPath = function (from, dest) {
+    const W = this.world;
+    const safeDest = this.clampOutsideEvidence(dest);
+    const p = W.path(from, safeDest).map(n => new V3(n.x, 0, n.z));
+    if (p.length > 1) {
+      const a = p[0], b = p[1];
+      const along = (b.x - a.x) * (from.x - a.x) + (b.z - a.z) * (from.z - a.z);
+      if (along > 0) p.shift();
+    }
+    if (p.length && W.hitsEvidenceBuilding) {
+      const evFirst = W.hitsEvidenceBuilding(from, p[0], 1.7);
+      if (evFirst) {
+        const det = this.detourPoint(from, p[0], evFirst);
+        p.unshift(...det);
+      }
+    }
+    const last = p.length ? p[p.length - 1] : from;
+    const evLast = W.hitsEvidenceBuilding && W.hitsEvidenceBuilding(last, safeDest, 1.7);
+    if (evLast) {
+      p.push(...this.detourPoint(last, safeDest, evLast));
+    }
+    p.push(new V3(safeDest.x, 0, safeDest.z));
+    return p;
+  };
+
+  // go toward a point: cut straight across non-evidence blocks when close/hunting,
+  // but always path around buildings that contain evidence
   SirenHead.prototype.goTo = function (target, dt) {
     const W = this.world;
-    const d = Math.hypot(target.x - this.pos.x, target.z - this.pos.z);
+    const dest = this.clampOutsideEvidence(target);
+    const d = Math.hypot(dest.x - this.pos.x, dest.z - this.pos.z);
     this.reached = d < 3.5;
     if (this.reached) { this.speedNow = 0; this.path = []; return; }
     this.repathTimer -= dt;
-    if (d < 24) {
-      this.path = [target.clone()];
-    } else if (this.repathTimer <= 0 || !this.path.length) {
-      this.repathTimer = 1.5;
-      const proj = W.projectToStreet(target);
-      const p = W.path(this.pos, proj).map(n => new V3(n.x, 0, n.z));
-      // drop the first node if it would make us walk backwards
-      if (p.length > 1) {
-        const a = p[0], b = p[1];
-        const along = (b.x - a.x) * (this.pos.x - a.x) + (b.z - a.z) * (this.pos.z - a.z);
-        if (along > 0) p.shift();
+    const directLimit = this.state === 'hunt' ? 52 : 34;
+    const blockedEv = W.hitsEvidenceBuilding && W.hitsEvidenceBuilding(this.pos, dest, 1.8);
+    if (d < directLimit && !blockedEv) {
+      this.path = [dest];
+    } else if (d < 26 && blockedEv) {
+      if (this.repathTimer <= 0 || !this.path.length) {
+        this.repathTimer = 0.6;
+        const det = this.detourPoint(this.pos, dest, blockedEv);
+        det.push(dest);
+        this.path = det;
       }
-      p.push(new V3(proj.x, 0, proj.z));
-      this.path = p;
+    } else if (this.repathTimer <= 0 || !this.path.length) {
+      this.repathTimer = 1.4;
+      const proj = W.projectToStreet(dest);
+      this.path = this.buildSafeStreetPath(this.pos, proj);
     }
     this.followPath(dt);
   };
 
   SirenHead.prototype.followPath = function (dt) {
     if (!this.path.length) { this.speedNow = 0; return; }
+    const W = this.world;
     const t = this.path[0];
     const dx = t.x - this.pos.x, dz = t.z - this.pos.z;
     const d = Math.hypot(dx, dz);
@@ -430,9 +522,54 @@
     this.yaw += Math.max(-1.6 * dt, Math.min(1.6 * dt, diff));
     const facing = Math.max(0, Math.cos(diff));
     const step = this.speed * dt * (0.25 + 0.75 * facing);
-    this.pos.x += Math.sin(this.yaw) * Math.min(step, d);
-    this.pos.z += Math.cos(this.yaw) * Math.min(step, d);
-    this.speedNow = step / dt;
+    const move = Math.min(step, d);
+    let nx = this.pos.x + Math.sin(this.yaw) * move;
+    let nz = this.pos.z + Math.cos(this.yaw) * move;
+
+    // never clip into an evidence-containing building — slide outside its perimeter and detour
+    const evB = W.evidenceBuildingAt && W.evidenceBuildingAt(nx, nz, 1.5);
+    if (evB) {
+      const pad = 1.65;
+      const dL = Math.abs(nx - (evB.minX - pad)), dR = Math.abs((evB.maxX + pad) - nx);
+      const dB = Math.abs(nz - (evB.minZ - pad)), dF = Math.abs((evB.maxZ + pad) - nz);
+      const m = Math.min(dL, dR, dB, dF);
+      if (m === dL) nx = evB.minX - pad;
+      else if (m === dR) nx = evB.maxX + pad;
+      else if (m === dB) nz = evB.minZ - pad;
+      else nz = evB.maxZ + pad;
+      if (W.segmentHitsBox && W.segmentHitsBox(this.pos.x, this.pos.z, t.x, t.z, evB.minX, evB.maxX, evB.minZ, evB.maxZ, 1.4)) {
+        const det = this.detourPoint({ x: nx, z: nz }, t, evB);
+        if (det.length) this.path = det.concat(this.path);
+      }
+    }
+
+    this.pos.x = nx;
+    this.pos.z = nz;
+    this.speedNow = step / Math.max(dt, 1e-4);
+
+    // smash straight through non-evidence buildings in our path (v2.4.1+)
+    if (!LO.ver || LO.ver().sirenSmash) {
+      const hit = W.smashableBuildingAt && W.smashableBuildingAt(this.pos.x, this.pos.z, 1.3);
+      if (hit) {
+        const dir = { x: Math.sin(this.yaw), z: Math.cos(this.yaw) };
+        if (W.smashBuilding(hit, this.pos, dir)) {
+          LO.audio.buildingSmash(this.pos);
+          this.smashPulse = 0.65;
+          this.onSmash && this.onSmash(hit, this.pos);
+        }
+      }
+    }
+    // break through perimeter fences if touched
+    if (W.fences) {
+      for (let i = 0; i < W.fences.length; i++) {
+        const f = W.fences[i];
+        if (!f.broken && Math.hypot(f.pos.x - this.pos.x, f.pos.z - this.pos.z) < 2.8) {
+          f.broken = true;
+          f.mesh.visible = false;
+          LO.audio.fenceSmash && LO.audio.fenceSmash(f.pos);
+        }
+      }
+    }
   };
 
   // ------------------------------------------------------------
@@ -472,8 +609,10 @@
     this.hip.rotation.y = Math.sin(ph) * 0.1 * amp;
 
     // ---- posture
+    this.smashPulse = Math.max(0, (this.smashPulse || 0) - dt * 1.8);
+    const sp = this.smashPulse;
     const searching = this.state === 'search' || (this.state === 'investigate' && this.reached);
-    const targetLean = this.forceLean !== undefined ? this.forceLean : (searching ? 0.5 : 0.14 + H * 0.22);
+    const targetLean = this.forceLean !== undefined ? this.forceLean : (searching ? 0.5 : 0.14 + H * 0.22 + sp * 0.45);
     this.lean += (targetLean - this.lean) * Math.min(1, dt * 1.5);
     this.torso.rotation.x = this.lean;
     this.torso.rotation.y = -Math.sin(ph) * 0.13 * amp;            // shoulders counter-swing the hips
@@ -484,8 +623,8 @@
     // ---- arms: dangle and swing with a lagging elbow; reach forward when hunting
     this.arms.forEach(A => {
       const p = ph + (A.side > 0 ? 0 : Math.PI);
-      A.sh.rotation.x = Math.sin(p) * 0.34 * amp - this.lean * 0.85 + (this.armRaise || 0) - H * 0.35;
-      A.sh.rotation.z = A.side * (0.07 + H * 0.18) + Math.sin(T * 0.7 + A.side) * 0.015;
+      A.sh.rotation.x = Math.sin(p) * 0.34 * amp - this.lean * 0.85 + (this.armRaise || 0) - H * 0.35 - sp * 0.7;
+      A.sh.rotation.z = A.side * (0.07 + H * 0.18 + sp * 0.22) + Math.sin(T * 0.7 + A.side) * 0.015;
       A.elbow.rotation.x = -(0.25 + Math.max(0, Math.sin(p - 0.7)) * 0.4 * amp) - H * 0.45;
       A.wrist.rotation.x = Math.sin(p - 1.3) * 0.25 * amp - 0.1;
       const curl = 0.25 + H * 0.55 + Math.max(0, Math.sin(T * 5 + A.side * 2)) * 0.06;

@@ -154,37 +154,42 @@
       return c;
     },
     facade(size, r, opt) {
-      // building wall with a grid of dark / broken windows
+      // building wall with a clean grid of dark / broken / boarded windows
       const [c, g] = canvas(size);
       const base = MAKERS[opt.wall || 'brick'](size, r, opt);
       g.drawImage(base, 0, 0);
       const cols = 4, rows = 4;
       const cw = size / cols, rh = size / rows;
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
-        const wx = x * cw + cw * 0.22, wy = y * rh + rh * 0.2, ww = cw * 0.56, wh = rh * 0.55;
-        g.fillStyle = '#1b1b1b'; g.fillRect(wx - 3, wy - 3, ww + 6, wh + 6);
+        const wx = x * cw + cw * 0.22, wy = y * rh + rh * 0.2, ww = cw * 0.56, wh = rh * 0.54;
+        // outer lintel / trim frame
+        g.fillStyle = '#171718'; g.fillRect(wx - 4, wy - 5, ww + 8, wh + 9);
         const lit = r();
-        g.fillStyle = lit < 0.03 ? '#4a3a1c' : `rgb(${8 + lit * 10},${10 + lit * 12},${14 + lit * 16})`;
+        g.fillStyle = lit < 0.03 ? '#4f3e1e' : `rgb(${6 + lit * 8},${9 + lit * 10},${13 + lit * 14})`;
         g.fillRect(wx, wy, ww, wh);
-        // reflection
-        g.fillStyle = 'rgba(120,140,170,0.08)';
-        g.beginPath(); g.moveTo(wx, wy + wh); g.lineTo(wx + ww * 0.6, wy); g.lineTo(wx + ww * 0.8, wy); g.lineTo(wx + ww * 0.2, wy + wh); g.fill();
-        // broken glass shards
-        if (r() < 0.45) {
-          g.strokeStyle = 'rgba(200,210,220,0.35)'; g.lineWidth = 1;
-          const cx = wx + r() * ww, cy = wy + r() * wh;
-          for (let k = 0; k < 6; k++) { g.beginPath(); g.moveTo(cx, cy); g.lineTo(wx + r() * ww, wy + r() * wh); g.stroke(); }
+        // subtle glass sheen
+        g.fillStyle = 'rgba(130,150,180,0.09)';
+        g.beginPath(); g.moveTo(wx, wy + wh); g.lineTo(wx + ww * 0.55, wy); g.lineTo(wx + ww * 0.75, wy); g.lineTo(wx + ww * 0.2, wy + wh); g.fill();
+        // clean window mullions (2x2 sash)
+        g.fillStyle = '#1e1e20';
+        g.fillRect(wx + ww * 0.47, wy, Math.max(2, ww * 0.06), wh);
+        g.fillRect(wx, wy + wh * 0.47, ww, Math.max(2, wh * 0.06));
+        // broken glass shards (contained inside pane)
+        if (r() < 0.4) {
+          g.strokeStyle = 'rgba(200,210,220,0.32)'; g.lineWidth = 1;
+          const cx = wx + (0.2 + r() * 0.6) * ww, cy = wy + (0.2 + r() * 0.6) * wh;
+          for (let k = 0; k < 5; k++) { g.beginPath(); g.moveTo(cx, cy); g.lineTo(wx + r() * ww, wy + r() * wh); g.stroke(); }
         }
-        // boarded up
-        if (r() < 0.15) {
-          g.fillStyle = '#4b3a28';
-          for (let k = 0; k < 3; k++) {
-            g.save(); g.translate(wx + ww / 2, wy + wh * (0.25 + k * 0.25)); g.rotate((r() - 0.5) * 0.3);
-            g.fillRect(-ww * 0.6, -wh * 0.07, ww * 1.2, wh * 0.14); g.restore();
+        // neatly boarded-up inside the frame
+        if (r() < 0.14) {
+          g.fillStyle = '#473625';
+          for (let k = 0; k < 2; k++) {
+            const by = wy + wh * (0.25 + k * 0.4);
+            g.fillRect(wx - 2, by, ww + 4, Math.max(3, wh * 0.16));
           }
         }
-        // sill
-        g.fillStyle = 'rgba(160,150,140,0.5)'; g.fillRect(wx - 5, wy + wh + 3, ww + 10, 4);
+        // crisp sill
+        g.fillStyle = 'rgba(155,148,138,0.65)'; g.fillRect(wx - 6, wy + wh + 3, ww + 12, Math.max(3, rh * 0.05));
       }
       return c;
     },

@@ -1,0 +1,798 @@
+// ============================================================
+//  THE LOUD ONE — The Fast One (Phenomenon-241)
+//  A low quadrupedal hound that smashes through the farthest
+//  perimeter fence on a 30s-3m timer (with a mandatory 10-20s
+//  gap from The Sneaky One, pausing when hiding or when Siren
+//  Head is close). Highlights the closest locker/dumpster in
+//  blue, triggers an adrenaline surge if safety is >7s away,
+//  and chases you down on a ~6s kill timer. Hide in time and
+//  it rears up, slams the door, and breaches back out.
+// ============================================================
+(function () {
+  const V3 = THREE.Vector3;
+  const MIN_T = 30, MAX_T = 180;
+  const KILL_TIME = 6.0;
+  const ADRENALINE_TIME_THRESHOLD = 7.0;
+  const BASE_WALK_SPEED = 3.3;
+  const AFTERIMAGES = 4;
+
+  LO.ambush = LO.ambush || { active: null, gapUntil: 0, now: 0 };
+  const nextTime = () => MIN_T + Math.random() * (MAX_T - MIN_T);
+
+  function FastOne(scene, world) {
+    this.scene = scene;
+    this.world = world;
+    this.root = new THREE.Group();
+    this.root.visible = false;
+    scene.add(this.root);
+    this.fxGroup = new THREE.Group();
+    scene.add(this.fxGroup);
+
+    this.splinters = [];
+    this.trail = [];
+    this.clones = [];
+    this.highlightedSpot = null;
+
+    this.buildModel();
+    this.buildAfterimages();
+    this.reset();
+  }
+  LO.FastOne = FastOne;
+
+  // ---------------- low quadrupedal hound mesh ----------------
+  FastOne.prototype.buildModel = function () {
+    const simple = LO.settings.lighting === 'simple';
+    const Mat = o => simple ? new THREE.MeshLambertMaterial(o) : new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.78 }, o));
+    const skin = Mat({ color: 0x1a1516 });
+    const bone = Mat({ color: 0x6b6056 });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3b22 });
+    const toothMat = new THREE.MeshBasicMaterial({ color: 0xe6dfd0 });
+
+    const body = this.body = new THREE.Group();
+    body.position.set(0, 0.62, 0);
+    this.root.add(body);
+
+    // gaunt ribbed chest and low haunches
+    const chest = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, 0.78), skin);
+    chest.position.set(0, 0.04, 0.25);
+    body.add(chest);
+
+    const waist = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.26, 0.68), skin);
+    waist.position.set(0, 0.0, -0.34);
+    body.add(waist);
+
+    // bony ribs & dorsal spine ridges
+    for (let i = 0; i < 6; i++) {
+      const z = 0.52 - i * 0.19;
+      const sp = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.18, 4), bone);
+      sp.position.set(0, 0.24 - i * 0.01, z);
+      sp.rotation.x = -0.35;
+      body.add(sp);
+    }
+
+    // neck & elongated canine skull (+z is forward)
+    const head = this.head = new THREE.Group();
+    head.position.set(0, 0.14, 0.72);
+    body.add(head);
+
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.22, 0.34), skin);
+    neck.position.set(0, -0.02, -0.08);
+    neck.rotation.x = 0.25;
+    head.add(neck);
+
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.18, 0.42), skin);
+    skull.position.set(0, 0.06, 0.16);
+    head.add(skull);
+
+    const snout = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.32), skin);
+    snout.position.set(0, 0.04, 0.44);
+    head.add(snout);
+
+    // ears swept back
+    [-1, 1].forEach(s => {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.22, 4), skin);
+      ear.position.set(s * 0.11, 0.18, 0.06);
+      ear.rotation.x = -0.65;
+      ear.rotation.z = -s * 0.25;
+      head.add(ear);
+    });
+
+    // glowing red eyes
+    [-1, 1].forEach(s => {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.036, 8, 6), eyeMat);
+      eye.scale.set(1.2, 0.75, 0.8);
+      eye.position.set(s * 0.095, 0.09, 0.34);
+      head.add(eye);
+    });
+
+    const eyeGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.world.glowTex('rgba(255,60,30,0.45)'),
+      depthWrite: false,
+      transparent: true,
+    }));
+    eyeGlow.scale.set(0.95, 0.45, 1);
+    eyeGlow.position.set(0, 0.09, 0.38);
+    head.add(eyeGlow);
+
+    // hinged lower jaw + jagged pale fangs
+    const jaw = this.jaw = new THREE.Group();
+    jaw.position.set(0, -0.01, 0.22);
+    head.add(jaw);
+    const jawMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.07, 0.34), skin);
+    jawMesh.position.set(0, -0.02, 0.18);
+    jaw.add(jawMesh);
+    for (let i = 0; i < 4; i++) {
+      const z = 0.08 + i * 0.08;
+      [-1, 1].forEach(s => {
+        const upT = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.055, 4), toothMat);
+        upT.position.set(s * 0.055, -0.01, 0.34 + i * 0.07);
+        upT.rotation.x = Math.PI;
+        head.add(upT);
+        const loT = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.045, 4), toothMat);
+        loT.position.set(s * 0.048, 0.025, z);
+        jaw.add(loT);
+      });
+    }
+
+    // 4 articulated legs
+    this.legs = [];
+    const legSpecs = [
+      { x: -0.22, y: -0.04, z: 0.46, front: true, phase: 0 },
+      { x: 0.22, y: -0.04, z: 0.46, front: true, phase: 0.55 },
+      { x: -0.20, y: -0.04, z: -0.50, front: false, phase: Math.PI },
+      { x: 0.20, y: -0.04, z: -0.50, front: false, phase: Math.PI + 0.55 },
+    ];
+    legSpecs.forEach(sp => {
+      const hip = new THREE.Group();
+      hip.position.set(sp.x, sp.y, sp.z);
+      body.add(hip);
+      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.34, 0.12), skin);
+      upper.position.y = -0.15;
+      hip.add(upper);
+
+      const knee = new THREE.Group();
+      knee.position.y = -0.30;
+      hip.add(knee);
+      const lower = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, 0.09), skin);
+      lower.position.y = -0.15;
+      knee.add(lower);
+
+      const paw = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.06, 0.18), bone);
+      paw.position.set(0, -0.31, 0.04);
+      knee.add(paw);
+
+      this.legs.push({ hip, knee, front: sp.front, phase: sp.phase });
+    });
+
+    // segmented whip tail
+    const tail = this.tail = new THREE.Group();
+    tail.position.set(0, 0.06, -0.68);
+    body.add(tail);
+    const t1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.55), skin);
+    t1.position.set(0, 0.02, -0.26);
+    t1.rotation.x = 0.25;
+    tail.add(t1);
+    const t2 = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.45, 5), bone);
+    t2.position.set(0, 0.11, -0.64);
+    t2.rotation.x = -Math.PI / 2 + 0.2;
+    tail.add(t2);
+
+    if (LO.settings.shadows !== 'off') {
+      this.root.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    }
+  };
+
+  // ---------------- 4 fading afterimage trail clones ----------------
+  FastOne.prototype.buildAfterimages = function () {
+    const bodyGeo = new THREE.BoxGeometry(0.40, 0.32, 1.38);
+    const headGeo = new THREE.BoxGeometry(0.24, 0.18, 0.48);
+    const legGeo = new THREE.BoxGeometry(0.09, 0.54, 0.10);
+    const eyeGeo = new THREE.SphereGeometry(0.035, 6, 4);
+
+    for (let i = 0; i < AFTERIMAGES; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x6b1414,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const eyeMat = new THREE.MeshBasicMaterial({
+        color: 0xff4422,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const g = new THREE.Group();
+      const b = new THREE.Group();
+      b.position.y = 0.62;
+      g.add(b);
+
+      const torso = new THREE.Mesh(bodyGeo, mat);
+      torso.position.set(0, 0.02, -0.02);
+      b.add(torso);
+
+      const hd = new THREE.Mesh(headGeo, mat);
+      hd.position.set(0, 0.18, 0.88);
+      b.add(hd);
+
+      [-1, 1].forEach(s => {
+        const e = new THREE.Mesh(eyeGeo, eyeMat);
+        e.position.set(s * 0.09, 0.21, 1.06);
+        b.add(e);
+      });
+
+      [[-0.21, 0.45], [0.21, 0.45], [-0.19, -0.48], [0.19, -0.48]].forEach(([lx, lz]) => {
+        const lg = new THREE.Mesh(legGeo, mat);
+        lg.position.set(lx, -0.32, lz);
+        b.add(lg);
+      });
+
+      g.visible = false;
+      this.fxGroup.add(g);
+      this.clones.push({ g, b, mat, eyeMat, baseAlpha: [0.44, 0.31, 0.20, 0.11][i] });
+    }
+  };
+
+  FastOne.prototype.updateAfterimages = function (dt, active) {
+    if (active) {
+      this.trailTimer += dt;
+      if (this.trailTimer >= 0.042) {
+        this.trailTimer = 0;
+        this.trail.unshift({
+          x: this.pos.x,
+          y: this.pos.y,
+          z: this.pos.z,
+          yaw: this.root.rotation.y,
+          by: this.body.position.y,
+          bx: this.body.rotation.x,
+        });
+        if (this.trail.length > AFTERIMAGES + 2) this.trail.length = AFTERIMAGES + 2;
+      }
+      this.trailFade = Math.min(1, this.trailFade + dt * 8);
+    } else {
+      this.trailFade = Math.max(0, this.trailFade - dt * 4);
+    }
+
+    for (let i = 0; i < this.clones.length; i++) {
+      const c = this.clones[i];
+      const snap = this.trail[i + 1];
+      if (!snap || this.trailFade <= 0.02) {
+        c.g.visible = false;
+        continue;
+      }
+      c.g.visible = true;
+      c.g.position.set(snap.x, snap.y, snap.z);
+      c.g.rotation.y = snap.yaw;
+      c.b.position.y = snap.by;
+      c.b.rotation.x = snap.bx;
+      const a = c.baseAlpha * this.trailFade;
+      c.mat.opacity = a;
+      c.eyeMat.opacity = Math.min(0.85, a * 1.6);
+    }
+  };
+
+  // ---------------- splinter particles for fence breach ----------------
+  const splinterGeo = new THREE.BoxGeometry(0.08, 0.05, 0.46);
+  const splinterMat = new THREE.MeshLambertMaterial({ color: 0x4b463e });
+  FastOne.prototype.spawnSplinters = function (origin, dir) {
+    const count = 26;
+    for (let i = 0; i < count; i++) {
+      const m = new THREE.Mesh(splinterGeo, splinterMat);
+      m.position.set(
+        origin.x + (Math.random() - 0.5) * 3.4,
+        0.4 + Math.random() * 1.6,
+        origin.z + (Math.random() - 0.5) * 3.4
+      );
+      m.scale.set(0.6 + Math.random() * 0.9, 0.6 + Math.random() * 0.8, 0.7 + Math.random() * 1.4);
+      const speed = 8 + Math.random() * 18;
+      const spread = (Math.random() - 0.5) * 1.2;
+      const vx = dir.x * speed + (-dir.z) * spread * speed * 0.55;
+      const vz = dir.z * speed + dir.x * spread * speed * 0.55;
+      const vy = 2.0 + Math.random() * 6.5;
+      this.fxGroup.add(m);
+      this.splinters.push({
+        mesh: m,
+        vx, vy, vz,
+        rx: (Math.random() - 0.5) * 16,
+        ry: (Math.random() - 0.5) * 16,
+        rz: (Math.random() - 0.5) * 16,
+        life: 2.2,
+      });
+    }
+  };
+
+  FastOne.prototype.updateSplinters = function (dt) {
+    for (let i = this.splinters.length - 1; i >= 0; i--) {
+      const s = this.splinters[i];
+      s.life -= dt;
+      if (s.life <= 0) {
+        this.fxGroup.remove(s.mesh);
+        this.splinters.splice(i, 1);
+        continue;
+      }
+      s.vy -= 16 * dt;
+      s.mesh.position.x += s.vx * dt;
+      s.mesh.position.y += s.vy * dt;
+      s.mesh.position.z += s.vz * dt;
+      if (s.mesh.position.y <= 0.05) {
+        s.mesh.position.y = 0.05;
+        s.vy *= -0.25;
+        s.vx *= 0.65;
+        s.vz *= 0.65;
+      }
+      s.mesh.rotation.x += s.rx * dt;
+      s.mesh.rotation.y += s.ry * dt;
+      s.mesh.rotation.z += s.rz * dt;
+    }
+  };
+
+  FastOne.prototype.breachFence = function (fence, dir) {
+    if (fence && !fence.broken) {
+      fence.broken = true;
+      fence.mesh.visible = false;
+    }
+    const pos = fence ? fence.pos : this.pos;
+    this.spawnSplinters(pos, dir);
+    LO.audio.fenceSmash(pos);
+  };
+
+  // ---------------- blue outline highlight on closest locker/dumpster ----------------
+  FastOne.prototype.ensureHighlight = function (spot) {
+    if (spot._blueHighlight) return spot._blueHighlight;
+    const grp = new THREE.Group();
+    const shellMat = new THREE.MeshBasicMaterial({
+      color: 0x2ea8ff,
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: 0.85,
+      fog: false,
+    });
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0x70d4ff,
+      transparent: true,
+      opacity: 0.85,
+      fog: false,
+      depthTest: false,
+    });
+    const parts = [];
+    spot.mesh.traverse(o => {
+      if (!o.isMesh || !o.geometry) return;
+      parts.push(o);
+    });
+    parts.forEach(o => {
+      const shell = new THREE.Mesh(o.geometry, shellMat);
+      shell.position.copy(o.position);
+      shell.rotation.copy(o.rotation);
+      shell.scale.copy(o.scale).multiplyScalar(1.06);
+      // account for parent hierarchy if inside a hinge group
+      if (o.parent && o.parent !== spot.mesh) {
+        shell.position.add(o.parent.position);
+      }
+      grp.add(shell);
+
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(o.geometry), edgeMat);
+      edges.position.copy(o.position);
+      edges.rotation.copy(o.rotation);
+      edges.scale.copy(o.scale).multiplyScalar(1.03);
+      if (o.parent && o.parent !== spot.mesh) {
+        edges.position.add(o.parent.position);
+      }
+      edges.renderOrder = 20;
+      grp.add(edges);
+    });
+    const light = new THREE.PointLight(0x38aaff, 1.8, 10, 1.5);
+    light.position.set(0, 1.4, 0.8);
+    grp.add(light);
+    grp.visible = false;
+    spot.mesh.add(grp);
+    spot._blueHighlight = { grp, shellMat, edgeMat, light };
+    return spot._blueHighlight;
+  };
+
+  FastOne.prototype.setHighlight = function (spot, time) {
+    if (this.highlightedSpot && this.highlightedSpot !== spot) {
+      if (this.highlightedSpot._blueHighlight) {
+        this.highlightedSpot._blueHighlight.grp.visible = false;
+      }
+      this.highlightedSpot = null;
+    }
+    if (!spot) return;
+    const h = this.ensureHighlight(spot);
+    h.grp.visible = true;
+    const pulse = 0.65 + 0.35 * Math.sin((time || 0) * 9);
+    h.shellMat.opacity = 0.55 + pulse * 0.35;
+    h.edgeMat.opacity = 0.6 + pulse * 0.35;
+    h.light.intensity = 1.1 + pulse * 1.2;
+    this.highlightedSpot = spot;
+  };
+
+  FastOne.prototype.clearHighlight = function () {
+    this.setHighlight(null);
+  };
+
+  FastOne.prototype.findClosestHideSpot = function (player) {
+    const now = performance.now() / 1000;
+    let best = null, bd = Infinity;
+    (this.world.hideSpots || []).forEach(sp => {
+      if (sp.disabled) return;
+      if (sp.lockedUntil && sp.lockedUntil > now) return;
+      const d = Math.hypot(sp.interact.x - player.pos.x, sp.interact.z - player.pos.z);
+      if (d < bd) { bd = d; best = sp; }
+    });
+    return { spot: best, dist: bd };
+  };
+
+  FastOne.prototype.farthestFence = function (fromPos) {
+    const fences = this.world.fences || [];
+    let best = null, bd = -1;
+    for (const f of fences) {
+      if (f.broken) continue;
+      const d = Math.hypot(f.pos.x - fromPos.x, f.pos.z - fromPos.z);
+      if (d > bd) { bd = d; best = f; }
+    }
+    if (!best && fences.length) {
+      for (const f of fences) {
+        const d = Math.hypot(f.pos.x - fromPos.x, f.pos.z - fromPos.z);
+        if (d > bd) { bd = d; best = f; }
+      }
+    }
+    return best;
+  };
+
+  FastOne.prototype.closestFence = function (fromPos) {
+    const fences = this.world.fences || [];
+    let best = null, bd = Infinity;
+    for (const f of fences) {
+      if (f.broken) continue;
+      const d = Math.hypot(f.pos.x - fromPos.x, f.pos.z - fromPos.z);
+      if (d < bd) { bd = d; best = f; }
+    }
+    return best;
+  };
+
+  // ---------------- reset ----------------
+  FastOne.prototype.reset = function () {
+    this.state = 'idle';          // idle | chase | slam | exit
+    this.timer = nextTime();
+    this.chaseT = 0;
+    this.slamT = 0;
+    this.slamPhase = 'approach';
+    this.slamImpacted = false;
+    this.slamSpot = null;
+    this.exitFence = null;
+    this.exitBreached = false;
+    this.exitAfterT = 0;
+    this.gait = 0;
+    this.lastStepHalf = 0;
+    this.trail = [];
+    this.trailTimer = 0;
+    this.trailFade = 0;
+    this.pos = this.root.position;
+    this.root.visible = false;
+    this.body.position.set(0, 0.62, 0);
+    this.body.rotation.set(0, 0, 0);
+    this.jaw.rotation.x = 0.25;
+    this.clones.forEach(c => { c.g.visible = false; });
+    this.clearHighlight();
+    if (this.world && this.world.fences) {
+      this.world.fences.forEach(f => {
+        f.broken = false;
+        f.mesh.visible = true;
+        f.mesh.position.copy(f.basePos);
+        f.mesh.rotation.copy(f.baseRot);
+      });
+    }
+    for (const s of this.splinters) this.fxGroup.remove(s.mesh);
+    this.splinters.length = 0;
+    if (LO.ambush.active === 'fastone') LO.ambush.active = null;
+  };
+
+  // ---------------- spawn breach ----------------
+  FastOne.prototype.spawnBreach = function (player, time) {
+    const fence = this.farthestFence(player.pos);
+    let sx = 0, sz = this.world.HALF + 2;
+    if (fence) { sx = fence.pos.x; sz = fence.pos.z; }
+
+    // start just outside the fence, pointing inward toward the player
+    const inward = new V3(player.pos.x - sx, 0, player.pos.z - sz).normalize();
+    this.pos.set(sx - inward.x * 2.5, 0, sz - inward.z * 2.5);
+    this.root.rotation.y = Math.atan2(inward.x, inward.z);
+    this.root.visible = true;
+
+    this.breachFence(fence, inward);
+    LO.audio.fastHowl(this.pos);
+
+    this.state = 'chase';
+    this.chaseT = 0;
+    this.gait = 0;
+    this.trail = [];
+    this.trailTimer = 0;
+    this.trailFade = 1;
+    LO.ambush.active = 'fastone';
+
+    // >7-second distance check to closest locker/dumpster triggers adrenaline
+    const nearest = this.findClosestHideSpot(player);
+    if (nearest.spot) {
+      this.setHighlight(nearest.spot, time);
+      const estSeconds = nearest.dist / BASE_WALK_SPEED;
+      if (estSeconds > ADRENALINE_TIME_THRESHOLD) {
+        player.adrenaline = 8.0;
+        player.stamina = 100;
+        player.exhausted = false;
+        LO.audio.adrenaline();
+        player.hint && player.hint('You feel a surge of adrenaline...', 4200);
+      } else {
+        player.hint && player.hint('Something broke through the fence! Get to a hiding spot!', 3200);
+      }
+    }
+  };
+
+  // ---------------- gallop animation helper ----------------
+  FastOne.prototype.animateRun = function (dt, speed, time) {
+    this.gait += dt * (10 + speed * 0.65);
+    const p = this.gait;
+    this.body.position.y = 0.60 + Math.abs(Math.sin(p)) * 0.14;
+    this.body.rotation.x = Math.sin(p) * 0.14;
+    this.jaw.rotation.x = 0.35 + Math.max(0, Math.sin(p * 1.3)) * 0.35;
+    this.tail.rotation.y = Math.sin(p * 1.5) * 0.35;
+    this.legs.forEach(L => {
+      const lp = p + L.phase;
+      L.hip.rotation.x = Math.sin(lp) * 0.85;
+      L.knee.rotation.x = L.front ? -0.45 + Math.cos(lp) * 0.5 : 0.45 - Math.cos(lp) * 0.5;
+    });
+    const half = Math.floor(p / Math.PI);
+    if (half !== this.lastStepHalf) {
+      this.lastStepHalf = half;
+      LO.audio.fastStep(this.pos);
+    }
+  };
+
+  // ---------------- update ----------------
+  FastOne.prototype.update = function (dt, player, camera, siren, time) {
+    this.updateSplinters(dt);
+    if (LO.ver && !LO.ver().fastone) {
+      if (this.state !== 'idle') this.finishEncounter();
+      this.updateAfterimages(dt, false);
+      return;
+    }
+
+    if (player.calm || !player.alive) {
+      if (this.state !== 'idle') {
+        this.clearHighlight();
+        if (this.state === 'chase') this.startExit();
+        else if (this.state === 'slam' || this.state === 'exit') { /* finish cleanly */ }
+      }
+      if (this.state === 'idle') { this.updateAfterimages(dt, false); return; }
+    }
+
+    if (this.state === 'idle') {
+      this.updateAfterimages(dt, false);
+      const hearFlash = LO.NOISE.flashlight * 1.3 * (player.indoor ? 0.6 : 1);
+      const sirenNear = siren && siren.distToPlayer !== undefined && siren.distToPlayer < hearFlash + 4;
+      // spawn timer pauses when hiding or when Siren Head is close
+      if (sirenNear || player.hidden || player.hideAnim) return;
+      this.timer -= dt;
+      if (this.timer > 0) return;
+      // mandatory 10-20s minimum gap from The Sneaky One
+      if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {
+        this.timer = 0;
+        return;
+      }
+      this.spawnBreach(player, time);
+      return;
+    }
+
+    if (this.state === 'chase') {
+      this.chaseT += dt;
+      // did the player make it into a hiding spot?
+      const hidingSpot = player.hidden || (player.hideAnim && player.hideAnim.dir === 'in' && player.hideAnim.t >= 0.45 ? player.hideAnim.spot : null);
+      if (hidingSpot) {
+        this.clearHighlight();
+        this.state = 'slam';
+        this.slamSpot = hidingSpot;
+        this.slamPhase = 'approach';
+        this.slamT = 0;
+        this.slamImpacted = false;
+        return;
+      }
+
+      // keep the closest hiding spot highlighted in blue
+      const nearest = this.findClosestHideSpot(player);
+      this.setHighlight(nearest.spot, time);
+
+      // steer straight toward player so it arrives at ~6 seconds
+      const dx = player.pos.x - this.pos.x;
+      const dz = player.pos.z - this.pos.z;
+      const dist = Math.hypot(dx, dz) || 0.001;
+      const rem = Math.max(0.12, KILL_TIME - this.chaseT);
+      const speed = Math.max(22, dist / rem);
+
+      const wantYaw = Math.atan2(dx, dz);
+      let diff = wantYaw - this.root.rotation.y;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.root.rotation.y += Math.max(-10 * dt, Math.min(10 * dt, diff));
+
+      const step = Math.min(dist, speed * dt);
+      this.pos.x += (dx / dist) * step;
+      this.pos.z += (dz / dist) * step;
+
+      if (dist < 32) {
+        player.shake = Math.max(player.shake, Math.pow(1 - dist / 32, 1.5) * 0.45);
+      }
+
+      this.animateRun(dt, speed, time);
+      this.updateAfterimages(dt, true);
+
+      if (this.chaseT >= KILL_TIME && !player.hidden && !(player.hideAnim && player.hideAnim.dir === 'in')) {
+        this.clearHighlight();
+        this.root.visible = false;
+        this.updateAfterimages(dt, false);
+        this.clones.forEach(c => { c.g.visible = false; });
+        if (LO.ambush.active === 'fastone') {
+          LO.ambush.active = null;
+          LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;
+        }
+        this.state = 'idle';
+        this.timer = nextTime();
+        return 'kill';
+      }
+      return;
+    }
+
+    if (this.state === 'slam') {
+      const sp = this.slamSpot;
+      if (!sp || sp.disabled) { this.startExit(); return; }
+      if (this.slamPhase === 'approach') {
+        const tx = sp.exit.x, tz = sp.exit.z;
+        const dx = tx - this.pos.x, dz = tz - this.pos.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist <= 1.2) {
+          this.pos.set(tx, 0, tz);
+          this.root.rotation.y = Math.atan2(sp.pos.x - this.pos.x, sp.pos.z - this.pos.z);
+          this.slamPhase = 'rear';
+          this.slamT = 0;
+          LO.audio.fastHowl(this.pos);
+        } else {
+          const speed = 32;
+          const step = Math.min(dist, speed * dt);
+          this.pos.x += (dx / dist) * step;
+          this.pos.z += (dz / dist) * step;
+          this.root.rotation.y = Math.atan2(dx, dz);
+          this.animateRun(dt, speed, time);
+          this.updateAfterimages(dt, true);
+        }
+        return;
+      }
+
+      // rear-up and slam animation against the locker/dumpster
+      this.slamT += dt;
+      this.updateAfterimages(dt, false);
+      const t = this.slamT;
+      this.root.rotation.y = Math.atan2(sp.pos.x - this.pos.x, sp.pos.z - this.pos.z);
+
+      if (t < 0.45) {
+        // rear up onto hind legs
+        const k = t / 0.45;
+        const e = k * k * (3 - 2 * k);
+        this.body.position.y = 0.62 + e * 0.62;
+        this.body.rotation.x = -e * 0.82;
+        this.jaw.rotation.x = 0.25 + e * 0.65;
+        this.legs.forEach(L => {
+          if (L.front) {
+            L.hip.rotation.x = -0.9 * e;
+            L.knee.rotation.x = -0.4 * e;
+          } else {
+            L.hip.rotation.x = 0.45 * e;
+            L.knee.rotation.x = 0.35 * e;
+          }
+        });
+      } else if (t < 0.65) {
+        // slam violently forward onto the hiding spot
+        const k = (t - 0.45) / 0.20;
+        const e = k * k;
+        this.body.position.y = 1.24 - e * 0.62;
+        this.body.rotation.x = -0.82 + e * 1.05;
+        this.jaw.rotation.x = 0.90 - e * 0.55;
+        this.legs.forEach(L => {
+          if (L.front) {
+            L.hip.rotation.x = -0.9 + e * 1.25;
+            L.knee.rotation.x = -0.4 + e * 0.3;
+          } else {
+            L.hip.rotation.x = 0.45 * (1 - e);
+            L.knee.rotation.x = 0.35 * (1 - e);
+          }
+        });
+        if (!this.slamImpacted && t >= 0.56) {
+          this.slamImpacted = true;
+          LO.audio.fastSlam(sp.pos);
+          player.shake = Math.max(player.shake, 1.0);
+        }
+      } else if (t < 1.35) {
+        // rattle door briefly & recoil back to all fours
+        const k = Math.min(1, (t - 0.65) / 0.35);
+        this.body.position.y = 0.62;
+        this.body.rotation.x = 0.23 * (1 - k);
+        this.jaw.rotation.x = 0.35 + Math.sin(t * 24) * 0.12;
+        this.legs.forEach(L => {
+          L.hip.rotation.x *= (1 - k);
+          L.knee.rotation.x *= (1 - k);
+        });
+        if (!player.hideAnim && sp.setOpen) {
+          sp.setOpen(t < 0.92 ? Math.max(0, Math.sin((t - 0.65) * 45) * 0.06) : 0);
+        }
+      } else {
+        if (!player.hideAnim && sp.setOpen) sp.setOpen(0);
+        this.startExit();
+      }
+      return;
+    }
+
+    if (this.state === 'exit') {
+      const f = this.exitFence;
+      if (!this.exitBreached) {
+        this.exitElapsed += dt;
+        const tx = f ? f.pos.x : 0;
+        const tz = f ? f.pos.z : -(this.world.HALF + 2);
+        const dx = tx - this.pos.x, dz = tz - this.pos.z;
+        const dist = Math.hypot(dx, dz) || 0.001;
+        const speed = 34;
+        const step = Math.min(dist, speed * dt);
+        this.pos.x += (dx / dist) * step;
+        this.pos.z += (dz / dist) * step;
+        this.root.rotation.y = Math.atan2(dx, dz);
+        this.animateRun(dt, speed, time);
+        this.updateAfterimages(dt, true);
+
+        if (dist <= 2.6 || this.exitElapsed > 4.5) {
+          this.exitBreached = true;
+          this.exitAfterT = 0;
+          const outDir = new V3(dx / dist, 0, dz / dist);
+          this.exitDir = outDir;
+          this.breachFence(f, outDir);
+        }
+      } else {
+        this.exitAfterT += dt;
+        const d = this.exitDir || new V3(0, 0, -1);
+        this.pos.x += d.x * 34 * dt;
+        this.pos.z += d.z * 34 * dt;
+        this.animateRun(dt, 34, time);
+        this.updateAfterimages(dt, true);
+
+        if (this.exitAfterT >= 0.55) {
+          this.finishEncounter();
+        }
+      }
+    }
+  };
+
+  FastOne.prototype.startExit = function () {
+    this.clearHighlight();
+    this.state = 'exit';
+    this.exitFence = this.closestFence(this.pos);
+    this.exitBreached = false;
+    this.exitAfterT = 0;
+    this.exitElapsed = 0;
+    this.body.position.y = 0.62;
+    this.body.rotation.set(0, 0, 0);
+  };
+
+  FastOne.prototype.finishEncounter = function () {
+    this.state = 'idle';
+    this.root.visible = false;
+    this.clones.forEach(c => { c.g.visible = false; });
+    this.trail = [];
+    this.trailFade = 0;
+    this.timer = nextTime();
+    if (LO.ambush.active === 'fastone') {
+      LO.ambush.active = null;
+      LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;
+    }
+  };
+
+  FastOne.prototype.dispose = function () {
+    this.clearHighlight();
+    this.scene.remove(this.root);
+    this.scene.remove(this.fxGroup);
+  };
+})();
