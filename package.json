@@ -1,0 +1,15 @@
+{
+  "name": "the-loud-one",
+  "version": "2.3.0",
+  "description": "A first-person stealth horror game that runs in the browser.",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "echo \"Static site - no build step required\"",
+    "lint": "echo \"No lint configured\""
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
