@@ -27,14 +27,16 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.4.3',
+    gameVersion: '2.4.4',
+    autoLatest: '2.4.4',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.4.4', label: 'v2.4.4', era: 'Visible giant footprint crater, 1m Fast One post-attack cooldown before random timer, randomized Sheriff\'s Station' },
     { id: '2.4.3', label: 'v2.4.3', era: '2.5s breach telegraph, >10.5s Adrenaline w/ 75s cooldown & winded penalty, Siren breach distractions, extra exterior dumpsters' },
     { id: '2.4.2', label: 'v2.4.2', era: 'Version selector, full notebook notes, CRT locker-slam tape, mobile scrolling UI' },
     { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building smash & evidence pathing, low-poly fences & buildings' },
-    { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-241), Sneaky fix, Silent 10 dmg, Tenant 90% blind' },
+    { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-242), Sneaky fix, Silent 10 dmg, Tenant 90% blind' },
     { id: '2.3',   label: 'v2.3',   era: 'Remodeled props & hiding animations (before The Fast One)' },
     { id: '2.2',   label: 'v2.2',   era: 'The Sneaky One + 24 faster Moths (1s stare limit)' },
     { id: '2.1',   label: 'v2.1',   era: 'Tenant 1-eye rework & blind, Fast Death option, 12 slower Moths' },
@@ -49,14 +51,14 @@ window.LO = window.LO || {};
   ];
 
   function verNum(id) {
-    const parts = String(id || '2.4.3').split('.').map(n => parseInt(n, 10) || 0);
+    const parts = String(id || '2.4.4').split('.').map(n => parseInt(n, 10) || 0);
     return parts[0] * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
   }
 
   function versionFeatures(id) {
     const v = verNum(id || S.gameVersion);
     return {
-      id: id || S.gameVersion || '2.4.3',
+      id: id || S.gameVersion || '2.4.4',
       hint: v >= 10300,
       darkLight: v >= 10300,
       tenant: v >= 10400,
@@ -82,15 +84,28 @@ window.LO = window.LO || {};
       tenantCost: v >= 20400 ? 90 : 95,
       sirenSmash: v >= 20401,
       fastoneV2: v >= 20403,
+      fastoneCooldown: v >= 20404,
+      randomSheriff: v >= 20404,
+      clearFootprint: v >= 20404,
     };
   }
 
+  const LATEST_VER = VERSIONS[0].id;
   const S = Object.assign({}, DEFAULTS);
+  let loadedAuto = null;
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) Object.assign(S, JSON.parse(raw));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      loadedAuto = parsed.autoLatest;
+      Object.assign(S, parsed);
+    }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (!VERSIONS.some(x => x.id === S.gameVersion)) S.gameVersion = '2.4.3';
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === loadedAuto)) {
+    S.gameVersion = LATEST_VER;
+    S.autoLatest = LATEST_VER;
+  }
+  if (!VERSIONS.some(x => x.id === S.gameVersion)) S.gameVersion = LATEST_VER;
 
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ }
@@ -151,7 +166,22 @@ window.LO = window.LO || {};
     LO.events && LO.events.dispatchEvent(new CustomEvent('settings', { detail: { key, value } }));
   }
 
+  const isTesting = (function () {
+    try {
+      const p = (window.location && window.location.pathname) || '/';
+      const s = (window.location && window.location.search) || '';
+      if (/^\/testing(?:\/|\.html)?$/i.test(p)) return true;
+      const params = new URLSearchParams(s);
+      const t = params.get('testing') || params.get('admin');
+      return t === '1' || t === 'true';
+    } catch (e) {
+      return false;
+    }
+  })();
+  if (document.body) document.body.classList.toggle('testing-build', isTesting);
+
   LO.events = LO.events || new EventTarget();
+  LO.isTesting = isTesting;
   LO.settings = S;
   LO.VERSIONS = VERSIONS;
   LO.versionFeatures = versionFeatures;

@@ -1185,7 +1185,6 @@
     // ---------- forced special lots ----------
     // key: "blockI,blockJ,lotX,lotZ" (lotX/lotZ = -1 | 1)
     const SPECIAL = {
-      '2,0,-1,1': { type: 'enter', kind: 'police', sheriff: true },   // the sheriff's station never moves
       '0,2,1,-1': { type: 'enter', kind: 'house' },
       '1,0,-1,1': { type: 'enter', kind: 'shop' },          // near spawn
       '2,1,-1,-1': { type: 'enter', kind: 'office' },
@@ -1197,6 +1196,17 @@
       '3,3,-1,-1': { type: 'parking' },
       '0,3,1,-1': { type: 'parking' },
     };
+    let sheriffKey = '2,0,-1,1';
+    if (!LO.ver || LO.ver().randomSheriff) {
+      const candidates = [];
+      for (let bi = 0; bi < NB; bi++) for (let bj = 0; bj < NB; bj++) {
+        for (const lx of [-1, 1]) for (const lz of [-1, 1]) {
+          const k = `${bi},${bj},${lx},${lz}`;
+          if (!SPECIAL[k]) candidates.push(k);
+        }
+      }
+      if (candidates.length) sheriffKey = candidates[(Math.random() * candidates.length) | 0];
+    }
 
     let enterCount = 0;
     for (let bi = 0; bi < NB; bi++) for (let bj = 0; bj < NB; bj++) {
@@ -1204,7 +1214,9 @@
       for (const lx of [-1, 1]) for (const lz of [-1, 1]) {
         const cx = bx + lx * 10, cz = bz + lz * 10;
         const key = `${bi},${bj},${lx},${lz}`;
-        const sp = SPECIAL[key];
+        const sp = key === sheriffKey
+          ? { type: 'enter', kind: 'police', sheriff: true }
+          : SPECIAL[key];
         let type;
         if (sp) type = sp.type;
         else {
@@ -1821,16 +1833,71 @@
         return { p: F.point(side * (hl - t - 0.03), bb), yaw: F.yawLeft() + (side > 0 ? Math.PI : 0) };
       };
 
-      // 1. giant footprint — on a street or in an open lot
+      // 1. giant footprint — clearly visible on an unobstructed street or open parking pad
       {
-        let x, z;
-        if (r() < 0.7 || !W.openLots.length) { const sp = streetPoint(); x = sp.x; z = sp.z; }
-        else { const l = pk(W.openLots); x = l.cx + (r() - 0.5) * 6; z = l.cz + (r() - 0.5) * 6; }
-        const fp = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 8), M.footprint);
-        fp.rotation.x = -Math.PI / 2; fp.rotation.z = r() * 6.28; fp.position.set(x, 0.06, z);
-        W.evGroup.add(fp);
-        rubblePile(x, z, 3, 6, W.evGroup);
-        W.evidence.push({ id: 'footprint', name: 'Giant footprint', pos: new THREE.Vector3(x, 0.1, z), maxDist: 16, found: false, ground: true });
+        const clearVer = !LO.ver || LO.ver().clearFootprint;
+        const isClear = (cx, cz, pad) => !W.colliders.some(c =>
+          !c.disabled && c.minY <= 2.5 && c.maxY >= 0.08 &&
+          cx + pad > c.minX && cx - pad < c.maxX && cz + pad > c.minZ && cz - pad < c.maxZ
+        );
+        const onBlock = (cx, cz) =>
+          BLOCK_C.some(bx => Math.abs(cx - bx) <= BLOCK / 2 + 0.4) &&
+          BLOCK_C.some(bz => Math.abs(cz - bz) <= BLOCK / 2 + 0.4);
+
+        let x, z, sy = 0.06, rot = r() * 6.28;
+        if (clearVer) {
+          const parkingLots = W.openLots.filter(l => l.type === 'parking');
+          let picked = false;
+          for (let tries = 0; tries < 40; tries++) {
+            let cand;
+            if ((r() < 0.8 || !parkingLots.length) && tries < 34) {
+              // centered safely on the street away from 0.12m tall sidewalk curbs
+              const s0 = pk(STREETS), along = pk(BLOCK_C) + (r() - 0.5) * 20, off = (r() - 0.5) * 2.8;
+              const vert = r() < 0.5;
+              cand = {
+                x: vert ? s0 + off : along,
+                z: vert ? along : s0 + off,
+                rot: (vert ? 0 : Math.PI / 2) + (r() < 0.5 ? 0 : Math.PI) + (r() - 0.5) * 0.35,
+                sy: 0.036,
+              };
+            } else if (parkingLots.length) {
+              const l = pk(parkingLots);
+              cand = { x: l.cx + (r() - 0.5) * 4, z: l.cz + (r() - 0.5) * 4, rot: r() * 6.28, sy: 0.138 };
+            } else {
+              const sp = streetPoint();
+              cand = { x: sp.x, z: sp.z, rot: r() * 6.28, sy: onBlock(sp.x, sp.z) ? 0.138 : 0.036 };
+            }
+            if (isClear(cand.x, cand.z, 2.8)) {
+              x = cand.x; z = cand.z; rot = cand.rot; sy = cand.sy; picked = true; break;
+            }
+          }
+          if (!picked) {
+            const s0 = pk(STREETS), along = pk(BLOCK_C);
+            x = s0; z = along; rot = (r() < 0.5 ? 0 : Math.PI); sy = 0.036;
+          }
+          const fp = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 8.6), M.footprint);
+          fp.rotation.x = -Math.PI / 2; fp.rotation.z = rot; fp.position.set(x, sy + 0.025, z);
+          W.evGroup.add(fp);
+          // low cracked-asphalt rim chips around the outer perimeter only (never covering the footprint)
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2 + (r() - 0.5) * 0.4;
+            const dist = 2.6 + r() * 1.4;
+            const sx = x + Math.cos(a) * (2.2 + r() * 0.8), sz = z + Math.sin(a) * dist;
+            const ch = 0.05 + r() * 0.07;
+            box(0.24 + r() * 0.36, ch, 0.22 + r() * 0.34, M.rubble, sx, sy + ch * 0.5, sz, {
+              ry: r() * 6.28, rx: (r() - 0.5) * 0.18, rz: (r() - 0.5) * 0.18, parent: W.evGroup, cast: false
+            });
+          }
+          W.evidence.push({ id: 'footprint', name: 'Giant footprint', pos: new THREE.Vector3(x, sy + 0.2, z), maxDist: 18, found: false, ground: true });
+        } else {
+          if (r() < 0.7 || !W.openLots.length) { const sp = streetPoint(); x = sp.x; z = sp.z; }
+          else { const l = pk(W.openLots); x = l.cx + (r() - 0.5) * 6; z = l.cz + (r() - 0.5) * 6; }
+          const fp = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 8), M.footprint);
+          fp.rotation.x = -Math.PI / 2; fp.rotation.z = rot; fp.position.set(x, 0.06, z);
+          W.evGroup.add(fp);
+          rubblePile(x, z, 3, 6, W.evGroup);
+          W.evidence.push({ id: 'footprint', name: 'Giant footprint', pos: new THREE.Vector3(x, 0.1, z), maxDist: 16, found: false, ground: true });
+        }
       }
       // 2. crushed police cruiser — somewhere on the streets
       {

@@ -309,21 +309,47 @@
     footprint(size) {
       const [c, g] = canvas(size);
       g.clearRect(0, 0, size, size);
-      const dark = 'rgba(8,6,5,0.88)';
-      g.fillStyle = dark;
-      // elongated, skeletal foot
-      g.beginPath(); g.ellipse(size * 0.5, size * 0.62, size * 0.13, size * 0.3, 0, 0, 7); g.fill();
-      for (let i = 0; i < 4; i++) {
+      // pulverized light-grey concrete/asphalt dust halo so dark print contrasts sharply against black roads
+      const halo = g.createRadialGradient(size * 0.5, size * 0.52, size * 0.12, size * 0.5, size * 0.52, size * 0.44);
+      halo.addColorStop(0, 'rgba(155,148,136,0.58)');
+      halo.addColorStop(0.68, 'rgba(130,124,114,0.34)');
+      halo.addColorStop(1, 'rgba(90,86,80,0)');
+      g.fillStyle = halo;
+      g.fillRect(0, 0, size, size);
+      // outer displaced rubble rim highlight around heel/sole
+      g.strokeStyle = 'rgba(175,168,154,0.72)';
+      g.lineWidth = Math.max(2, size * 0.016);
+      g.beginPath();
+      g.ellipse(size * 0.5, size * 0.62, size * 0.145, size * 0.315, 0, 0, 7);
+      g.stroke();
+      // pale fracture cracks radiating outward
+      g.strokeStyle = 'rgba(165,158,145,0.65)';
+      g.lineWidth = Math.max(1.5, size * 0.009);
+      for (let i = 0; i < 20; i++) {
+        const a = (i / 20) * Math.PI * 2 + (i % 2) * 0.11;
         g.beginPath();
-        const tx = size * (0.36 + i * 0.09), ty = size * (0.22 - Math.abs(i - 1.5) * 0.03);
-        g.ellipse(tx, ty, size * 0.035, size * 0.1, (i - 1.5) * 0.15, 0, 7); g.fill();
+        g.moveTo(size * 0.5 + Math.cos(a) * size * 0.14, size * 0.54 + Math.sin(a) * size * 0.28);
+        g.lineTo(size * 0.5 + Math.cos(a + 0.06) * size * 0.34, size * 0.54 + Math.sin(a + 0.06) * size * 0.45);
+        g.stroke();
       }
-      // cracked rim
-      g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 2;
-      for (let i = 0; i < 16; i++) {
-        const a = Math.random() * 6.28;
-        g.beginPath(); g.moveTo(size * 0.5 + Math.cos(a) * size * 0.15, size * 0.55 + Math.sin(a) * size * 0.3);
-        g.lineTo(size * 0.5 + Math.cos(a) * size * 0.32, size * 0.55 + Math.sin(a) * size * 0.45); g.stroke();
+      // deep crushed-in charcoal footprint (sole + 4 clawed toes)
+      g.fillStyle = 'rgba(6,5,5,0.96)';
+      g.beginPath(); g.ellipse(size * 0.5, size * 0.62, size * 0.13, size * 0.295, 0, 0, 7); g.fill();
+      for (let i = 0; i < 4; i++) {
+        const tx = size * (0.35 + i * 0.1), ty = size * (0.21 - Math.abs(i - 1.5) * 0.032);
+        const ang = (i - 1.5) * 0.16;
+        g.strokeStyle = 'rgba(175,168,154,0.68)';
+        g.lineWidth = Math.max(1.5, size * 0.012);
+        g.beginPath(); g.ellipse(tx, ty, size * 0.044, size * 0.108, ang, 0, 7); g.stroke();
+        g.fillStyle = 'rgba(6,5,5,0.96)';
+        g.beginPath(); g.ellipse(tx, ty, size * 0.038, size * 0.10, ang, 0, 7); g.fill();
+      }
+      // dark inner stress fractures
+      g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = Math.max(1.5, size * 0.008);
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2 + 0.2;
+        g.beginPath(); g.moveTo(size * 0.5 + Math.cos(a) * size * 0.14, size * 0.55 + Math.sin(a) * size * 0.28);
+        g.lineTo(size * 0.5 + Math.cos(a) * size * 0.30, size * 0.55 + Math.sin(a) * size * 0.42); g.stroke();
       }
       return c;
     },

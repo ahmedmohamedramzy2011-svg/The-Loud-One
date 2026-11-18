@@ -334,7 +334,8 @@
   }
 
   function syncVersionUI() {
-    const cur = S.gameVersion || '2.4.3';
+    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.4';
+    const cur = S.gameVersion || latest;
     const btn = $('version-btn');
     if (btn) btn.textContent = 'v' + cur;
     document.querySelectorAll('#updates .upd').forEach(u => {
@@ -345,7 +346,7 @@
       let sp = h3.querySelector('span');
       if (match) {
         if (!sp) { sp = document.createElement('span'); h3.appendChild(sp); }
-        sp.textContent = cur === '2.4.3' ? 'current' : 'playing';
+        sp.textContent = cur === latest ? 'current' : 'playing';
       } else if (sp) {
         sp.remove();
       }
@@ -356,7 +357,8 @@
     const list = $('version-list');
     if (!list || !LO.VERSIONS) return;
     list.innerHTML = '';
-    const cur = S.gameVersion || '2.4.3';
+    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.4';
+    const cur = S.gameVersion || latest;
     LO.VERSIONS.forEach((v, idx) => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -370,6 +372,7 @@
       b.append(top, era);
       b.onclick = () => {
         A.click(true);
+        LO.Settings.set('autoLatest', v.id === latest ? latest : 'pinned');
         LO.Settings.set('gameVersion', v.id);
         syncVersionUI();
         renderVersions();
@@ -525,7 +528,7 @@
   //  GAME FLOW
   // ============================================================
   function resetRun() {
-    if (worldDirty) buildWorld();
+    if (worldDirty || V().randomSheriff) buildWorld();
     world.placeEvidence();          // every game the evidence moves (except the sheriff's tape)
     titleSpot.intensity = 0; siren.root.visible = true; $('title-fade').style.opacity = 0;
     const showRocks = V().rocks;
@@ -1038,7 +1041,7 @@
     if (state === 'title' || state === 'gate') {
       updateTitle(dt);
     } else if (state === 'play') {
-      const adm = LO.admin;
+      const adm = LO.isTesting ? LO.admin : null;
       const frozenByPanel = !!(adm && adm.open && adm.freezeWhenOpen);
       const simDt = frozenByPanel ? 0 : dt * (adm && typeof adm.timeScale === 'number' ? adm.timeScale : 1);
       if (simDt > 0) {
@@ -1117,7 +1120,7 @@
         case 'audio': openPanel('audio', inPause ? 'pause' : 'title'); break;
         case 'updates': openPanel('updates', 'title'); break;
         case 'versions': openPanel('versions', 'title'); break;
-        case 'admin': LO.admin && LO.admin.openPanel(inPause ? 'pause' : 'title'); break;
+        case 'admin': if (LO.isTesting && LO.admin) LO.admin.openPanel(inPause ? 'pause' : 'title'); break;
         case 'back': closePanel(); break;
         case 'resume': resume(); break;
         case 'retry': startGame(true); break;
@@ -1125,7 +1128,7 @@
       }
     });
     window.addEventListener('keydown', e => {
-      if ((e.code === 'Backquote' || e.code === 'F9') && state !== 'gate') {
+      if (LO.isTesting && (e.code === 'Backquote' || e.code === 'F9') && state !== 'gate') {
         e.preventDefault();
         if (LO.admin) LO.admin.toggle(state);
         return;
@@ -1143,6 +1146,7 @@
   }
 
   function boot() {
+    document.body.classList.toggle('testing-build', !!LO.isTesting);
     // film grain image
     const grain = LO.tex.canvas('grainOverlay');
     $('grain').style.backgroundImage = `url(${grain.toDataURL()})`;
@@ -1235,7 +1239,7 @@
       setPlayEnabled: on => { if (player) player.enabled = !!on; },
       syncClock: () => { clock.getDelta(); },
     };
-    if (LO.admin && LO.admin.init) LO.admin.init();
+    if (LO.isTesting && LO.admin && LO.admin.init) LO.admin.init();
     // expose for debugging
     LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, startGame, startEnding, beginPlay };
   }

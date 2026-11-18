@@ -45,7 +45,7 @@
       'Creeps closer the longer your camera is up',
       'Lower your camera, use your flashlight to see',
     ] },
-    fastone: { name: 'THE FAST ONE', label: 'PHENOMENON-241', tips: [
+    fastone: { name: 'THE FAST ONE', label: 'PHENOMENON-242', tips: [
       'A gaunt, low hound that leaves red afterimages',
       'Smashes through the farthest perimeter fence',
       'If safety is far away, adrenaline lets you sprint twice as fast',

@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=57">
+<link rel="stylesheet" href="css/style.css?v=58">
 </head>
 <body>
 
@@ -43,9 +43,11 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.4.3</button>
-    <span class="ver-sep">&nbsp;·&nbsp; stay quiet &nbsp;·&nbsp;</span>
-    <button type="button" id="admin-footer-btn" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.4.4</button>
+    <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
+    <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
+    <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
+    <span class="testing-badge admin-only">TESTING</span>
   </div>
 </div>
 
@@ -84,7 +86,7 @@
         <tr><td>E</td><td>Hide / leave hiding spot</td></tr>
         <tr><td>G</td><td>Throw a rock</td></tr>
         <tr><td>H</td><td>Hint (after 3 minutes without new evidence)</td></tr>
-        <tr><td>` / F9</td><td>Admin testing panel</td></tr>
+        <tr class="admin-only"><td>` / F9</td><td>Admin testing panel</td></tr>
         <tr><td>Esc</td><td>Pause</td></tr>
       </table>
     </div>
@@ -99,7 +101,12 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.4.3"><h3>v2.4.3 <span>current</span></h3><ul>
+      <div class="upd" data-ver="2.4.4"><h3>v2.4.4 <span>current</span></h3><ul>
+        <li>Fixed the Giant Footprint evidence spawning hidden under sidewalks, park props, and heavy brick rubble; added high-contrast concrete dust &amp; radiating fractures around the print</li>
+        <li>Added a mandatory 1-minute cooldown after The Fast One (Phenomenon-242) finishes an attack before its random spawn timer begins counting down again</li>
+        <li>Sheriff&#39;s Station now spawns at a randomized city lot location on every new run</li>
+      </ul></div>
+      <div class="upd" data-ver="2.4.3"><h3>v2.4.3</h3><ul>
         <li>Added a 2.5-second fence breach telegraph delay (shattering planks, roar &amp; dust cloud) before The Fast One begins its 6-second pursuit</li>
         <li>Raised Adrenaline trigger threshold from &gt;7s to &gt;10.5s away (using normal sprint speed distance to closest cover) while keeping blue hiding-spot highlights always active</li>
         <li>Added a 75-second Adrenaline cooldown plus a 5-second Exhausted / Winded penalty (3s paused stamina regen, 2s half-speed regen &amp; heavy panting) after sprint end or hiding</li>
@@ -109,7 +116,7 @@
       <div class="upd" data-ver="2.4.2"><h3>v2.4.2</h3><ul>
         <li>Added version switcher — click the version label at the bottom left of the title screen to play older versions</li>
         <li>Added mechanic doodles and handwritten notes to every entity sketch in the death screen notebook</li>
-        <li>Upgraded Phenomenon-241's CRT TV survival tape with the locker rear-up &amp; slam animation</li>
+        <li>Upgraded Phenomenon-242's CRT TV survival tape with the locker rear-up &amp; slam animation</li>
         <li>Fixed mobile touch scrolling in panels and replaced bottom Back buttons with top-right X buttons</li>
       </ul></div>
       <div class="upd" data-ver="2.4.1"><h3>v2.4.1</h3><ul>
@@ -118,7 +125,7 @@
         <li>Removed floating planks bug</li>
       </ul></div>
       <div class="upd" data-ver="2.4"><h3>v2.4</h3><ul>
-        <li>New entity: The Fast One (Phenomenon-241)</li>
+        <li>New entity: The Fast One (Phenomenon-242)</li>
         <li>Fence breach splinters, fading afterimage trail, blue-lit closest hiding spot &amp; adrenaline surge</li>
         <li>Fixed The Sneaky One's death screen trigger</li>
         <li>Buffed The Silent One to 10 damage per tick and lowered Tenant blind battery cost to 90%</li>
@@ -316,7 +323,7 @@
       <button data-action="resume">RESUME</button>
       <button data-action="graphics">GRAPHICS</button>
       <button data-action="audio">AUDIO &amp; CONTROLS</button>
-      <button data-action="admin">ADMIN PANEL</button>
+      <button data-action="admin" class="admin-only">ADMIN PANEL</button>
       <button data-action="quit">QUIT TO TITLE</button>
     </nav>
   </div>
@@ -356,12 +363,12 @@
 </div>
 
 <!-- Admin / Testing Panel -->
-<div id="admin-panel" class="screen panel-screen">
+<div id="admin-panel" class="screen panel-screen admin-only">
   <div class="panel adm-panel">
     <div class="panel-head adm-head">
       <div>
         <h2>ADMIN PANEL</h2>
-        <div class="adm-sub">Testing &amp; debug tools &nbsp;·&nbsp; Press ` or F9 anytime</div>
+        <div class="adm-sub">Testing build (/testing) &nbsp;·&nbsp; Press ` or F9 anytime</div>
       </div>
       <div class="adm-head-ctrls">
         <button type="button" id="adm-freeze-btn" class="adm-chip on">FREEZE WHEN OPEN: ON</button>
@@ -383,22 +390,22 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=54"></script>
+<script src="js/settings.js?v=59"></script>
 <script src="audio/sounds.js?v=25"></script>
 <script src="audio/voice.js?v=16"></script>
 <script src="js/audio.js?v=51"></script>
-<script src="js/textures.js?v=50"></script>
-<script src="js/world.js?v=54"></script>
+<script src="js/textures.js?v=59"></script>
+<script src="js/world.js?v=59"></script>
 <script src="js/sirenhead.js?v=57"></script>
 <script src="js/player.js?v=57"></script>
 <script src="js/moths.js?v=57"></script>
-<script src="js/deathroom.js?v=53"></script>
+<script src="js/deathroom.js?v=58"></script>
 <script src="js/sneaky.js?v=57"></script>
-<script src="js/fastone.js?v=57"></script>
+<script src="js/fastone.js?v=59"></script>
 <script src="js/cutscenes.js?v=50"></script>
 <script src="js/tvfx.js?v=52"></script>
-<script src="js/admin.js?v=57"></script>
-<script src="js/main.js?v=57"></script>
+<script src="js/admin.js?v=59"></script>
+<script src="js/main.js?v=59"></script>
 <script src="js/touch.js?v=50"></script>
 </body>
 </html>

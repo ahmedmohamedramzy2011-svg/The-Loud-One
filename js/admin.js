@@ -262,6 +262,7 @@
 
   // ---------------- Open / Close Panel ----------------
   admin.openPanel = function (from) {
+    if (!LO.isTesting) return;
     const H = host();
     if (!H) return;
     if (admin.open) return;
@@ -303,6 +304,7 @@
   };
 
   admin.toggle = function (currentState) {
+    if (!LO.isTesting) return;
     if (admin.open) {
       admin.closePanel();
       return;
@@ -375,8 +377,9 @@
         if (!ensurePlayContext() || !fastone) return;
         if (fastone.state !== 'idle') fastone.finishEncounter();
         LO.ambush.active = null; LO.ambush.gapUntil = 0;
+        fastone.cooldown = 0;
         fastone.timer = 3;
-        setStatus('Fast One timer set to 3s.');
+        setStatus('Fast One cooldown cleared & timer set to 3s.');
         break;
 
       // ---- Sneaky One ----
@@ -825,7 +828,7 @@
     }
 
     if (admin.activeTab === 'entities') {
-      body.appendChild(group('THE FAST ONE (PHENOMENON-241)', [
+      body.appendChild(group('THE FAST ONE (PHENOMENON-242)', [
         btn('Spawn Breach Now', 'fo-spawn', null, 'danger'),
         btn('Skip Telegraph -> Chase', 'fo-chase'),
         btn('Force Distant Exit', 'fo-exit'),
@@ -1024,7 +1027,13 @@
     const shState = siren ? siren.state.toUpperCase() : '-';
     const shDist = siren && siren.distToPlayer !== undefined ? Math.round(siren.distToPlayer) + 'm' : '-';
     const shAnger = siren ? Math.round(siren.anger) + '%' : '0%';
-    const foTxt = fastone ? (fastone.state === 'idle' ? `${Math.max(0, Math.ceil(fastone.timer))}s` : fastone.state.toUpperCase()) : '-';
+    const foTxt = fastone
+      ? (fastone.state === 'idle'
+          ? (fastone.cooldown > 0
+              ? `CD ${Math.ceil(fastone.cooldown)}s+${Math.max(0, Math.ceil(fastone.timer))}s`
+              : `${Math.max(0, Math.ceil(fastone.timer))}s`)
+          : fastone.state.toUpperCase())
+      : '-';
     const snTxt = sneaky ? (sneaky.attacking ? 'ATTACK' : `${Math.max(0, Math.ceil(sneaky.timer))}s`) : '-';
     const brokenFences = world && world.fences ? world.fences.filter(f => f.broken).length : 0;
     const smashedBldgs = world && world.buildings ? world.buildings.filter(b => b.smashed).length : 0;
@@ -1040,6 +1049,7 @@
   }
 
   admin.update = function (dt) {
+    if (!LO.isTesting) return;
     syncDebugVisuals();
     if (!admin.open) return;
     uiAccum += dt;
@@ -1050,6 +1060,7 @@
   };
 
   admin.init = function () {
+    if (!LO.isTesting) return;
     const closeBtn = $('adm-close');
     if (closeBtn) closeBtn.onclick = () => { LO.audio && LO.audio.click(true); admin.closePanel(); };
 

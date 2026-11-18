@@ -1,5 +1,5 @@
 // ============================================================
-//  THE LOUD ONE — The Fast One (Phenomenon-241)
+//  THE LOUD ONE — The Fast One (Phenomenon-242)
 //  A low quadrupedal hound that smashes through the farthest
 //  perimeter fence on a 30s-3m timer (with a mandatory 10-20s
 //  gap from The Sneaky One, pausing when hiding or when Siren
@@ -11,6 +11,7 @@
 (function () {
   const V3 = THREE.Vector3;
   const MIN_T = 30, MAX_T = 180;
+  const COOLDOWN_T = 60;
   const BREACH_DELAY = 2.5;
   const KILL_TIME = 6.0;
   const ADRENALINE_TIME_THRESHOLD = 10.5;
@@ -585,6 +586,7 @@
   // ---------------- reset ----------------
   FastOne.prototype.reset = function () {
     this.state = 'idle';          // idle | telegraph | chase | slam | exit
+    this.cooldown = 0;
     this.timer = nextTime();
     this.telegraphT = 0;
     this.chaseT = 0;
@@ -727,6 +729,7 @@
     if (!player) return false;
     if (this.state !== 'idle') this.finishEncounter();
     if (LO.ambush) { LO.ambush.active = null; LO.ambush.gapUntil = 0; }
+    this.cooldown = 0;
     this.timer = 0;
     this.spawnBreach(player, time || 0);
     return true;
@@ -751,6 +754,10 @@
 
     if (this.state === 'idle') {
       this.updateAfterimages(dt, false);
+      if (this.cooldown > 0) {
+        this.cooldown = Math.max(0, this.cooldown - dt);
+        return;
+      }
       const hearFlash = LO.NOISE.flashlight * 1.3 * (player.indoor ? 0.6 : 1);
       const sirenNear = siren && siren.distToPlayer !== undefined && siren.distToPlayer < hearFlash + 4;
       // spawn timer pauses when hiding or when Siren Head is close
@@ -838,6 +845,7 @@
           LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;
         }
         this.state = 'idle';
+        this.cooldown = (!LO.ver || LO.ver().fastoneCooldown) ? COOLDOWN_T : 0;
         this.timer = nextTime();
         return 'kill';
       }
@@ -994,6 +1002,7 @@
     this.clones.forEach(c => { c.g.visible = false; });
     this.trail = [];
     this.trailFade = 0;
+    this.cooldown = (!LO.ver || LO.ver().fastoneCooldown) ? COOLDOWN_T : 0;
     this.timer = nextTime();
     if (LO.ambush.active === 'fastone') {
       LO.ambush.active = null;
