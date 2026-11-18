@@ -387,11 +387,14 @@
   };
 
   FastOne.prototype.breachFence = function (fence, dir) {
-    if (fence && !fence.broken) {
+    const pos = fence ? fence.pos : this.pos;
+    if (this.world && this.world.smashFence) {
+      this.world.smashFence(fence, pos, dir);
+    } else if (fence && !fence.broken) {
       fence.broken = true;
       fence.mesh.visible = false;
+      if (fence.collider) fence.collider.disabled = true;
     }
-    const pos = fence ? fence.pos : this.pos;
     this.spawnSplinters(pos, dir);
     if (!LO.ver || LO.ver().fastoneV2) this.spawnDustCloud(pos, dir);
     LO.audio.fenceSmash(pos);

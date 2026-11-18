@@ -656,13 +656,21 @@
         }
       }
     }
-    // break through perimeter fences if touched
+    // break through perimeter fences if touched (leaving persistent scattered wood planks)
     if (W.fences) {
       for (let i = 0; i < W.fences.length; i++) {
         const f = W.fences[i];
-        if (!f.broken && Math.hypot(f.pos.x - this.pos.x, f.pos.z - this.pos.z) < 2.8) {
-          f.broken = true;
-          f.mesh.visible = false;
+        if (f.broken) continue;
+        const dx = Math.abs(this.pos.x - f.pos.x), dz = Math.abs(this.pos.z - f.pos.z);
+        const hit = f.axis === 'z' ? (dx < 1.8 && dz < 3.15) : (dz < 1.8 && dx < 3.15);
+        if (hit) {
+          const dir = { x: Math.sin(this.yaw), z: Math.cos(this.yaw) };
+          if (W.smashFence) W.smashFence(f, this.pos, dir);
+          else {
+            f.broken = true;
+            f.mesh.visible = false;
+            if (f.collider) f.collider.disabled = true;
+          }
           LO.audio.fenceSmash && LO.audio.fenceSmash(f.pos);
         }
       }

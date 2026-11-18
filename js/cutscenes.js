@@ -52,10 +52,47 @@
     let engine = A.engine();
     ctx.cleanup.push(() => { if (engine) { engine.stop(); engine = null; } });
 
-    // car z as a function of time
+    // stand barricades intact before the car drives in, then leave them rammed afterward
+    W.setBarricadesIntact && W.setBarricadesIntact();
+    const cutDebris = new THREE.Group();
+    W.root.add(cutDebris);
+    const barShards = [];
+    let rammed = false, ramClock = 0;
+    ctx.cleanup.push(() => {
+      cutDebris.parent && cutDebris.parent.remove(cutDebris);
+      W.setBarricadesRammed && W.setBarricadesRammed();
+    });
+
+    function triggerBarricadeRam(impactZ) {
+      rammed = true;
+      ramClock = 0;
+      A.fenceSmash && A.fenceSmash({ x: carStop.x, y: 0.7, z: impactZ });
+      A.boom && A.boom(0.65);
+      ctx.shake(0.85);
+      // spawn flying striped planks & wooden barricade splinters over/beside the hood
+      const plankGeo = new THREE.BoxGeometry(1.15, 0.06, 0.24);
+      for (let i = 0; i < 16; i++) {
+        const m = new THREE.Mesh(plankGeo, i % 2 === 0 ? W.M.barricade : W.M.wood);
+        m.position.set(carStop.x + (Math.random() - 0.5) * 4.2, 0.55 + Math.random() * 0.7, impactZ + (Math.random() - 0.5) * 1.4);
+        m.scale.set(0.45 + Math.random() * 0.85, 0.8 + Math.random() * 0.6, 0.6 + Math.random() * 0.7);
+        cutDebris.add(m);
+        barShards.push({
+          mesh: m,
+          vx: (Math.random() - 0.5) * 11 + (i % 2 ? -2.2 : 2.2),
+          vy: 3.5 + Math.random() * 6.5,
+          vz: 8 + Math.random() * 14,
+          rx: (Math.random() - 0.5) * 13,
+          ry: (Math.random() - 0.5) * 13,
+          rz: (Math.random() - 0.5) * 13,
+        });
+      }
+    }
+
+    // car z as a function of time (decelerates smoothly after plowing through -114)
     function carZ(t) {
       if (t < 21) return -480 + t * 16;
-      const k = ease(clamp01((t - 21) / 8));
+      const u = clamp01((t - 21) / 8);
+      const k = 1 - Math.pow(1 - u, 2.4);
       return lerp(-144, carStop.z, k);
     }
     const look = new V3();
@@ -89,6 +126,37 @@
       const t = warp(T);
       const z = carZ(t);
       car.position.set(carStop.x, 0, z);
+      const barLine = -(W.HALF + 4);
+      if (!rammed && z + 2.2 >= barLine) {
+        triggerBarricadeRam(barLine);
+      }
+      if (rammed && W.barricades) {
+        ramClock += dt;
+        const rk = ease(clamp01(ramClock / 0.85));
+        W.barricades.forEach(b => {
+          b.group.position.lerpVectors(b.basePos, b.ramPos, rk);
+          b.group.rotation.set(
+            lerp(b.baseRot.x, b.ramRot.x, rk),
+            lerp(b.baseRot.y, b.ramRot.y, rk),
+            lerp(b.baseRot.z, b.ramRot.z, rk)
+          );
+        });
+        for (let i = 0; i < barShards.length; i++) {
+          const s = barShards[i];
+          s.vy -= 18 * dt;
+          s.mesh.position.x += s.vx * dt;
+          s.mesh.position.y += s.vy * dt;
+          s.mesh.position.z += s.vz * dt;
+          if (s.mesh.position.y <= 0.04) {
+            s.mesh.position.y = 0.04;
+            s.vy *= -0.22; s.vx *= 0.55; s.vz *= 0.55;
+            s.rx *= 0.3; s.ry *= 0.3; s.rz *= 0.3;
+          }
+          s.mesh.rotation.x += s.rx * dt;
+          s.mesh.rotation.y += s.ry * dt;
+          s.mesh.rotation.z += s.rz * dt;
+        }
+      }
       if (engine) engine.set(t < 29 ? 0.35 : Math.max(0, 0.35 - (t - 29) * 0.15), t < 21 ? 1 : Math.max(0.2, 1 - (t - 21) / 8));
       if (t > 31 && engine) { engine.stop(); engine = null; }
       siren.update(dt, null, 0);
@@ -104,15 +172,19 @@
         camera.position.set(-14, 1.6, -147);
         look.set(lerp(-8, carStop.x, clamp01((t - 15) / 6)), 1.5, Math.max(-150, z));
         if (t < 18) look.set(-8, 2.4, -150);
-      } else if (t < 29) {               // driver's POV toward the town
+      } else if (t < 29) {               // driver's POV toward the roadblock & town
         camera.position.set(carStop.x - 0.4, 1.25, z + 0.4);
-        look.set(carStop.x - 0.2 + Math.sin(t) * 0.1, 3 + (t < 26 ? 2 : 0), z + 60);
-        if (t < 26) look.set(0, 9, 40);
+        const dip = Math.sin(clamp01((t - 23.4) / 2.2) * Math.PI);
+        const ly = t < 26.2 ? lerp(9, 4.2, dip) : 3;
+        const lx = t < 26.2 ? lerp(0, carStop.x * 0.4, dip) : carStop.x - 0.2 + Math.sin(t) * 0.1;
+        const lz = t < 26.2 ? 40 : z + 60;
+        look.set(lx, ly, lz);
       } else {                           // parked, outside the car
         const k = clamp01((t - 29) / 7);
         camera.position.set(carStop.x + 4 + k * 1.5, 1.7, carStop.z - 2 - k * 2);
         look.set(carStop.x + 0.5, 1.2, carStop.z + 6);
       }
+      ctx.applyShake(look);
       camera.lookAt(look);
       camera.updateMatrixWorld();
     }, () => {

@@ -27,11 +27,12 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.4.4',
-    autoLatest: '2.4.4',
+    gameVersion: '2.4.5',
+    autoLatest: '2.4.5',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.4.5', label: 'v2.4.5', era: 'Remodeled roadblock barricades + intro ramming, crisp 2:1 highway sign text, perimeter wooden fence collision & persistent smashed fence wood' },
     { id: '2.4.4', label: 'v2.4.4', era: 'Visible giant footprint crater, 1m Fast One post-attack cooldown before random timer, randomized Sheriff\'s Station' },
     { id: '2.4.3', label: 'v2.4.3', era: '2.5s breach telegraph, >10.5s Adrenaline w/ 75s cooldown & winded penalty, Siren breach distractions, extra exterior dumpsters' },
     { id: '2.4.2', label: 'v2.4.2', era: 'Version selector, full notebook notes, CRT locker-slam tape, mobile scrolling UI' },
@@ -101,7 +102,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

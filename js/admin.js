@@ -706,12 +706,17 @@
 
       case 'w-repair-fences':
         if (!ensurePlayContext() || !world || !world.fences) return;
-        world.fences.forEach(f => {
-          f.broken = false;
-          f.mesh.visible = true;
-          f.mesh.position.copy(f.basePos);
-          f.mesh.rotation.copy(f.baseRot);
-        });
+        if (world.repairFences) {
+          world.repairFences();
+        } else {
+          world.fences.forEach(f => {
+            f.broken = false;
+            f.mesh.visible = true;
+            f.mesh.position.copy(f.basePos);
+            f.mesh.rotation.copy(f.baseRot);
+            if (f.collider) f.collider.disabled = false;
+          });
+        }
         setStatus('All perimeter fences repaired.');
         break;
       case 'w-smash-bldg': {

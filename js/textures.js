@@ -233,23 +233,141 @@
       for (let i = 0; i < 4; i++) g.fillRect(size * 0.49, i * size / 4 + size / 16, size * 0.02, size / 8);
       return c;
     },
-    sign(size) {
-      const [c, g] = canvas(size);
-      g.fillStyle = '#1f4a2a'; g.fillRect(0, 0, size, size / 2);
-      g.strokeStyle = '#ddd'; g.lineWidth = size / 64; g.strokeRect(size / 32, size / 32, size - size / 16, size / 2 - size / 16);
-      g.fillStyle = '#e8e8e0'; g.textAlign = 'center';
-      g.font = `bold ${size / 9}px Arial, sans-serif`;
-      g.fillText('WELCOME TO', size / 2, size * 0.14);
-      g.font = `bold ${size / 6}px Arial, sans-serif`;
-      g.fillText('HOLLOW CREEK', size / 2, size * 0.3);
-      g.font = `${size / 12}px Arial, sans-serif`;
-      g.fillText('POP. 2,140', size / 2, size * 0.43);
-      g.strokeStyle = '#b11'; g.lineWidth = size / 50;
-      g.beginPath(); g.moveTo(size * 0.3, size * 0.41); g.lineTo(size * 0.7, size * 0.41); g.stroke();
-      g.fillStyle = '#c22'; g.font = `bold ${size / 11}px "Special Elite", Courier, monospace`;
-      g.save(); g.translate(size * 0.8, size * 0.44); g.rotate(-0.1); g.fillText('0', 0, 0); g.restore();
-      // lower half transparent-ish dirt
-      g.fillStyle = '#222'; g.fillRect(0, size / 2, size, size / 2);
+    sign(size, r) {
+      const c = document.createElement('canvas');
+      c.width = size * 2;
+      c.height = size;
+      const g = c.getContext('2d');
+      const W = c.width, H = c.height;
+
+      // weathered reflective highway green background
+      const bg = g.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#1f4f2f');
+      bg.addColorStop(1, '#14361f');
+      g.fillStyle = bg;
+      g.fillRect(0, 0, W, H);
+      speckle(g, Math.min(W, H), r, Math.min(W, H) * 8, 0.14, false);
+      // vertical rain grime streaks
+      for (let i = 0; i < 18; i++) {
+        const x = r() * W, rw = 2 + r() * 6, rh = H * (0.2 + r() * 0.5);
+        const sg = g.createLinearGradient(0, 0, 0, rh);
+        sg.addColorStop(0, 'rgba(10,14,10,0.32)');
+        sg.addColorStop(1, 'rgba(10,14,10,0)');
+        g.fillStyle = sg;
+        g.fillRect(x, 0, rw, rh);
+      }
+
+      // reflective white highway border + subtle corner rivets
+      const pad = Math.round(H * 0.055);
+      g.strokeStyle = '#d8ddd2';
+      g.lineWidth = Math.max(4, H * 0.032);
+      g.strokeRect(pad, pad, W - pad * 2, H - pad * 2);
+      g.fillStyle = '#8b9288';
+      [[pad * 1.6, pad * 1.6], [W - pad * 1.6, pad * 1.6], [pad * 1.6, H - pad * 1.6], [W - pad * 1.6, H - pad * 1.6]].forEach(([bx, by]) => {
+        g.beginPath(); g.arc(bx, by, Math.max(3, H * 0.015), 0, Math.PI * 2); g.fill();
+      });
+
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.shadowColor = 'rgba(0,0,0,0.45)';
+      g.shadowBlur = Math.max(2, H * 0.015);
+      g.shadowOffsetY = Math.max(2, H * 0.01);
+
+      // crisp hierarchy comfortably inside border margins
+      g.fillStyle = '#e6eae0';
+      g.font = `bold ${Math.round(H * 0.135)}px Arial, sans-serif`;
+      g.fillText('WELCOME TO', W * 0.5, H * 0.24, W * 0.78);
+
+      g.fillStyle = '#f2f5ec';
+      g.font = `bold ${Math.round(H * 0.245)}px Arial, sans-serif`;
+      g.fillText('HOLLOW CREEK', W * 0.5, H * 0.51, W * 0.82);
+
+      // divider bar
+      g.shadowColor = 'transparent';
+      g.fillStyle = 'rgba(220,226,214,0.45)';
+      g.fillRect(W * 0.14, H * 0.67, W * 0.72, Math.max(2, H * 0.008));
+
+      // population line + clean red slash & replacement "0"
+      g.fillStyle = '#d8ded2';
+      g.font = `bold ${Math.round(H * 0.125)}px Arial, sans-serif`;
+      g.fillText('POP. 2,140', W * 0.43, H * 0.81, W * 0.52);
+
+      g.strokeStyle = '#c8241e';
+      g.lineWidth = Math.max(4, H * 0.028);
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(W * 0.42, H * 0.835);
+      g.lineTo(W * 0.57, H * 0.785);
+      g.stroke();
+
+      g.fillStyle = '#d92820';
+      g.font = `bold ${Math.round(H * 0.165)}px "Special Elite", Courier, monospace`;
+      g.save();
+      g.translate(W * 0.65, H * 0.815);
+      g.rotate(-0.08);
+      g.fillText('0', 0, 0);
+      g.restore();
+
+      return c;
+    },
+    barricade(size, r) {
+      const c = document.createElement('canvas');
+      c.width = size;
+      c.height = Math.max(64, Math.round(size * 0.25));
+      const g = c.getContext('2d');
+      const W = c.width, H = c.height;
+      g.fillStyle = '#dad4c4';
+      g.fillRect(0, 0, W, H);
+      // 45-degree orange highway chevron stripes
+      g.fillStyle = '#cf5c18';
+      const step = H * 1.15;
+      for (let x = -H * 2; x < W + H * 2; x += step) {
+        g.beginPath();
+        g.moveTo(x, H);
+        g.lineTo(x + step * 0.5, H);
+        g.lineTo(x + step * 0.5 + H, 0);
+        g.lineTo(x + H, 0);
+        g.closePath();
+        g.fill();
+      }
+      // top/bottom dark metal rail trim & mud splatter
+      g.fillStyle = 'rgba(25,22,18,0.65)';
+      g.fillRect(0, 0, W, Math.max(2, H * 0.07));
+      g.fillRect(0, H - Math.max(2, H * 0.07), W, Math.max(2, H * 0.07));
+      for (let i = 0; i < 16; i++) {
+        g.fillStyle = `rgba(38,30,22,${0.18 + r() * 0.3})`;
+        g.beginPath();
+        g.ellipse(r() * W, r() * H, 4 + r() * (H * 0.22), 2 + r() * (H * 0.12), r() * 3, 0, 7);
+        g.fill();
+      }
+      return c;
+    },
+    roadClosed(size, r) {
+      const c = document.createElement('canvas');
+      c.width = size;
+      c.height = Math.max(64, Math.round(size * 0.35));
+      const g = c.getContext('2d');
+      const W = c.width, H = c.height;
+      g.fillStyle = '#e2dcd0';
+      g.fillRect(0, 0, W, H);
+      const b = Math.max(3, Math.round(H * 0.08));
+      g.strokeStyle = '#1d1c1a';
+      g.lineWidth = b;
+      g.strokeRect(b, b, W - b * 2, H - b * 2);
+      g.fillStyle = '#b4221a';
+      g.fillRect(b * 2, b * 2, W - b * 4, H * 0.42);
+      g.fillStyle = '#f2eee6';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.font = `bold ${Math.round(H * 0.24)}px Arial, sans-serif`;
+      g.fillText('ROAD CLOSED', W * 0.5, b * 2 + H * 0.21, W * 0.84);
+      g.fillStyle = '#1b1a18';
+      g.font = `bold ${Math.round(H * 0.19)}px Arial, sans-serif`;
+      g.fillText('LOCAL TRAFFIC ONLY', W * 0.5, H * 0.77, W * 0.84);
+      for (let i = 0; i < 8; i++) {
+        g.fillStyle = `rgba(30,26,20,${0.12 + r() * 0.2})`;
+        g.fillRect(r() * W, r() * H, 4 + r() * 14, 2 + r() * 8);
+      }
       return c;
     },
     cctv(size, r) {

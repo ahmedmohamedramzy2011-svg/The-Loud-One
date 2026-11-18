@@ -334,7 +334,7 @@
   }
 
   function syncVersionUI() {
-    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.4';
+    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.5';
     const cur = S.gameVersion || latest;
     const btn = $('version-btn');
     if (btn) btn.textContent = 'v' + cur;
@@ -357,7 +357,7 @@
     const list = $('version-list');
     if (!list || !LO.VERSIONS) return;
     list.innerHTML = '';
-    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.4';
+    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.5';
     const cur = S.gameVersion || latest;
     LO.VERSIONS.forEach((v, idx) => {
       const b = document.createElement('button');
@@ -591,6 +591,7 @@
     A.silenceWorld(false);
     A.stopVoices();
     hideAllScreens();
+    if (world.setBarricadesRammed) world.setBarricadesRammed();
     if (!parkedCar) {
       const c = world.playerCarPos;
       parkedCar = world.car(c.x, c.z, 0, { paint: world.mat({ color: 0x23384f, roughness: 0.4, metalness: 0.4 }) });

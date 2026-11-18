@@ -50,8 +50,11 @@
       enterables: [], closedFronts: [], openLots: [], fixedEvidence: [],
       evColliders: [], evOccluders: [], buildings: [], flyingDebris: [],
       debrisGroup: new THREE.Group(),
+      fenceDebrisGroup: new THREE.Group(),
+      barricades: [],
     };
     W.root.add(W.debrisGroup);
+    W.root.add(W.fenceDebrisGroup);
     scene.add(W.root);
     let curB = null;
 
@@ -112,6 +115,11 @@
       warning: mat({ map: T('warning') }),
       poster: mat({ map: T('poster', { size: 128 }) }),
       sign: mat({ map: T('sign', { size: 512 }) }),
+      barricade: mat({ map: T('barricade', { size: 512 }), roughness: 0.72, metalness: 0.08 }),
+      roadClosed: mat({ map: T('roadClosed', { size: 256 }), roughness: 0.68, metalness: 0.05 }),
+      coneOrange: mat({ color: 0xd95516, roughness: 0.55, metalness: 0.05 }),
+      coneReflect: mat({ color: 0xe6e4dc, roughness: 0.4, metalness: 0.1 }),
+      amberBeacon: new THREE.MeshBasicMaterial({ color: 0xff9b28 }),
       water: mat({ map: T('metal', { color: '#5a6066' }), roughness: 0.5, metalness: 0.5 }),
       footprint: new THREE.MeshLambertMaterial({ map: T('footprint', { size: 256 }), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
     };
@@ -1386,32 +1394,153 @@
         p.position.set(px, 0, pz);
         p.rotation.y = r;
         add(p);
+        const col = r
+          ? collider(px - 0.18, px + 0.18, pz - 3.0, pz + 3.0, 2.4)
+          : collider(px - 3.0, px + 3.0, pz - 0.18, pz + 0.18, 2.4);
         W.fences.push({
           mesh: p,
           pos: new THREE.Vector3(px, 1.1, pz),
           basePos: p.position.clone(),
           baseRot: p.rotation.clone(),
+          axis: r ? 'z' : 'x',
+          collider: col,
           broken: false,
         });
       }
     });
-    // corner & entrance end-posts so every fence run terminates cleanly on a post
+    // corner & entrance end-posts so every fence run terminates cleanly on a solid post
     [[-E + 0.5, -E + 0.5], [E - 0.5, -E + 0.5], [-E + 0.5, E - 0.5], [E - 0.5, E - 0.5], [-8, -E + 0.5], [4, -E + 0.5]].forEach(([ex, ez]) => {
       decoBox(M.trim, 0.20, 2.38, 0.20, ex, 1.19, ez);
       decoBox(M.trim, 0.24, 0.08, 0.24, ex, 2.41, ez);
+      collider(ex - 0.16, ex + 0.16, ez - 0.16, ez + 0.16, 2.4);
     });
-    // road block at the entrance (behind the player's car)
-    for (let i = -1; i <= 1; i++) {
-      const b = box(1.6, 0.9, 0.4, mat({ color: 0xc8c0a0 }), i * 2, 0.45, -E - 1, { collide: true });
-      void b;
+    // remodeled Type-III municipal / police roadblock barricades at entrance road (z = -E - 1)
+    {
+      const barRoot = new THREE.Group();
+      W.root.add(barRoot);
+      const rammedDebris = new THREE.Group();
+      barRoot.add(rammedDebris);
+      const plankGeo = new THREE.BoxGeometry(2.36, 0.26, 0.055);
+      const postGeo = new THREE.BoxGeometry(0.065, 1.24, 0.065);
+      const skidGeo = new THREE.BoxGeometry(0.08, 0.06, 1.08);
+      const strutGeo = new THREE.BoxGeometry(0.05, 0.92, 0.05);
+      const braceGeo = new THREE.BoxGeometry(2.05, 0.05, 0.05);
+      const placardGeo = new THREE.BoxGeometry(1.18, 0.34, 0.032);
+      const placardMats = [M.dark, M.dark, M.dark, M.dark, M.roadClosed, M.roadClosed];
+      const coneGeo = new THREE.CylinderGeometry(0.05, 0.18, 0.58, 10);
+      const coneBaseGeo = new THREE.BoxGeometry(0.38, 0.04, 0.38);
+      const coneRingGeo = new THREE.CylinderGeometry(0.095, 0.125, 0.13, 10);
+
+      const barSpecs = [
+        { x: -4.4, z: -E - 1, ry: 0.06, hit: true,  ramPos: [-5.65, 0.06, -E + 1.4], ramRot: [-1.42, 0.55, 0.22] },
+        { x: -1.6, z: -E - 1, ry: -0.04, hit: true, ramPos: [-0.35, 0.06, -E + 1.9], ramRot: [-1.48, -0.78, -0.18] },
+        { x:  1.4, z: -E - 1, ry: 0.05, hit: false, ramPos: [ 1.65, 0.0,  -E - 0.85], ramRot: [0, 0.22, 0] },
+        { x:  4.3, z: -E - 1, ry: -0.07, hit: false, ramPos: [ 4.35, 0.0,  -E - 1.05], ramRot: [0, -0.12, 0] },
+      ];
+      barSpecs.forEach((sp, idx) => {
+        const g = new THREE.Group();
+        // twin galvanized skids & A-frame steel legs
+        [-0.96, 0.96].forEach(lx => {
+          const sk = new THREE.Mesh(skidGeo, M.iron); sk.position.set(lx, 0.03, 0); g.add(sk);
+          const up = new THREE.Mesh(postGeo, M.iron); up.position.set(lx, 0.64, -0.03); g.add(up);
+          const st = new THREE.Mesh(strutGeo, M.iron); st.position.set(lx, 0.44, 0.26); st.rotation.x = -0.48; g.add(st);
+          const stB = new THREE.Mesh(strutGeo, M.iron); stB.position.set(lx, 0.44, -0.26); stB.rotation.x = 0.48; g.add(stB);
+        });
+        const br = new THREE.Mesh(braceGeo, M.iron); br.position.set(0, 0.22, -0.03); g.add(br);
+        // twin reflective hazard rails + ROAD CLOSED sign plate
+        const rTop = new THREE.Mesh(plankGeo, M.barricade); rTop.position.set(0, 1.06, 0.02); g.add(rTop);
+        const rLow = new THREE.Mesh(plankGeo, M.barricade); rLow.position.set(0, 0.62, 0.02); g.add(rLow);
+        const signPl = new THREE.Mesh(placardGeo, placardMats); signPl.position.set(0, 0.86, 0.06); g.add(signPl);
+        // top amber barricade warning lamp on outer post
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.1), M.dark);
+        housing.position.set(idx < 2 ? -0.96 : 0.96, 1.32, 0); g.add(housing);
+        const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.07, 8), M.amberBeacon);
+        lens.rotation.x = Math.PI / 2; lens.position.set(idx < 2 ? -0.96 : 0.96, 1.32, 0); g.add(lens);
+
+        if (shadows) g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        barRoot.add(g);
+        W.barricades.push({
+          group: g,
+          hit: sp.hit,
+          basePos: new THREE.Vector3(sp.x, 0, sp.z),
+          baseRot: new THREE.Euler(0, sp.ry, 0),
+          ramPos: new THREE.Vector3(sp.ramPos[0], sp.ramPos[1], sp.ramPos[2]),
+          ramRot: new THREE.Euler(sp.ramRot[0], sp.ramRot[1], sp.ramRot[2]),
+        });
+      });
+
+      // scattered broken wooden/striped barricade planks left across the car's rammed lane
+      const splinters = [
+        [-3.8, 0.03, -E - 0.1, 0.02, 0.48, 0.04, 1.25],
+        [-2.3, 0.03, -E + 0.7, -0.03, -0.62, 0.02, 1.05],
+        [-3.1, 0.035, -E + 2.2, 0.04, 1.15, -0.05, 0.9],
+        [-4.9, 0.03, -E + 0.4, 0.02, -0.35, 0.06, 0.85],
+        [-1.1, 0.03, -E + 1.1, -0.04, 0.85, 0.02, 0.75],
+      ];
+      splinters.forEach(([sx, sy, sz, rx, ry, rz, len], i) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.22), i % 2 === 0 ? M.barricade : M.wood);
+        m.position.set(sx, sy, sz);
+        m.rotation.set(rx, ry, rz);
+        if (shadows) { m.castShadow = true; m.receiveShadow = true; }
+        rammedDebris.add(m);
+      });
+
+      // orange reflective traffic cones flanking & knocked beside the roadblock
+      const makeCone = (x, y, z, rx, ry, rz) => {
+        const cg = new THREE.Group();
+        const b = new THREE.Mesh(coneBaseGeo, M.dark); b.position.y = 0.02; cg.add(b);
+        const c = new THREE.Mesh(coneGeo, M.coneOrange); c.position.y = 0.31; cg.add(c);
+        const rf = new THREE.Mesh(coneRingGeo, M.coneReflect); rf.position.y = 0.36; cg.add(rf);
+        cg.position.set(x, y, z); cg.rotation.set(rx || 0, ry || 0, rz || 0);
+        return cg;
+      };
+      const coneUpright1 = makeCone(-5.7, 0, -E - 1.3, 0, 0.2, 0);
+      const coneUpright2 = makeCone(5.6, 0, -E - 1.1, 0, -0.3, 0);
+      const coneKnocked = makeCone(-1.9, 0.16, -E + 2.6, 1.48, 0.9, 0);
+      const coneKnockedIntact = makeCone(-3.0, 0, -E - 1.5, 0, 0.4, 0);
+      barRoot.add(coneUpright1, coneUpright2);
+      rammedDebris.add(coneKnocked);
+      const intactExtras = new THREE.Group();
+      intactExtras.add(coneKnockedIntact);
+      barRoot.add(intactExtras);
+
+      W.setBarricadesIntact = function () {
+        W.barricades.forEach(b => {
+          b.group.position.copy(b.basePos);
+          b.group.rotation.copy(b.baseRot);
+        });
+        rammedDebris.visible = false;
+        intactExtras.visible = true;
+      };
+      W.setBarricadesRammed = function () {
+        W.barricades.forEach(b => {
+          b.group.position.copy(b.ramPos);
+          b.group.rotation.copy(b.ramRot);
+        });
+        rammedDebris.visible = true;
+        intactExtras.visible = false;
+      };
+      W.setBarricadesRammed();
     }
     collider(-6, 6, -E - 2, -E);
-    // welcome sign beside the south road
+    // welcome sign beside the south road (2:1 reflective highway signboard on twin steel posts)
     {
       const g = new THREE.Group();
-      const s = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), M.sign);
-      s.position.y = 2.6; g.add(s);
-      [-2.6, 2.6].forEach(x => { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4, 6), M.pole); p.position.set(x, 1.6, -0.05); g.add(p); });
+      const board = new THREE.Mesh(new THREE.BoxGeometry(6.5, 3.25, 0.14), M.iron);
+      board.position.set(0, 3.55, -0.075);
+      g.add(board);
+      const s = new THREE.Mesh(new THREE.PlaneGeometry(6.3, 3.15), M.sign);
+      s.position.set(0, 3.55, 0.01);
+      g.add(s);
+      [-2.5, 2.5].forEach(x => {
+        const p = new THREE.Mesh(new THREE.BoxGeometry(0.16, 5.2, 0.16), M.pole);
+        p.position.set(x, 2.6, -0.15);
+        g.add(p);
+        const foot = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.42), M.concrete);
+        foot.position.set(x, 0.12, -0.15);
+        g.add(foot);
+      });
+      if (shadows) g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       g.position.set(-8, 0, -150); g.rotation.y = 0.15; add(g);
       W.sign = g;
     }
@@ -1670,6 +1799,116 @@
       return true;
     };
 
+    const _plankGeo = new THREE.BoxGeometry(1, 1, 1);
+    W.smashFence = function (f, impactPos, dir) {
+      if (f && f.broken) return false;
+      const pos = f ? f.pos : impactPos;
+      if (f) {
+        f.broken = true;
+        f.mesh.visible = false;
+        if (f.collider) f.collider.disabled = true;
+
+        // leave jagged snapped timber stumps at the fence's post positions
+        const alongX = f.axis === 'x';
+        [-2.91, 0].forEach((offset, idx) => {
+          const sh = 0.36 + ((idx * 37 + Math.abs(Math.round(pos.x + pos.z))) % 4) * 0.11;
+          const stump = new THREE.Mesh(_plankGeo, fenceMat);
+          stump.scale.set(0.18, sh, 0.18);
+          stump.position.set(
+            pos.x + (alongX ? offset : 0),
+            sh * 0.5,
+            pos.z + (alongX ? 0 : offset)
+          );
+          stump.rotation.set((Math.random() - 0.5) * 0.25, Math.random() * 0.4, (Math.random() - 0.5) * 0.25);
+          if (shadows) { stump.castShadow = true; stump.receiveShadow = true; }
+          W.fenceDebrisGroup.add(stump);
+        });
+      }
+
+      // travel vector pushed into the ground scatter
+      let dx = dir && dir.x ? dir.x : 0;
+      let dz = dir && dir.z ? dir.z : 0;
+      const dl = Math.hypot(dx, dz);
+      if (dl > 1e-4) { dx /= dl; dz /= dl; }
+      else {
+        const rl = Math.hypot(pos.x, pos.z) || 1;
+        dx = -pos.x / rl; dz = -pos.z / rl;
+      }
+
+      // grounded shattered fence planks & snapped rails remaining permanently across the breach
+      for (let i = 0; i < 12; i++) {
+        const isRail = i < 2;
+        const pw = isRail ? 0.10 : 0.18 + Math.random() * 0.08;
+        const ph = isRail ? 0.07 : 0.045;
+        const pl = isRail ? (1.8 + Math.random() * 1.1) : (0.75 + Math.random() * 1.35);
+        const m = new THREE.Mesh(_plankGeo, M.wood);
+        m.scale.set(pw, ph, pl);
+        const fwd = -0.8 + Math.random() * 6.5;
+        const side = (Math.random() - 0.5) * 5.2;
+        m.position.set(
+          pos.x + dx * fwd + (-dz) * side,
+          ph * 0.5 + 0.015,
+          pos.z + dz * fwd + dx * side
+        );
+        m.rotation.set((Math.random() - 0.5) * 0.14, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.14);
+        if (shadows) { m.castShadow = true; m.receiveShadow = true; }
+        W.fenceDebrisGroup.add(m);
+      }
+
+      // dynamic airborne boards that bounce and stay settled on the ground permanently
+      for (let i = 0; i < 18; i++) {
+        const pw = 0.14 + Math.random() * 0.10;
+        const ph = 0.045;
+        const pl = 0.65 + Math.random() * 1.15;
+        const m = new THREE.Mesh(_plankGeo, M.wood);
+        m.scale.set(pw, ph, pl);
+        m.position.set(
+          pos.x + (Math.random() - 0.5) * 3.8,
+          0.4 + Math.random() * 1.7,
+          pos.z + (Math.random() - 0.5) * 3.8
+        );
+        m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        if (shadows) { m.castShadow = true; m.receiveShadow = true; }
+        W.debrisGroup.add(m);
+        const fwdSp = 4 + Math.random() * 11, sideSp = (Math.random() - 0.5) * 10;
+        W.flyingDebris.push({
+          mesh: m,
+          halfY: ph * 0.5,
+          floorY: 0.025 + ph * 0.5,
+          isFence: true,
+          persistent: true,
+          vx: dx * fwdSp + (-dz) * sideSp,
+          vy: 2.2 + Math.random() * 6.2,
+          vz: dz * fwdSp + dx * sideSp,
+          rx: (Math.random() - 0.5) * 12,
+          ry: (Math.random() - 0.5) * 12,
+          rz: (Math.random() - 0.5) * 12,
+          settled: false,
+          life: 999,
+        });
+      }
+      return true;
+    };
+
+    W.repairFences = function () {
+      if (W.fences) {
+        W.fences.forEach(f => {
+          f.broken = false;
+          f.mesh.visible = true;
+          f.mesh.position.copy(f.basePos);
+          f.mesh.rotation.copy(f.baseRot);
+          if (f.collider) f.collider.disabled = false;
+        });
+      }
+      W.fenceDebrisGroup.clear();
+      for (let i = W.flyingDebris.length - 1; i >= 0; i--) {
+        if (W.flyingDebris[i].isFence) {
+          W.debrisGroup.remove(W.flyingDebris[i].mesh);
+          W.flyingDebris.splice(i, 1);
+        }
+      }
+    };
+
     // =========================================================
     //  UPDATE (flickering lights, pickups bobbing)
     // =========================================================
@@ -1737,11 +1976,13 @@
       });
       for (let i = W.flyingDebris.length - 1; i >= 0; i--) {
         const d = W.flyingDebris[i];
-        d.life -= dt;
-        if (d.life <= 0) {
-          W.debrisGroup.remove(d.mesh);
-          W.flyingDebris.splice(i, 1);
-          continue;
+        if (!d.persistent) {
+          d.life -= dt;
+          if (d.life <= 0) {
+            W.debrisGroup.remove(d.mesh);
+            W.flyingDebris.splice(i, 1);
+            continue;
+          }
         }
         if (d.settled) continue;
         d.vy -= 22 * dt;
@@ -1751,7 +1992,7 @@
         d.mesh.rotation.x += d.rx * dt;
         d.mesh.rotation.y += d.ry * dt;
         d.mesh.rotation.z += d.rz * dt;
-        const floorY = 0.22 + d.halfY;
+        const floorY = d.floorY !== undefined ? d.floorY : (0.22 + d.halfY);
         if (d.mesh.position.y <= floorY) {
           d.mesh.position.y = floorY;
           if (Math.abs(d.vy) > 3.2) {
@@ -1760,7 +2001,8 @@
             d.rx *= 0.4; d.ry *= 0.4; d.rz *= 0.4;
           } else {
             d.vy = 0; d.vx = 0; d.vz = 0;
-            d.mesh.rotation.x = 0; d.mesh.rotation.z = 0;
+            d.mesh.rotation.x = d.isFence ? (Math.random() - 0.5) * 0.08 : 0;
+            d.mesh.rotation.z = d.isFence ? (Math.random() - 0.5) * 0.08 : 0;
             d.settled = true;
           }
         }
@@ -1806,14 +2048,7 @@
         if (b.smashed && b.restore) b.restore();
         b.hasEvidence = b.sheriff;
       });
-      if (W.fences) {
-        W.fences.forEach(f => {
-          f.broken = false;
-          f.mesh.visible = true;
-          f.mesh.position.copy(f.basePos);
-          f.mesh.rotation.copy(f.baseRot);
-        });
-      }
+      W.repairFences();
       const r = Math.random, pk = a => a[(r() * a.length) | 0];
       const used = new Set();
       const takeEnter = () => { const c = W.enterables.filter(b => !b.sheriff && !used.has(b)); const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b; };
