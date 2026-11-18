@@ -82,15 +82,16 @@
     return false;
   }
 
-  function isBlocked(world, x, z) {
+  function isBlocked(world, x, z, y) {
     if (!world || !world.colliders) return false;
     const all = world.evColliders && world.evColliders.length
       ? world.colliders.concat(world.evColliders)
       : world.colliders;
     const r = 0.45;
+    const py = y || 0;
     for (let i = 0; i < all.length; i++) {
       const c = all[i];
-      if (c.disabled || c.maxY < 0.3 || c.minY > 1.75) continue;
+      if (c.disabled || c.maxY < py + 0.3 || c.minY > py + 1.75) continue;
       if (x + r > c.minX && x - r < c.maxX && z + r > c.minZ && z - r < c.maxZ) return true;
     }
     return false;
@@ -105,29 +106,37 @@
     if (player.hidden || player.hideAnim) player.ejectFromHide();
 
     let tx = pos.x, tz = pos.z;
-    if (!admin.noclip && isBlocked(world, tx, tz)) {
+    const baseY = pos.y || 0;
+    const targetFloor = admin.noclip
+      ? Math.max(0.2, baseY || 0.2)
+      : (world.floorHeightAt ? world.floorHeightAt(tx, tz, baseY + 0.5) : baseY);
+    if (!admin.noclip && isBlocked(world, tx, tz, targetFloor)) {
       let found = false;
       const radii = [1.5, 2.8, 4.2, 6.0];
       for (const rad of radii) {
         for (let k = 0; k < 12; k++) {
           const a = (k / 12) * Math.PI * 2;
           const cx = pos.x + Math.cos(a) * rad, cz = pos.z + Math.sin(a) * rad;
-          if (!isBlocked(world, cx, cz)) { tx = cx; tz = cz; found = true; break; }
+          const cf = world.floorHeightAt ? world.floorHeightAt(cx, cz, baseY + 0.5) : baseY;
+          if (!isBlocked(world, cx, cz, cf)) { tx = cx; tz = cz; found = true; break; }
         }
         if (found) break;
       }
-      if (!found && world.projectToStreet) {
+      if (!found && world.projectToStreet && targetFloor < 1.5) {
         const sp = world.projectToStreet(pos);
         tx = sp.x; tz = sp.z;
       }
     }
-    player.pos.set(tx, admin.noclip ? Math.max(0.2, pos.y || 0.2) : 0, tz);
+    const finalY = admin.noclip
+      ? Math.max(0.2, baseY || 0.2)
+      : (world.floorHeightAt ? world.floorHeightAt(tx, tz, baseY + 0.5) : baseY);
+    player.pos.set(tx, finalY, tz);
     player.vel.set(0, 0, 0);
     player.onGround = true;
     if (lookAt) {
       const dx = lookAt.x - tx, dz = lookAt.z - tz;
       player.yaw = Math.atan2(-dx, -dz);
-      const dy = (lookAt.y !== undefined ? lookAt.y : 1.5) - 1.62;
+      const dy = (lookAt.y !== undefined ? lookAt.y : (finalY + 1.5)) - (finalY + 1.62);
       player.pitch = Math.max(-1.0, Math.min(1.0, Math.atan2(dy, Math.hypot(dx, dz) || 1)));
     }
     player.applyCamera(0.016, H.getGameTime());
@@ -244,7 +253,7 @@
             boxGeo,
             new THREE.MeshBasicMaterial({ color: isDumpster ? 0x38aaff : 0x55ee77, wireframe: true })
           );
-          m.position.set(sp.pos.x, 4.0, sp.pos.z);
+          m.position.set(sp.pos.x, (sp.baseY || 0) + 4.0, sp.pos.z);
           m._sp = sp;
           dbgHideGroup.add(m);
         });
@@ -611,7 +620,7 @@
         if (!ensurePlayContext() || !world) return;
         const ev = world.evidence[parseInt(arg, 10)];
         if (ev) {
-          const offsetPos = { x: ev.pos.x + 2.8, y: 0, z: ev.pos.z + 2.8 };
+          const offsetPos = { x: ev.pos.x + 2.8, y: Math.max(0, (ev.pos.y || 0) - 0.8), z: ev.pos.z + 2.8 };
           safeTeleport(offsetPos, ev.pos);
           setStatus(`Teleported to ${ev.name}.`);
         }
@@ -676,7 +685,7 @@
         const spots = (world.hideSpots || []).filter(s => !s.disabled);
         if (!spots.length) break;
         spots.sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
-        safeTeleport(spots[0].exit, spots[0].pos);
+        safeTeleport({ x: spots[0].exit.x, y: spots[0].baseY || spots[0].exit.y || 0, z: spots[0].exit.z }, spots[0].pos);
         setStatus(`Teleported to nearest ${spots[0].type}.`);
         break;
       }

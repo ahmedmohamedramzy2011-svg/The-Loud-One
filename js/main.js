@@ -21,7 +21,7 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, noiseGlitch: true, proximityAmbient: true, richInteriors: true, cleanSubs: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
@@ -244,7 +244,16 @@
     parkedCar = null;
     worldDirty = false;
     applyDisplay();
+    if (fastone) {
+      fastone.getWalkGrid && fastone.getWalkGrid();
+      fastone.root.visible = true;
+      fastone.clones.forEach(c => { c.mesh.visible = true; });
+    }
     if (renderer) renderer.compile(scene, camera);
+    if (fastone) {
+      fastone.root.visible = false;
+      fastone.clones.forEach(c => { c.mesh.visible = false; });
+    }
   }
 
   // ============================================================
@@ -341,7 +350,7 @@
   }
 
   function syncVersionUI() {
-    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.5';
+    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.6';
     const cur = S.gameVersion || latest;
     const btn = $('version-btn');
     if (btn) btn.textContent = 'v' + cur;
@@ -364,7 +373,7 @@
     const list = $('version-list');
     if (!list || !LO.VERSIONS) return;
     list.innerHTML = '';
-    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.5';
+    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.6';
     const cur = S.gameVersion || latest;
     LO.VERSIONS.forEach((v, idx) => {
       const b = document.createElement('button');
@@ -457,7 +466,7 @@
   }
   function updateTitle(dt) {
     titleT += dt;
-    const shot = Math.floor(titleT / SHOT_LEN) % 8, k = (titleT % SHOT_LEN) / SHOT_LEN, lt = titleT % SHOT_LEN;
+    const shot = Math.floor(titleT / SHOT_LEN) % 7, k = (titleT % SHOT_LEN) / SHOT_LEN, lt = titleT % SHOT_LEN;
     // fade to black at the start and end of every shot
     const f = lt < 1.2 ? 1 - lt / 1.2 : lt > SHOT_LEN - 1.2 ? (lt - (SHOT_LEN - 1.2)) / 1.2 : 0;
     $('title-fade').style.opacity = f;
@@ -479,20 +488,14 @@
       camera.position.set(S0[3] - 3, 1.3 + k * 0.8, -6 + k * 5);
       camera.lookAt(S0[3] + 7, 9 + k * 3, 20);
       titleSpot.position.set(S0[3] - 3, 1, -4); titleSpot.target.position.set(S0[3], 10, 20); titleSpot.intensity = 9;
-    } else if (shot === 1 && ver.fastone && fastone) {       // The Fast One hiding in the dark outer forest, only its glowing red eyes exposed
+    } else if (shot === 1) {                                 // Hollow Creek highway sign & dark pine treeline
       siren.root.visible = false;
-      const cx = 11.4 + k * 0.85, cy = 1.24 - k * 0.08, cz = -163.5 - k * 1.1;
-      camera.position.set(cx, cy, cz);
-      fastone.root.visible = true;
-      fastone.root.position.set(17.9, 0, -169.8);
-      fastone.root.rotation.set(0, Math.atan2(cx - 17.9, cz - (-169.8)), 0);
-      fastone.jaw.rotation.x = 0.14 + Math.sin(titleT * 1.9) * 0.07;
-      fastone.head.rotation.y = Math.sin(titleT * 0.75) * 0.08;
-      camera.lookAt(17.4, 0.90, -169.3);
-      titleSpot.position.set(cx, 1.35, cz);
-      titleSpot.target.position.set(16.9, 1.35, -168.7);
-      titleSpot.intensity = 1.9;
-    } else if (shot === 2 || (shot === 1 && !ver.fastone)) { // close on the horns
+      camera.position.set(-4.0 + k * 2.2, 2.2, -160.5 + k * 2.0);
+      camera.lookAt(-7.6, 3.0, -149.5);
+      titleSpot.position.copy(camera.position);
+      titleSpot.target.position.set(-8.0, 3.2, -150.0);
+      titleSpot.intensity = 5.5;
+    } else if (shot === 2) {                                 // close on the horns
       siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.55 + Math.sin(titleT * 2) * 0.1;
       siren.update(0, null, titleT);
       siren.root.updateMatrixWorld(true);
@@ -507,23 +510,12 @@
       titleMoth(0, mx, mz, camera.position.x, camera.position.z, titleT);
       camera.lookAt(mx, 1.5, mz - 2.8);
       titleSpot.position.copy(camera.position); titleSpot.target.position.set(mx, 1.4, mz); titleSpot.intensity = 7;
-    } else if (shot === 4 || (!ver.moths && (shot === 3 || shot === 6))) { // Siren Head stalking between buildings
+    } else if (shot === 4 || (!ver.moths && shot === 3)) {   // Siren Head stalking between buildings
       siren.pos.set(S0[2], 0, -40 + k * 14); siren.yaw = 0; siren.speedNow = 2.2; siren.glowOverride = 0.3;
       camera.position.set(S0[2] - 3.5, 2.2, -72 + k * 3);
       camera.lookAt(S0[2] + 5, 8, -34 + k * 14);
       titleSpot.position.set(S0[2] - 3.5, 1.5, -70); titleSpot.target.position.set(S0[2], 9, -34 + k * 14); titleSpot.intensity = 10;
-    } else if (shot === 5 && ver.sneaky && sneaky) {         // The Sneaky One grinning inside a pitch-black doorway
-      siren.root.visible = false;
-      const b = world.enterables.find(e => !e.sheriff) || world.enterables[0];
-      const sp = b.F.point(0.25, b.hd - 1.5);
-      const cp = b.F.point(-0.2 + k * 0.45, b.hd + 4.8 - k * 1.1);
-      camera.position.set(cp.x, 1.65, cp.z);
-      sneaky.root.visible = true;
-      sneaky.root.position.set(sp.x, 0, sp.z);
-      sneaky.root.lookAt(cp.x, 0, cp.z);
-      camera.lookAt(sp.x, 1.75, sp.z);
-      titleSpot.position.copy(camera.position); titleSpot.target.position.set(sp.x, 1.4, sp.z); titleSpot.intensity = 3.2;
-    } else if (shot === 6 && ver.moths) {                    // two moths waiting just inside a doorway
+    } else if (shot === 5 && ver.moths) {                    // two moths waiting just inside a doorway
       siren.root.visible = false;
       const b = world.enterables.find(e => !e.sheriff) || world.enterables[0];
       const m1 = b.F.point(-0.7, b.hd - 1.6), m2 = b.F.point(0.8, b.hd - 3.2), cp = b.F.point(0.3 * Math.sin(titleT * 0.2), b.hd + 5.5 - k * 1.5);
@@ -558,6 +550,7 @@
     player.flashOn = false;
     A.setFlashlightBuzz(false); A.setBreathing(0); A.setHeartbeat(0); A.setTenant(0); A.setSilentOne(0);
     A.setStillness(false); document.body.classList.remove('still'); A.setMothFlutter(0);
+    A.setProximityAmbient && A.setProximityAmbient(0);
     $('silent-one').style.opacity = 0;
     if (worldDirty || state === 'ending' || state === 'credits' || state === 'dead') buildWorld();
     setupTitleScene();
@@ -690,9 +683,11 @@
     state = 'paused';
     player.enabled = false;
     if (sneaky && sneaky.pause) sneaky.pause();
+    clearGlitch();
     show('pause');
     if (window.speechSynthesis) try { speechSynthesis.pause(); } catch (e) {}
     A.setFlashlightBuzz(false); A.setBreathing(0); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
+    A.setProximityAmbient && A.setProximityAmbient(0);
   }
   function resume() {
     hideAllScreens();
@@ -762,7 +757,9 @@
     state = 'ending';
     player.enabled = false;
     if (document.pointerLockElement) document.exitPointerLock();
+    clearGlitch();
     A.setFlashlightBuzz(false); A.setBreathing(0); A.setHeartbeat(0);
+    A.setProximityAmbient && A.setProximityAmbient(0);
     player.flashOn = false; player.flash.intensity = 0;
     hideAllScreens();
     ui.fadeOut(1.5);
@@ -827,7 +824,15 @@
     ] },
   };
   // death by damage (the Silent One / the Tenant)
-  function clearGlitch() { document.getElementById('game-root').style.filter = ''; $('viewfinder').style.opacity = ''; }
+  function clearGlitch() {
+    const gr = document.getElementById('game-root');
+    if (gr) gr.style.filter = '';
+    const vf = $('viewfinder');
+    if (vf) vf.style.opacity = '';
+    const ng = $('noise-glitch');
+    if (ng) ng.style.opacity = 0;
+    lastRootFilter = '';
+  }
   function dieBy(cause) {
     clearGlitch();
     if (state === 'play') A.silenceWorld(true);
@@ -901,6 +906,7 @@
       state = 'dead';
       deathShown = false;
       A.setSilentOne(0); A.setExposure(0); A.setMothFlutter(0); A.setTenant(0);
+      A.setProximityAmbient && A.setProximityAmbient(0);
       A.setStillness(false); document.body.classList.remove('still');
       $('silent-one').style.opacity = 0;
       const deathEl = $('death');
@@ -973,8 +979,8 @@
     calm: 'HE CAN\'T HEAR YOU', heard: 'HE HEARD SOMETHING', searching: 'HE\'S SEARCHING — STAY SILENT',
     angry: 'HE\'S ANGRY — GO SILENT!', hidden: 'HIDDEN — YOU MAKE NO SOUND',
   };
-  let lastStatus = '', lastRootFilter = '', lastHideType = '';
-  function updateHUD() {
+  let lastStatus = '', lastRootFilter = '', lastHideType = '', noiseGlitchPhase = 0;
+  function updateHUD(dt) {
     const noisePct = Math.min(100, player.noiseRadius / 50 * 100);
     $('noise-fill').style.width = noisePct + '%';
     const d = siren.distToPlayer || 999;
@@ -1001,17 +1007,20 @@
     }
     // the Tenant grows restless the longer you hide
     const tf = Math.min(1, player.hideTime / LO.TENANT_LIMIT);
+    let tenantEye = 0;
     if (player.hidden) {
       // a red eye opens in the dark and keeps coming closer until it reaches you
-      const eye = Math.max(0, (tf - 0.25) / 0.75);
+      tenantEye = Math.max(0, (tf - 0.25) / 0.75);
       const ex = $('tenant-eye');
-      ex.style.opacity = eye > 0 ? Math.min(1, 0.35 + eye) : 0;
-      ex.style.transform = `translate(-50%, -50%) scale(${(0.18 + Math.pow(eye, 1.6) * 3.6).toFixed(3)})`;
-      $('tenant-red').style.opacity = (Math.pow(eye, 1.3) * 0.95).toFixed(3);
-      $('hide-text').textContent = eye > 0 ? 'Get out of there' : 'HIDING — press E to leave';
-      hideEl.classList.toggle('restless', eye > 0.6);
+      ex.style.opacity = tenantEye > 0 ? Math.min(1, 0.35 + tenantEye) : 0;
+      ex.style.transform = `translate(-50%, -50%) scale(${(0.18 + Math.pow(tenantEye, 1.6) * 3.6).toFixed(3)})`;
+      $('tenant-red').style.opacity = (Math.pow(tenantEye, 1.3) * 0.95).toFixed(3);
+      $('hide-text').textContent = tenantEye > 0 ? 'Get out of there' : 'HIDING — press E to leave';
+      hideEl.classList.toggle('restless', tenantEye > 0.6);
       A.setTenant(Math.max(0, (tf - 0.3) / 0.7));
-    } else A.setTenant(0);
+    } else {
+      A.setTenant(0);
+    }
 
     // the Exposure, seen only through the viewfinder
     const ex = $('exposure');
@@ -1048,15 +1057,44 @@
       A.setSilentOne(0);
     }
     show('viewfinder', player.zoom > 0.5);
-    // the Sneaky One makes your camera glitch too, and Siren Head smashes cause brief dizziness blur
+    // the Sneaky One makes your camera glitch too, Siren Head smashes cause dizziness blur,
+    // and near-max Noise triggers subtle chromatic aberration & frame-rate dependent scan glitch
     const glitch = sneaky && sneaky.attacking && player.zoom > 0.5;
     $('viewfinder').style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
+    const ng = $('noise-glitch');
+    const nearMaxNoise = V().noiseGlitch && noisePct >= 80;
+    let noiseAbFilter = '';
+    if (nearMaxNoise && ng) {
+      const k = Math.min(1, (noisePct - 80) / 20);
+      const stepDt = Math.min(0.05, dt || 0.016);
+      noiseGlitchPhase += stepDt * (16 + k * 24);
+      const j1 = Math.sin(noiseGlitchPhase * 1.7 + Math.cos(noiseGlitchPhase * 3.1));
+      const j2 = Math.cos(noiseGlitchPhase * 2.3);
+      const burst = Math.sin(noiseGlitchPhase * 0.73) > (0.52 - k * 0.28) ? 1 : 0;
+      const sx = (j1 * (1.4 + k * 2.8) * (0.45 + 0.55 * burst)).toFixed(2);
+      const sy = (j2 * (0.4 + k * 0.9)).toFixed(2);
+      const topPct = Math.round(((Math.sin(noiseGlitchPhase * 1.9) + 1) * 0.5) * 72);
+      const botPct = Math.min(96, topPct + Math.round(6 + k * 14));
+      ng.style.opacity = (0.28 + k * 0.55).toFixed(3);
+      ng.style.setProperty('--ng-x', sx + 'px');
+      ng.style.setProperty('--ng-y', sy + 'px');
+      ng.style.setProperty('--ng-top', topPct + '%');
+      ng.style.setProperty('--ng-bot', (100 - botPct) + '%');
+      ng.style.setProperty('--ng-rgb', (burst ? (0.35 + k * 0.5) : (0.12 + k * 0.28)).toFixed(3));
+      const ab = (1.1 + k * 2.2 + burst * 1.2).toFixed(2);
+      noiseAbFilter = `drop-shadow(${ab}px 0 0 rgba(255,40,60,0.34)) drop-shadow(-${ab}px 0 0 rgba(45,220,255,0.34))`;
+    } else if (ng) {
+      ng.style.opacity = 0;
+    }
     const rootEl = document.getElementById('game-root');
     let nextFilter = '';
     if (glitch && Math.random() < 0.3) {
       nextFilter = 'brightness(0.15) contrast(1.6)';
-    } else if (!glitch && player.dizzy > 0.04) {
-      nextFilter = `blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)`;
+    } else {
+      const parts = [];
+      if (player.dizzy > 0.04) parts.push(`blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)`);
+      if (noiseAbFilter) parts.push(noiseAbFilter);
+      nextFilter = parts.join(' ');
     }
     if (nextFilter !== lastRootFilter) {
       lastRootFilter = nextFilter;
@@ -1067,6 +1105,20 @@
       $('viewfinder').classList.toggle('locked', !!(vf && vf.ok));
       $('vf-info').textContent = !vf ? 'NO SUBJECT' : vf.ok ? 'EVIDENCE: ' + vf.ev.name.toUpperCase() : 'MOVE CLOSER';
       $('vf-film').textContent = `EVIDENCE ${evidenceCount}/${EVIDENCE_NEEDED}`;
+    }
+    // dynamic subtitle placement + intense readability mode
+    if (A.setSubMode) {
+      const intense = siren.state === 'hunt' || d < 42 ||
+        (fastone && fastone.state !== 'idle') ||
+        (sneaky && sneaky.attacking) ||
+        st2 >= W2 ||
+        tenantEye > 0.05 ||
+        (player.zoom > 0.5 && player.exposure >= LO.EXPO.SHOW);
+      let mode = '';
+      if (player.zoom > 0.5) mode += 'mode-viewfinder ';
+      if (player.hideView) mode += 'mode-hiding ';
+      if (intense) mode += 'mode-intense';
+      A.setSubMode(mode.trim());
     }
   }
 
@@ -1111,12 +1163,30 @@
         if (state === 'play' && fastone.update(simDt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
         world.update(simDt, gameTime);
         if (state === 'play') {
-          updateHUD();
+          updateHUD(simDt);
           updateHintUI();
           updateWindState(simDt);
           // music & heartbeat follow the danger
           const d = siren.distToPlayer || 999;
           const near = Math.max(0, 1 - d / 70);
+          // entity proximity layer: rustling forest + wind chimes grow in frequency and volume when any entity is nearby
+          let entNear = Math.max(0, 1 - d / 46);
+          if (fastone && fastone.state !== 'idle' && fastone.root) {
+            const df = Math.hypot(fastone.root.position.x - player.pos.x, fastone.root.position.z - player.pos.z);
+            entNear = Math.max(entNear, Math.max(0, 1 - df / 32));
+          }
+          if (sneaky && sneaky.attacking) entNear = Math.max(entNear, 0.85);
+          if (moths && moths.moths) {
+            let dm = 999;
+            for (let mi = 0; mi < moths.moths.length; mi++) {
+              const m = moths.moths[mi];
+              if (!m.active) continue;
+              const distM = Math.hypot(m.g.position.x - player.pos.x, m.g.position.z - player.pos.z);
+              if (distM < dm) dm = distM;
+            }
+            if (dm < 22) entNear = Math.max(entNear, Math.max(0, 1 - dm / 22) * 0.72);
+          }
+          A.setProximityAmbient && A.setProximityAmbient(V().proximityAmbient && !A.still ? entNear : 0);
           // the ground trembles when he's right on top of you
           if (d < 35 && !A.still) player.shake = Math.max(player.shake, Math.pow(1 - d / 35, 1.5) * 0.3);
           if (siren.state === 'hunt') A.playMusic('chase', 1);
@@ -1136,8 +1206,11 @@
         if (skipHeld > 1.2) { A.stopVoices(); cutscene.finish(); }
       } else if (skipHeld) { skipHeld = 0; $('skip-bar').firstChild.style.width = '0'; }
       if (cutscene) cutscene.update(dt);
+      A.setSubMode && A.setSubMode('mode-cutscene');
       if (world && world.updateWind) world.updateWind(dt, 0.5, camera.position, gameTime);
       if (world) world.update(dt, gameTime += dt);
+    } else if (state !== 'play') {
+      A.setSubMode && A.setSubMode('');
     }
 
     if (LO.admin && LO.admin.update) LO.admin.update(dt);
@@ -1148,12 +1221,10 @@
     } else if (state !== 'credits') renderer.render(scene, camera);
     if (pendingCapture) capturePhoto();
 
-    // 3D audio listener follows the camera
-    if (A.ready) {
-      camera.getWorldDirection(fwd);
-      upv.set(0, 1, 0).applyQuaternion(camera.quaternion);
-      A.setListener(camera.position, fwd, upv);
-    }
+    // 3D audio listener & directional subtitle tracker follow the camera
+    camera.getWorldDirection(fwd);
+    upv.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    A.setListener(camera.position, fwd, upv);
     LO.TVFX.update(dt);
     if (S.showFps) {
       fpsAcc += dt; fpsFrames++;
@@ -1204,6 +1275,7 @@
 
   function boot() {
     document.body.classList.toggle('testing-build', !!LO.isTesting);
+    document.body.classList.toggle('has-touch', !!LO.isTouch);
     // film grain image
     const grain = LO.tex.canvas('grainOverlay');
     $('grain').style.backgroundImage = `url(${grain.toDataURL()})`;

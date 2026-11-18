@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=59">
+<link rel="stylesheet" href="css/style.css?v=61">
 </head>
 <body>
 
@@ -18,6 +18,7 @@
 <div id="vignette"></div>
 <div id="grain"></div>
 <div id="damage"></div>
+<div id="noise-glitch"></div>
 <div id="fade"></div>
 
 <!-- Click-to-start gate (browsers need a click before audio can play) -->
@@ -43,7 +44,7 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.5</button>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.6</button>
     <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
     <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
@@ -101,11 +102,25 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.5"><h3>v2.5 <span>current</span></h3><ul>
+      <div class="upd" data-ver="2.6"><h3>v2.6 <span>current</span></h3><ul>
+        <li>Multi-story building interiors with interior rooms, staircases, occasional roof access, and makeshift furniture barricades</li>
+        <li>Fixed overlapping cars, street props, evidence props, and doorway-blocking dumpsters</li>
+        <li>Near-max Noise chromatic aberration &amp; screen glitch warning effect</li>
+        <li>Procedural rustling forest &amp; eerie wind chimes proximity audio layer</li>
+        <li>Real wood-break, footstep, panting, and hurt sound effects</li>
+        <li>Cleaner subtitles (Siren Head labeled ??? only) and lag-free Fast One spawn pre-allocation</li>
+      </ul></div>
+      <div class="upd" data-ver="2.5.1"><h3>v2.5.1</h3><ul>
+        <li>Dynamic handheld flashlight sway reacting to movement, sprinting, breathing, and camera turns</li>
+        <li>Dynamic HUD-aware subtitle positioning with directional pan indicators and entity color coding</li>
+        <li>Refined title screen fade shots (removed The Fast One and The Sneaky One)</li>
+        <li>Updated credits screen for co-development and recorded voice lines</li>
+      </ul></div>
+      <div class="upd" data-ver="2.5"><h3>v2.5</h3><ul>
         <li>Deeper, re-voiced police dispatcher radio audio</li>
         <li>Real see-through locker louver slits and cracked dumpster lid view</li>
         <li>Doubled sprint stamina duration (~9.5s)</li>
-        <li>Expanded title screen shots featuring entities in the forest and doorways</li>
+        <li>Expanded title screen shots featuring atmospheric town &amp; forest scenes</li>
         <li>Remodeled pine and dead trees across Hollow Creek and the opening drive</li>
         <li>Performance optimizations for lower-end devices</li>
       </ul></div>
@@ -363,9 +378,9 @@
     <p>The sirens have not been heard since.</p>
     <br><br>
     <p class="c-head">A game about staying quiet</p>
-    <p>Design, code, audio &amp; voices — generated with Claude Code</p>
+    <p>Design, code &amp; updates — Claude Code &amp; Gemini (Google AI Studio)</p>
     <p>Rendering — three.js</p>
-    <p>Voices — your browser's speech synthesizer</p>
+    <p>Voice acting — recorded player &amp; police dispatch lines (browser speech fallback)</p>
     <br><br>
     <p class="c-big">THANK YOU FOR PLAYING</p>
     <br>
@@ -401,22 +416,22 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=61"></script>
-<script src="audio/sounds.js?v=25"></script>
+<script src="js/settings.js?v=63"></script>
+<script src="audio/sounds.js?v=26"></script>
 <script src="audio/voice.js?v=17"></script>
-<script src="js/audio.js?v=52"></script>
+<script src="js/audio.js?v=54"></script>
 <script src="js/textures.js?v=60"></script>
-<script src="js/world.js?v=61"></script>
-<script src="js/sirenhead.js?v=60"></script>
-<script src="js/player.js?v=58"></script>
-<script src="js/moths.js?v=58"></script>
+<script src="js/world.js?v=62"></script>
+<script src="js/sirenhead.js?v=61"></script>
+<script src="js/player.js?v=60"></script>
+<script src="js/moths.js?v=60"></script>
 <script src="js/deathroom.js?v=58"></script>
-<script src="js/sneaky.js?v=57"></script>
-<script src="js/fastone.js?v=60"></script>
+<script src="js/sneaky.js?v=59"></script>
+<script src="js/fastone.js?v=62"></script>
 <script src="js/cutscenes.js?v=60"></script>
 <script src="js/tvfx.js?v=52"></script>
-<script src="js/admin.js?v=60"></script>
-<script src="js/main.js?v=61"></script>
+<script src="js/admin.js?v=61"></script>
+<script src="js/main.js?v=63"></script>
 <script src="js/touch.js?v=50"></script>
 </body>
 </html>

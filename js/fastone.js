@@ -34,13 +34,37 @@
 
     this.splinters = [];
     this.dust = [];
+    this.splinterPool = [];
+    this.dustPool = [];
     this.trail = [];
     this.clones = [];
     this.highlightedSpot = null;
     this.onBreach = null;
 
+    // pre-allocate ONE PointLight and lightweight shared highlight materials (avoids runtime GLSL shader recompiles!)
+    this.highlightLight = new THREE.PointLight(0x38aaff, 0, 10, 1.5);
+    scene.add(this.highlightLight);
+    this.hlShellMat = new THREE.MeshBasicMaterial({
+      color: 0x2ea8ff,
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: 0.85,
+      fog: false,
+    });
+    this.hlEdgeMat = new THREE.LineBasicMaterial({
+      color: 0x70d4ff,
+      transparent: true,
+      opacity: 0.85,
+      fog: false,
+      depthTest: false,
+    });
+    this.dustMatA = new THREE.MeshLambertMaterial({ color: 0x6c6558, transparent: true, opacity: 0.42, depthWrite: false });
+    this.dustMatB = new THREE.MeshLambertMaterial({ color: 0x575046, transparent: true, opacity: 0.42, depthWrite: false });
+
     this.buildModel();
     this.buildAfterimages();
+    this.initPools();
+    this.prebuildHighlights();
     this.reset();
   }
   LO.FastOne = FastOne;
@@ -277,27 +301,56 @@
     }
   };
 
-  // ---------------- splinter & dust cloud particles for fence breach ----------------
+  // ---------------- splinter & dust cloud pools for zero-lag fence breach ----------------
   const splinterGeo = new THREE.BoxGeometry(0.08, 0.05, 0.46);
   const splinterMat = new THREE.MeshLambertMaterial({ color: 0x4b463e });
   const dustGeo = new THREE.DodecahedronGeometry(0.45, 0);
+  const hlLockerBoxGeo = new THREE.BoxGeometry(0.98, 2.08, 0.76);
+  const hlLockerEdgeGeo = new THREE.EdgesGeometry(hlLockerBoxGeo);
+  const hlDumpBoxGeo = new THREE.BoxGeometry(2.38, 1.56, 1.46);
+  const hlDumpEdgeGeo = new THREE.EdgesGeometry(hlDumpBoxGeo);
+
+  FastOne.prototype.initPools = function () {
+    for (let i = 0; i < 26; i++) {
+      const m = new THREE.Mesh(splinterGeo, splinterMat);
+      m.visible = false;
+      this.fxGroup.add(m);
+      this.splinterPool.push(m);
+    }
+    for (let i = 0; i < 16; i++) {
+      const m = new THREE.Mesh(dustGeo, i % 2 ? this.dustMatA : this.dustMatB);
+      m.visible = false;
+      this.fxGroup.add(m);
+      this.dustPool.push(m);
+    }
+  };
+
+  FastOne.prototype.prebuildHighlights = function () {
+    const spots = (this.world && this.world.hideSpots) || [];
+    for (let i = 0; i < spots.length; i++) this.ensureHighlight(spots[i]);
+    // invalidate cached BFS grid whenever world changes
+    this._gridCache = null;
+    this._gridVer = -1;
+  };
 
   FastOne.prototype.spawnSplinters = function (origin, dir) {
-    const count = 26;
+    for (let i = 0; i < this.splinters.length; i++) this.splinters[i].mesh.visible = false;
+    this.splinters.length = 0;
+    const count = this.splinterPool.length;
     for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(splinterGeo, splinterMat);
+      const m = this.splinterPool[i];
       m.position.set(
         origin.x + (Math.random() - 0.5) * 3.4,
         0.4 + Math.random() * 1.6,
         origin.z + (Math.random() - 0.5) * 3.4
       );
       m.scale.set(0.6 + Math.random() * 0.9, 0.6 + Math.random() * 0.8, 0.7 + Math.random() * 1.4);
+      m.visible = true;
       const speed = 8 + Math.random() * 18;
       const spread = (Math.random() - 0.5) * 1.2;
       const vx = dir.x * speed + (-dir.z) * spread * speed * 0.55;
       const vz = dir.z * speed + dir.x * spread * speed * 0.55;
       const vy = 2.0 + Math.random() * 6.5;
-      this.fxGroup.add(m);
       this.splinters.push({
         mesh: m,
         vx, vy, vz,
@@ -310,15 +363,11 @@
   };
 
   FastOne.prototype.spawnDustCloud = function (origin, dir) {
-    const count = 16;
+    for (let i = 0; i < this.dust.length; i++) this.dust[i].mesh.visible = false;
+    this.dust.length = 0;
+    const count = this.dustPool.length;
     for (let i = 0; i < count; i++) {
-      const mat = new THREE.MeshLambertMaterial({
-        color: i % 2 ? 0x6c6558 : 0x575046,
-        transparent: true,
-        opacity: 0.46,
-        depthWrite: false,
-      });
-      const m = new THREE.Mesh(dustGeo, mat);
+      const m = this.dustPool[i];
       m.position.set(
         origin.x + (Math.random() - 0.5) * 3.6,
         0.35 + Math.random() * 1.5,
@@ -326,13 +375,12 @@
       );
       const s0 = 0.7 + Math.random() * 0.8;
       m.scale.setScalar(s0);
+      m.visible = true;
       const sp = 1.5 + Math.random() * 4.5;
       const side = (Math.random() - 0.5) * 3.2;
       const maxLife = 1.8 + Math.random() * 0.8;
-      this.fxGroup.add(m);
       this.dust.push({
         mesh: m,
-        mat,
         vx: dir.x * sp + (-dir.z) * side,
         vy: 0.6 + Math.random() * 1.4,
         vz: dir.z * sp + dir.x * side,
@@ -348,7 +396,7 @@
       const s = this.splinters[i];
       s.life -= dt;
       if (s.life <= 0) {
-        this.fxGroup.remove(s.mesh);
+        s.mesh.visible = false;
         this.splinters.splice(i, 1);
         continue;
       }
@@ -370,8 +418,7 @@
       const d = this.dust[i];
       d.life -= dt;
       if (d.life <= 0) {
-        this.fxGroup.remove(d.mesh);
-        d.mat.dispose();
+        d.mesh.visible = false;
         this.dust.splice(i, 1);
         continue;
       }
@@ -381,8 +428,9 @@
       d.mesh.position.z += d.vz * dt;
       d.vx *= Math.max(0, 1 - dt * 1.6);
       d.vz *= Math.max(0, 1 - dt * 1.6);
-      d.mesh.scale.setScalar(d.s0 * (1 + k * 2.6));
-      d.mat.opacity = 0.46 * (1 - k);
+      // smooth expand then dissipate down cleanly
+      const fade = d.life < 0.5 ? (d.life / 0.5) : 1;
+      d.mesh.scale.setScalar(Math.max(0.01, d.s0 * (1 + k * 2.1) * fade));
     }
   };
 
@@ -404,53 +452,17 @@
   // ---------------- blue outline highlight on closest locker/dumpster ----------------
   FastOne.prototype.ensureHighlight = function (spot) {
     if (spot._blueHighlight) return spot._blueHighlight;
+    const isDump = spot.type === 'dumpster';
     const grp = new THREE.Group();
-    const shellMat = new THREE.MeshBasicMaterial({
-      color: 0x2ea8ff,
-      side: THREE.BackSide,
-      transparent: true,
-      opacity: 0.85,
-      fog: false,
-    });
-    const edgeMat = new THREE.LineBasicMaterial({
-      color: 0x70d4ff,
-      transparent: true,
-      opacity: 0.85,
-      fog: false,
-      depthTest: false,
-    });
-    const parts = [];
-    spot.mesh.traverse(o => {
-      if (!o.isMesh || !o.geometry) return;
-      parts.push(o);
-    });
-    parts.forEach(o => {
-      const shell = new THREE.Mesh(o.geometry, shellMat);
-      shell.position.copy(o.position);
-      shell.rotation.copy(o.rotation);
-      shell.scale.copy(o.scale).multiplyScalar(1.06);
-      // account for parent hierarchy if inside a hinge group
-      if (o.parent && o.parent !== spot.mesh) {
-        shell.position.add(o.parent.position);
-      }
-      grp.add(shell);
-
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(o.geometry), edgeMat);
-      edges.position.copy(o.position);
-      edges.rotation.copy(o.rotation);
-      edges.scale.copy(o.scale).multiplyScalar(1.03);
-      if (o.parent && o.parent !== spot.mesh) {
-        edges.position.add(o.parent.position);
-      }
-      edges.renderOrder = 20;
-      grp.add(edges);
-    });
-    const light = new THREE.PointLight(0x38aaff, 1.8, 10, 1.5);
-    light.position.set(0, 1.4, 0.8);
-    grp.add(light);
+    const shell = new THREE.Mesh(isDump ? hlDumpBoxGeo : hlLockerBoxGeo, this.hlShellMat);
+    shell.position.set(0, isDump ? 0.78 : 1.0, 0);
+    const edges = new THREE.LineSegments(isDump ? hlDumpEdgeGeo : hlLockerEdgeGeo, this.hlEdgeMat);
+    edges.position.copy(shell.position);
+    edges.renderOrder = 20;
+    grp.add(shell, edges);
     grp.visible = false;
     spot.mesh.add(grp);
-    spot._blueHighlight = { grp, shellMat, edgeMat, light };
+    spot._blueHighlight = { grp };
     return spot._blueHighlight;
   };
 
@@ -461,13 +473,19 @@
       }
       this.highlightedSpot = null;
     }
-    if (!spot) return;
+    if (!spot) {
+      if (this.highlightLight) this.highlightLight.intensity = 0;
+      return;
+    }
     const h = this.ensureHighlight(spot);
     h.grp.visible = true;
     const pulse = 0.65 + 0.35 * Math.sin((time || 0) * 9);
-    h.shellMat.opacity = 0.55 + pulse * 0.35;
-    h.edgeMat.opacity = 0.6 + pulse * 0.35;
-    h.light.intensity = 1.1 + pulse * 1.2;
+    this.hlShellMat.opacity = 0.50 + pulse * 0.32;
+    this.hlEdgeMat.opacity = 0.58 + pulse * 0.35;
+    if (this.highlightLight) {
+      this.highlightLight.position.set(spot.interact.x, (spot.baseY || 0) + 1.4, spot.interact.z);
+      this.highlightLight.intensity = 1.1 + pulse * 1.2;
+    }
     this.highlightedSpot = spot;
   };
 
@@ -475,56 +493,73 @@
     this.setHighlight(null);
   };
 
-  FastOne.prototype.findClosestHideSpot = function (player, computePath) {
-    const now = performance.now() / 1000;
-    const spots = [];
-    let best = null, bd = Infinity;
-    (this.world.hideSpots || []).forEach(sp => {
-      if (sp.disabled) return;
-      if (sp.lockedUntil && sp.lockedUntil > now) return;
-      const d = Math.hypot(sp.interact.x - player.pos.x, sp.interact.z - player.pos.z);
-      spots.push({ sp, d });
-      if (d < bd) { bd = d; best = sp; }
-    });
-    let pathDist = bd;
-    if (computePath && spots.length && this.world.colliders) {
-      // Single-source 4m grid BFS from player.pos around colliders to estimate true walkable distance
-      const STEP = 4, HALF = (this.world.HALF || 110);
-      const MIN = -HALF, N = Math.floor((HALF * 2) / STEP) + 1;
-      const colliders = this.world.colliders;
-      const blocked = new Uint8Array(N * N);
-      for (let ix = 0; ix < N; ix++) {
-        const x = MIN + ix * STEP;
-        for (let iz = 0; iz < N; iz++) {
-          const z = MIN + iz * STEP;
-          for (let ci = 0; ci < colliders.length; ci++) {
-            const c = colliders[ci];
-            if (c.disabled || c.maxY < 0.35 || c.minY > 1.75) continue;
-            if (x + 0.35 > c.minX && x - 0.35 < c.maxX && z + 0.35 > c.minZ && z - 0.35 < c.maxZ) {
-              blocked[ix * N + iz] = 1;
-              break;
-            }
+  FastOne.prototype.getWalkGrid = function () {
+    const STEP = 4, HALF = (this.world.HALF || 110);
+    const MIN = -HALF, N = Math.floor((HALF * 2) / STEP) + 1;
+    const ver = this.world._gridVersion || 0;
+    if (this._gridCache && this._gridVer === ver) return this._gridCache;
+    const colliders = this.world.colliders || [];
+    const blocked = new Uint8Array(N * N);
+    for (let ix = 0; ix < N; ix++) {
+      const x = MIN + ix * STEP;
+      for (let iz = 0; iz < N; iz++) {
+        const z = MIN + iz * STEP;
+        for (let ci = 0; ci < colliders.length; ci++) {
+          const c = colliders[ci];
+          if (c.disabled || c.maxY < 0.35 || c.minY > 1.75) continue;
+          if (x + 0.35 > c.minX && x - 0.35 < c.maxX && z + 0.35 > c.minZ && z - 0.35 < c.maxZ) {
+            blocked[ix * N + iz] = 1;
+            break;
           }
         }
       }
-      const distGrid = new Float32Array(N * N);
+    }
+    this._gridVer = ver;
+    this._gridCache = {
+      STEP, HALF, MIN, N, blocked,
+      distGrid: new Float32Array(N * N),
+      queue: new Int32Array(N * N),
+    };
+    return this._gridCache;
+  };
+
+  FastOne.prototype.findClosestHideSpot = function (player, computePath) {
+    const now = performance.now() / 1000;
+    const spots = [];
+    let best = null, bd = Infinity, best3d = Infinity;
+    (this.world.hideSpots || []).forEach(sp => {
+      if (sp.disabled) return;
+      if (sp.lockedUntil && sp.lockedUntil > now) return;
+      const dx = sp.interact.x - player.pos.x, dz = sp.interact.z - player.pos.z;
+      const dy = (sp.baseY || 0) - (player.pos.y || 0);
+      const d = Math.hypot(dx, dz);
+      // slight penalty for spots on another floor so closest same-floor spot wins ties
+      const score = d + Math.abs(dy) * 2.2;
+      spots.push({ sp, d });
+      if (score < best3d) { best3d = score; bd = d; best = sp; }
+    });
+    let pathDist = bd;
+    if (computePath && spots.length && this.world.colliders) {
+      // Single-source 4m grid BFS using cached blocked array + pre-allocated typed buffers
+      const G = this.getWalkGrid();
+      const { STEP, MIN, N, blocked, distGrid, queue } = G;
       distGrid.fill(1e9);
       const clampIdx = v => Math.max(0, Math.min(N - 1, Math.round((v - MIN) / STEP)));
       const sx = clampIdx(player.pos.x), sz = clampIdx(player.pos.z);
       const sIdx = sx * N + sz;
       distGrid[sIdx] = 0;
-      const q = [sIdx];
-      let head = 0;
+      let head = 0, tail = 0;
+      queue[tail++] = sIdx;
       const dirs = [[1, 0, STEP], [-1, 0, STEP], [0, 1, STEP], [0, -1, STEP], [1, 1, STEP * 1.414], [1, -1, STEP * 1.414], [-1, 1, STEP * 1.414], [-1, -1, STEP * 1.414]];
-      while (head < q.length) {
-        const cur = q[head++], cx = (cur / N) | 0, cz = cur % N, cd = distGrid[cur];
+      while (head < tail) {
+        const cur = queue[head++], cx = (cur / N) | 0, cz = cur % N, cd = distGrid[cur];
         for (let di = 0; di < 8; di++) {
           const nx = cx + dirs[di][0], nz = cz + dirs[di][1];
           if (nx < 0 || nx >= N || nz < 0 || nz >= N) continue;
           const ni = nx * N + nz;
           if (blocked[ni]) continue;
           const nd = cd + dirs[di][2];
-          if (nd < distGrid[ni]) { distGrid[ni] = nd; q.push(ni); }
+          if (nd < distGrid[ni]) { distGrid[ni] = nd; queue[tail++] = ni; }
         }
       }
       let bestPath = Infinity;
@@ -620,9 +655,9 @@
         f.mesh.rotation.copy(f.baseRot);
       });
     }
-    for (const s of this.splinters) this.fxGroup.remove(s.mesh);
+    for (const s of this.splinters) s.mesh.visible = false;
     this.splinters.length = 0;
-    for (const d of this.dust) { this.fxGroup.remove(d.mesh); d.mat.dispose(); }
+    for (const d of this.dust) d.mesh.visible = false;
     this.dust.length = 0;
     if (LO.ambush.active === 'fastone') LO.ambush.active = null;
   };
@@ -661,9 +696,6 @@
         const estSeconds = nearest.pathDist / NORMAL_SPRINT_SPEED;
         if (estSeconds > ADRENALINE_TIME_THRESHOLD && player.triggerAdrenaline && player.triggerAdrenaline(BREACH_DELAY + KILL_TIME + 0.5)) {
           LO.audio.adrenaline();
-          player.hint && player.hint('You feel a surge of adrenaline...', 4200);
-        } else {
-          player.hint && player.hint('Something smashed through the fence! Find cover!', 3200);
         }
       } else {
         const estSeconds = nearest.dist / LEGACY_WALK_SPEED;
@@ -672,9 +704,6 @@
           player.stamina = 100;
           player.exhausted = false;
           LO.audio.adrenaline();
-          player.hint && player.hint('You feel a surge of adrenaline...', 4200);
-        } else {
-          player.hint && player.hint('Something broke through the fence! Get to a hiding spot!', 3200);
         }
       }
     }
@@ -863,7 +892,7 @@
         const dx = tx - this.pos.x, dz = tz - this.pos.z;
         const dist = Math.hypot(dx, dz);
         if (dist <= 1.2) {
-          this.pos.set(tx, 0, tz);
+          this.pos.set(tx, sp.baseY || 0, tz);
           this.root.rotation.y = Math.atan2(sp.pos.x - this.pos.x, sp.pos.z - this.pos.z);
           this.slamPhase = 'rear';
           this.slamT = 0;
@@ -873,6 +902,7 @@
           const step = Math.min(dist, speed * dt);
           this.pos.x += (dx / dist) * step;
           this.pos.z += (dz / dist) * step;
+          this.pos.y += ((sp.baseY || 0) - this.pos.y) * Math.min(1, dt * 8);
           this.root.rotation.y = Math.atan2(dx, dz);
           this.animateRun(dt, speed, time);
           this.updateAfterimages(dt, true);
@@ -957,6 +987,7 @@
         const step = Math.min(dist, exitSpeed * dt);
         this.pos.x += (dx / dist) * step;
         this.pos.z += (dz / dist) * step;
+        this.pos.y = Math.max(0, this.pos.y - dt * 12);
         this.root.rotation.y = Math.atan2(dx, dz);
         this.animateRun(dt, exitSpeed, time);
         this.updateAfterimages(dt, true);
@@ -1015,6 +1046,7 @@
 
   FastOne.prototype.dispose = function () {
     this.clearHighlight();
+    if (this.highlightLight) this.scene.remove(this.highlightLight);
     this.scene.remove(this.root);
     this.scene.remove(this.fxGroup);
   };

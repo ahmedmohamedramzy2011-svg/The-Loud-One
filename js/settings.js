@@ -27,11 +27,13 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.5',
-    autoLatest: '2.5',
+    gameVersion: '2.6',
+    autoLatest: '2.6',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.6',   label: 'v2.6',   era: 'Noise glitch warning, proximity forest chimes, multi-floor interiors & blockades, real SFX, collision & Fast One lag fixes' },
+    { id: '2.5.1', label: 'v2.5.1', era: 'Dynamic flashlight sway, dynamic color-coded subtitles, refined title screen & updated credits' },
     { id: '2.5',   label: 'v2.5',   era: 'Deeper dispatcher radio voice lines, real locker peep slits, 2x stamina duration, remodeled trees, more title screen shots & performance optimizations' },
     { id: '2.4.5', label: 'v2.4.5', era: 'Remodeled roadblock barricades & intro ramming, crisp highway sign text, perimeter fence collision & debris' },
     { id: '2.4.4', label: 'v2.4.4', era: 'Visible giant footprint crater, 1m Fast One cooldown, randomized Sheriff\'s Station' },
@@ -90,6 +92,12 @@ window.LO = window.LO || {};
       randomSheriff: v >= 20404,
       clearFootprint: v >= 20404,
       staminaBuff: v >= 20500,
+      flashSway: v >= 20501,
+      dynamicSubs: v >= 20501,
+      noiseGlitch: v >= 20600,
+      proximityAmbient: v >= 20600,
+      richInteriors: v >= 20600,
+      cleanSubs: v >= 20600,
     };
   }
 
@@ -104,7 +112,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

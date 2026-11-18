@@ -97,6 +97,12 @@
     this.vfTarget = null;
     this.bob = 0;
     this.shake = 0;
+    this.swayX = 0;
+    this.swayY = 0;
+    this.swayVelX = 0;
+    this.swayVelY = 0;
+    this.prevYaw = this.yaw;
+    this.prevPitch = this.pitch;
     this.prompt = '';
     this.alive = true;
     this.zoom = 0;
@@ -231,7 +237,7 @@
       if (this.adrenalineArmed) this.startWinded();
       // locked in place, can only look around a bit
       const sp = this.hidden;
-      this.pos.set(sp.pos.x, 0, sp.pos.z);
+      this.pos.set(sp.pos.x, sp.baseY || 0, sp.pos.z);
       this.vel.set(0, 0, 0);
       let d = this.yaw - (sp.yaw + Math.PI);
       while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
@@ -329,16 +335,21 @@
           LO.audio.jumpGrunt();
           k.Space = false;
         }
+        const prevY = this.pos.y, wasOnGround = this.onGround;
         this.vel.y -= 13 * dt;
         this.pos.addScaledVector(this.vel, dt);
-        if (this.pos.y <= 0) {
-          if (!this.onGround) {
+        const floorY = W.floorHeightAt ? W.floorHeightAt(this.pos.x, this.pos.z, prevY) : 0;
+        const stepDown = wasOnGround && this.vel.y <= 0.01 && (this.pos.y - floorY) <= 0.45 && this.pos.y >= floorY;
+        if (this.pos.y <= floorY || stepDown) {
+          if (!wasOnGround && this.pos.y <= floorY) {
             const hard = this.vel.y < -4;
             LO.audio.land(hard);
             this.spike = Math.max(this.spike, NOISE.land * (hard ? 1 : 0.6));
             this.shake = Math.max(this.shake, 0.15);
           }
-          this.pos.y = 0; this.vel.y = 0; this.onGround = true;
+          this.pos.y = floorY; this.vel.y = 0; this.onGround = true;
+        } else {
+          this.onGround = false;
         }
         this.collide();
       }
@@ -424,7 +435,8 @@
     W.pickups.forEach(p => {
       if (p.taken) return;
       if (p.type === 'rock' && !Vs.rocks) return;
-      if (Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < 1.4) {
+      if (Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < 1.4 &&
+          Math.abs((p.baseY !== undefined ? p.baseY : (p.pos.y || 0)) - (this.pos.y + 0.5)) < 1.9) {
         if (p.type === 'rock') {
           if (this.hidden) return;
           if (this.rocks >= MAX_ROCKS) {
@@ -486,15 +498,16 @@
     this.hideAnim = null;
     this.hideView = false;
     if (s) {
-      this.pos.set(s.exit.x, 0, s.exit.z);
+      this.pos.set(s.exit.x, s.baseY || 0, s.exit.z);
+    } else {
+      this.pos.y = 0;
     }
-    this.pos.y = 0;
     this.onGround = true;
   };
 
   Player.prototype.applyCamera = function (dt, time) {
     const cam = this.camera;
-    const eye = this.hidden ? this.hidden.pos.y : (1.62 - this.crouch * 0.67);
+    const eye = this.hidden ? (this.hidden.pos.y - (this.hidden.baseY || 0)) : (1.62 - this.crouch * 0.67);
     const bobAmt = LO.settings.headBob ? 1 : 0;
     this.shake = Math.max(0, this.shake - dt * 0.8);
     const sh = this.shake;
@@ -512,6 +525,54 @@
       + dz * (Math.sin(dtz * 2.5) * 0.14 + Math.sin(dtz * 5.2) * 0.045);
     const fov = LO.settings.fov * (1 - this.zoom * 0.35) + dz * Math.sin(dtz * 3.7) * 5.5;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
+
+    // dynamic handheld flashlight sway (gait figure-8 + turn inertia + idle breathing)
+    const Vf = LO.ver ? LO.ver() : { flashSway: true };
+    if (Vf.flashSway && !this.hidden) {
+      let dYaw = this.yaw - (this.prevYaw || 0);
+      while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+      while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+      let dPitch = this.pitch - (this.prevPitch || 0);
+      this.prevYaw = this.yaw;
+      this.prevPitch = this.pitch;
+      if (Math.abs(dYaw) > 0.6) dYaw = 0;
+      if (Math.abs(dPitch) > 0.6) dPitch = 0;
+
+      const t = time || 0;
+      const hspeed = Math.hypot(this.vel.x, this.vel.z);
+      const moveFactor = this.onGround ? Math.min(1.35, hspeed / 5.2) : 0.25;
+      const crouchMul = 1 - this.crouch * 0.4;
+      const pace = this.stepPhase * Math.PI;
+      const walkX = Math.cos(pace) * 0.44 * moveFactor * crouchMul;
+      const walkY = (Math.abs(Math.sin(pace)) * -0.26 + (this.sprinting ? 0.10 : 0)) * moveFactor * crouchMul;
+      const breathAmp = 1 + (this.panting || 0) * 1.6 + (this.windedTimer > 0 ? 0.9 : 0);
+      const idleX = Math.sin(t * 1.45) * 0.11 * breathAmp;
+      const idleY = Math.cos(t * 1.05) * 0.08 * breathAmp;
+      const airY = this.onGround ? 0 : Math.max(-0.4, Math.min(0.4, -this.vel.y * 0.06));
+      const camDropY = -this.zoom * 0.22;
+      const targetX = walkX + idleX + dz * Math.sin(dtz * 3.1) * 0.35;
+      const targetY = walkY + idleY + airY + camDropY + dz * Math.cos(dtz * 2.4) * 0.25;
+
+      // rotational lag when sweeping your view left/right/up/down
+      this.swayVelX += dYaw * 9.5;
+      this.swayVelY += -dPitch * 7.5;
+
+      const stepDt = Math.min(0.05, dt || 0.016);
+      const spring = 38, damp = 9.5;
+      this.swayVelX += ((targetX - this.swayX) * spring - this.swayVelX * damp) * stepDt;
+      this.swayVelY += ((targetY - this.swayY) * spring - this.swayVelY * damp) * stepDt;
+      this.swayX = Math.max(-1.55, Math.min(1.55, this.swayX + this.swayVelX * stepDt));
+      this.swayY = Math.max(-1.15, Math.min(1.15, this.swayY + this.swayVelY * stepDt));
+
+      this.flash.position.set(0.28 + this.swayX * 0.038, -0.22 + this.swayY * 0.03, 0);
+      this.flashTarget.position.set(0.08 + this.swayX * 0.85, -0.10 + this.swayY * 0.72, -10);
+    } else {
+      this.prevYaw = this.yaw;
+      this.prevPitch = this.pitch;
+      this.swayX = 0; this.swayY = 0; this.swayVelX = 0; this.swayVelY = 0;
+      this.flash.position.set(0.28, -0.22, 0);
+      this.flashTarget.position.set(0.1, -0.1, -10);
+    }
   };
 
   function collideList(p, list) {
@@ -552,7 +613,7 @@
     if (!s) return;
     this.hidden = null;
     s.lockedUntil = performance.now() / 1000 + 45;   // it keeps that spot for a while
-    this.pos.copy(s.exit);
+    this.pos.set(s.exit.x, s.baseY || 0, s.exit.z);
     this.yaw = s.yaw + Math.PI;
     this.pitch = 0.1;
     // shoved out hard — and it is LOUD
@@ -604,13 +665,14 @@
       if (hit) { r.vel.x *= -0.15; r.vel.z *= -0.15; } else { p.x = nx; p.z = nz; }
       p.y += r.vel.y * dt;
       r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt;
-      if (p.y <= 0.12) {
-        p.y = 0.12;
+      const rockFloor = (W.floorHeightAt ? W.floorHeightAt(p.x, p.z, p.y) : 0) + 0.12;
+      if (p.y <= rockFloor) {
+        p.y = rockFloor;
         this.projectiles.splice(i, 1);
         LO.audio.rockClack(p);
         this.onRockLand && this.onRockLand(p.clone());
         // the rock stays where it lands and can be picked up again
-        W.pickups.push({ type: 'rock', mesh: r.mesh, pos: r.mesh.position, baseY: 0.12, taken: false });
+        W.pickups.push({ type: 'rock', mesh: r.mesh, pos: r.mesh.position, baseY: rockFloor, taken: false });
       }
     }
   };
@@ -630,6 +692,7 @@
     const fwd = new V3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.world.hideSpots.forEach(s => {
       if (s.disabled) return;
+      if (Math.abs((s.baseY || 0) - this.pos.y) > 1.5) return;
       const dx = s.interact.x - this.pos.x, dz = s.interact.z - this.pos.z;
       const d = Math.hypot(dx, dz);
       const tx = s.pos.x - this.pos.x, tz = s.pos.z - this.pos.z;
@@ -646,11 +709,11 @@
   Player.prototype.startHideAnim = function (spot, dir) {
     if (dir === 'in' && this.adrenalineArmed) this.startWinded();
     this.hideSpotType = spot.type || 'locker';
-    const eyeOut = 1.62;
+    const baseY = spot.baseY || 0;
     this.hideAnim = {
       spot, dir, t: 0,
-      fromPos: dir === 'in' ? new V3(this.pos.x, eyeOut, this.pos.z) : spot.pos.clone(),
-      toPos: dir === 'in' ? spot.pos.clone() : new V3(spot.exit.x, eyeOut, spot.exit.z),
+      fromPos: dir === 'in' ? new V3(this.pos.x, this.pos.y + 1.62, this.pos.z) : spot.pos.clone(),
+      toPos: dir === 'in' ? spot.pos.clone() : new V3(spot.exit.x, baseY + 1.62, spot.exit.z),
       fromYaw: this.yaw, toYaw: spot.yaw + Math.PI,
       fromPitch: this.pitch,
     };
@@ -679,7 +742,7 @@
         this.hidden = sp;
         this.onHide && this.onHide();
       } else {
-        this.pos.set(sp.exit.x, 0, sp.exit.z);
+        this.pos.set(sp.exit.x, sp.baseY || 0, sp.exit.z);
         this.yaw = sp.yaw + Math.PI;
         this.spike = Math.max(this.spike, NOISE.hide);
       }

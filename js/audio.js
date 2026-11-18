@@ -177,7 +177,7 @@
     if (on) {
       heartAmt = 0;
       [breath && breath.g, buzz && buzz.g, wind && wind.g, wind && wind.wg, tenant && tenant.g, tenant && tenant.og,
-       silent && silent.og, silent && silent.sg, moth && moth.g, expo && expo.g1, expo && expo.g2, worldBus]
+       silent && silent.og, silent && silent.sg, moth && moth.g, expo && expo.g1, expo && expo.g2, proxAmb && proxAmb.out, worldBus]
         .forEach(g => { if (g && g.gain) { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0, t); } });
     } else if (worldBus && !A.still) {
       worldBus.gain.cancelScheduledValues(t); worldBus.gain.setTargetAtTime(1, t, 0.3);
@@ -224,7 +224,13 @@
   }
 
   // ---------- 3D audio ----------
+  let subCamPos = { x: 0, y: 1.6, z: 0 }, subCamRight = { x: 1, z: 0 };
   A.setListener = function (pos, fwd, up) {
+    subCamPos = { x: pos.x, y: pos.y, z: pos.z };
+    const rx = fwd.y * up.z - fwd.z * up.y;
+    const rz = fwd.x * up.y - fwd.y * up.x;
+    const rl = Math.hypot(rx, rz) || 1;
+    subCamRight = { x: rx / rl, z: rz / rl };
     if (!ctx) return;
     const L = ctx.listener, t = ctx.currentTime;
     if (L.positionX) {
@@ -258,7 +264,20 @@
   A.footstep = function (kind, indoor) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    const vol = kind === 'run' ? 0.5 : kind === 'crouch' ? 0.08 : 0.22;
+    const vol = kind === 'run' ? 0.5 : kind === 'crouch' ? 0.09 : 0.23;
+    const stepBufs = [samples.step1, samples.step2, samples.step3, samples.step4, samples.step5].filter(Boolean);
+    if (stepBufs.length) {
+      const s = ctx.createBufferSource();
+      s.buffer = stepBufs[(Math.random() * stepBufs.length) | 0];
+      s.playbackRate.value = (kind === 'run' ? 1.06 : kind === 'crouch' ? 0.80 : 0.94) + Math.random() * 0.11;
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass';
+      f.frequency.value = kind === 'crouch' ? (indoor ? 950 : 1250) : kind === 'run' ? (indoor ? 3200 : 4800) : (indoor ? 1900 : 2800);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(vol * 0.96, t);
+      s.connect(f); f.connect(g); g.connect(sfxBus);
+      s.start(t);
+      return;
+    }
     const n = noiseSrc(false, false);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass';
     f.frequency.value = (indoor ? 900 : 600) + Math.random() * 300; f.Q.value = 0.9;
@@ -295,28 +314,53 @@
     n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t); n.stop(t + 0.2);
   };
 
-  // breathing — called with intensity 0..1 each frame
+  // breathing — called with intensity 0..1 each frame (uses recorded panting loop when decoded)
   let breath = null;
   A.setBreathing = function (amount) {
     if (A.worldMuted) return;
     if (!ctx) return;
+    const a = Math.max(0, Math.min(1, amount || 0));
+    if (breath && !breath.isSample && samples.panting) {
+      try { breath.stopNodes.forEach(nd => nd.stop()); } catch (e) {}
+      breath.g.disconnect();
+      breath = null;
+    }
     if (!breath) {
-      const n = noiseSrc(false, true);
-      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1100; f.Q.value = 1.2;
-      const g = ctx.createGain(); g.gain.value = 0;
-      const lfo = ctx.createOscillator(); lfo.frequency.value = 1.6;
-      const lg = ctx.createGain(); lg.gain.value = 0;
-      const amp = ctx.createGain(); amp.gain.value = 0;
-      lfo.connect(lg); lg.connect(amp.gain);
-      n.connect(f); f.connect(amp); amp.connect(g); g.connect(sfxBus);
-      n.start(); lfo.start();
-      breath = { g, lg, amp, lfo };
+      if (samples.panting) {
+        const s = ctx.createBufferSource();
+        s.buffer = samples.panting;
+        s.loop = true;
+        s.loopStart = 0.18;
+        s.loopEnd = Math.max(2.0, samples.panting.duration - 0.25);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
+        const g = ctx.createGain(); g.gain.value = 0;
+        s.connect(f); f.connect(g); g.connect(sfxBus);
+        s.start(0, Math.random() * 2.0);
+        breath = { isSample: true, src: s, f, g, stopNodes: [s] };
+      } else {
+        const n = noiseSrc(false, true);
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1100; f.Q.value = 1.2;
+        const g = ctx.createGain(); g.gain.value = 0;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 1.6;
+        const lg = ctx.createGain(); lg.gain.value = 0;
+        const amp = ctx.createGain(); amp.gain.value = 0;
+        lfo.connect(lg); lg.connect(amp.gain);
+        n.connect(f); f.connect(amp); amp.connect(g); g.connect(sfxBus);
+        n.start(); lfo.start();
+        breath = { isSample: false, g, lg, amp, lfo, stopNodes: [n, lfo] };
+      }
     }
     const t = ctx.currentTime;
-    breath.g.gain.setTargetAtTime(amount * 0.35, t, 0.3);
-    breath.lg.gain.setTargetAtTime(0.5, t, 0.3);
-    breath.amp.gain.setTargetAtTime(0.5, t, 0.3);
-    breath.lfo.frequency.setTargetAtTime(0.7 + amount * 1.2, t, 0.5);
+    if (breath.isSample) {
+      breath.g.gain.setTargetAtTime(a > 0.02 ? a * 0.52 : 0, t, 0.22);
+      breath.src.playbackRate.setTargetAtTime(0.92 + a * 0.20, t, 0.35);
+      breath.f.frequency.setTargetAtTime(900 + a * 2100, t, 0.3);
+    } else {
+      breath.g.gain.setTargetAtTime(a * 0.35, t, 0.3);
+      breath.lg.gain.setTargetAtTime(0.5, t, 0.3);
+      breath.amp.gain.setTargetAtTime(0.5, t, 0.3);
+      breath.lfo.frequency.setTargetAtTime(0.7 + a * 1.2, t, 0.5);
+    }
   };
 
   // flashlight hum (the "slight buzzing")
@@ -442,6 +486,58 @@
     wind.wf.frequency.setTargetAtTime(700 + gust * 700, t, 0.6);
   };
 
+  // procedural rustling forest foliage + eerie wind chimes driven by entity proximity (0..1)
+  let proxAmb = null, proxLevel = 0, nextChimeAt = 0;
+  const CHIME_NOTES = [523.25, 587.33, 622.25, 783.99, 932.33, 1046.5];
+  A.setProximityAmbient = function (nearFactor) {
+    if (!ctx) return;
+    if (A.worldMuted) { proxLevel = 0; return; }
+    proxLevel = Math.max(0, Math.min(1, nearFactor || 0));
+    if (!proxAmb) {
+      const out = ctx.createGain(); out.gain.value = 1;
+      out.connect(worldBus);
+      // dual swept bandpass foliage rustle
+      const n1 = noiseSrc(false, true);
+      const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 2100; f1.Q.value = 1.4;
+      const lfo1 = ctx.createOscillator(); lfo1.frequency.value = 0.24;
+      const lg1 = ctx.createGain(); lg1.gain.value = 650;
+      lfo1.connect(lg1); lg1.connect(f1.frequency);
+      const rg = ctx.createGain(); rg.gain.value = 0;
+      n1.connect(f1); f1.connect(rg); rg.connect(out);
+      n1.start(); lfo1.start();
+      proxAmb = { out, rg, f1 };
+      nextChimeAt = ctx.currentTime + 2.5;
+    }
+    const t = ctx.currentTime;
+    const rustleGain = (!A.still && !A.worldMuted) ? (0.008 + proxLevel * proxLevel * 0.068) : 0;
+    proxAmb.rg.gain.setTargetAtTime(rustleGain, t, 0.35);
+    proxAmb.f1.frequency.setTargetAtTime(1750 + proxLevel * 1200, t, 0.45);
+  };
+  function chimeTick() {
+    if (!ctx || !proxAmb || A.still || A.worldMuted || proxLevel <= 0.04) return;
+    const t = ctx.currentTime;
+    if (t < nextChimeAt) return;
+    const interval = Math.max(0.28, 3.8 - proxLevel * 3.35) * (0.65 + Math.random() * 0.7);
+    nextChimeAt = t + interval;
+    const hits = proxLevel > 0.55 ? (Math.random() < 0.5 ? 2 : 3) : 1;
+    for (let h = 0; h < hits; h++) {
+      const ht = t + h * (0.08 + Math.random() * 0.14);
+      const f0 = CHIME_NOTES[(Math.random() * CHIME_NOTES.length) | 0] * (0.985 + Math.random() * 0.03);
+      const dur = 1.3 + Math.random() * 1.1;
+      const vol = (0.012 + proxLevel * 0.045) * (h === 0 ? 1 : 0.7);
+      const dest = ctx.createStereoPanner ? (() => { const sp = ctx.createStereoPanner(); sp.pan.value = (Math.random() - 0.5) * 1.4; sp.connect(proxAmb.out); return sp; })() : proxAmb.out;
+      [[1, 1.0], [2.756, 0.38], [5.404, 0.14]].forEach(([mul, amp]) => {
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(f0 * mul, ht);
+        o.frequency.linearRampToValueAtTime(f0 * mul * (1 + (Math.random() - 0.5) * 0.006), ht + dur);
+        const g = ctx.createGain();
+        env(g, ht, 0.006, vol * amp, dur, 0.0001);
+        o.connect(g); g.connect(dest);
+        o.start(ht); o.stop(ht + dur + 0.05);
+      });
+    }
+  }
+
   // ---------- THE MOTHS ----------
   let moth = null;
   // papery flutter that rises while your light rests on one
@@ -542,15 +638,25 @@
     const t = ctx.currentTime;
     const p = panner(pos, 70, 0.22); p.connect(worldBus);
     // distant-carry path so the breach is unmistakable from anywhere in town while preserving stereo direction
-    const carry = ctx.createGain(); carry.gain.value = 0.55;
-    const carryLP = ctx.createBiquadFilter(); carryLP.type = 'lowpass'; carryLP.frequency.value = 1450;
+    const carry = ctx.createGain(); carry.gain.value = 0.58;
+    const carryLP = ctx.createBiquadFilter(); carryLP.type = 'lowpass'; carryLP.frequency.value = 1750;
     carry.connect(carryLP); carryLP.connect(worldBus);
 
-    // 1. heavy post-break structural slam
+    // deep physical post-break thump
     const sub = ctx.createOscillator(); sub.type = 'sine';
-    sub.frequency.setValueAtTime(145, t); sub.frequency.exponentialRampToValueAtTime(28, t + 0.62);
-    const sg = ctx.createGain(); env(sg, t, 0.003, 1.4, 0.62, 0.0001);
-    sub.connect(sg); sg.connect(p); sg.connect(carry); sub.start(t); sub.stop(t + 0.72);
+    sub.frequency.setValueAtTime(140, t); sub.frequency.exponentialRampToValueAtTime(28, t + 0.55);
+    const sg = ctx.createGain(); env(sg, t, 0.003, 1.25, 0.55, 0.0001);
+    sub.connect(sg); sg.connect(p); sg.connect(carry); sub.start(t); sub.stop(t + 0.65);
+
+    if (samples.fenceSmash) {
+      const s = ctx.createBufferSource();
+      s.buffer = samples.fenceSmash;
+      s.playbackRate.value = 0.96 + Math.random() * 0.08;
+      const g = ctx.createGain(); g.gain.value = 1.25;
+      s.connect(g); g.connect(p); g.connect(carry);
+      s.start(t);
+      return;
+    }
 
     const knock = ctx.createOscillator(); knock.type = 'triangle';
     knock.frequency.setValueAtTime(240, t); knock.frequency.exponentialRampToValueAtTime(52, t + 0.34);
@@ -815,9 +921,19 @@
     const g2 = ctx.createGain(); env(g2, t, 0.003, 0.8, 0.3, 0.0001);
     o.connect(g2); g2.connect(sfxBus); o.start(t); o.stop(t + 0.35);
   };
-  A.hurt = function () {
+  A.hurt = function (heavy) {
     if (!ctx) return;
     const t = ctx.currentTime;
+    const hurts = (heavy ? [samples.hurt4, samples.hurt1, samples.hurt2, samples.hurt3] : [samples.hurt1, samples.hurt2, samples.hurt3, samples.hurt4]).filter(Boolean);
+    if (hurts.length) {
+      const s = ctx.createBufferSource();
+      s.buffer = hurts[(Math.random() * hurts.length) | 0];
+      s.playbackRate.value = 0.95 + Math.random() * 0.10;
+      const g = ctx.createGain(); g.gain.value = 0.72;
+      s.connect(g); g.connect(sfxBus);
+      s.start(t);
+      return;
+    }
     const n = noiseSrc(false, false);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(900, t); f.frequency.linearRampToValueAtTime(500, t + 0.3); f.Q.value = 4;
     const g = ctx.createGain(); env(g, t, 0.01, 0.35, 0.3, 0.0001);
@@ -1239,6 +1355,7 @@
     setInterval(() => {
       if (!ctx) return;
       heartTick();
+      chimeTick();
       if (!current) return;
       const tr = current;
       while (tr.nextTime < ctx.currentTime + STEP_AHEAD) {
@@ -1283,22 +1400,78 @@
   }
 
   const subsEl = () => document.getElementById('subtitles');
-  function showSub(who, text, cls, ms) {
-    if (!S.subtitles) return;
+  const SUB_ROLES = {
+    player: { name: 'You',      cls: 'player' },
+    radio:  { name: 'Dispatch', cls: 'radio' },
+    siren:  { name: '???',      cls: 'siren' },
+  };
+  let lastSubMode = '';
+  A.setSubMode = function (modeStr) {
     const el = subsEl();
+    if (!el) return;
+    const dyn = !LO.ver || LO.ver().dynamicSubs;
+    const next = dyn ? (modeStr || '') : '';
+    if (next === lastSubMode) return;
+    lastSubMode = next;
+    el.className = next;
+  };
+  const cueLast = {};
+  A.subCue = function (role, text, opts) {
+    if (!S.subtitles) return;
+    if (LO.ver && !LO.ver().dynamicSubs) return;
+    if (role !== 'siren' && role !== 'player' && role !== 'radio') return;
+    opts = opts || {};
+    const now = performance.now();
+    const cd = opts.cooldownMs === undefined ? 1400 : opts.cooldownMs;
+    if (cueLast[role] && now - cueLast[role] < cd) return;
+    cueLast[role] = now;
+    const meta = SUB_ROLES[role] || { name: role, cls: role };
+    const who = opts.who !== undefined ? opts.who : meta.name;
+    showSub(who, text, meta.cls, opts.ms || 2400, opts);
+  };
+  function showSub(who, text, cls, ms, opts) {
+    if (!S.subtitles) return;
+    opts = opts || {};
+    const dyn = !LO.ver || LO.ver().dynamicSubs;
+    const el = subsEl();
+    if (!el) return;
     const line = document.createElement('div');
     const wrap = document.createElement('div');
-    line.className = 'line ' + (cls || '');
+    wrap.className = 'sub-wrap';
+    line.className = 'line ' + (cls || '') + (dyn && opts.urgent ? ' urgent' : '');
+    let dirTag = '';
+    if (dyn && opts.pos) {
+      const dx = opts.pos.x - subCamPos.x;
+      const dz = opts.pos.z - subCamPos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 1.5) {
+        const pan = Math.max(-1, Math.min(1, (dx * subCamRight.x + dz * subCamRight.z) / d));
+        const px = Math.round(pan * 95);
+        wrap.style.setProperty('--sub-pan', px + 'px');
+        if (pan < -0.34) dirTag = '◄ ';
+        else if (pan > 0.34) dirTag = ' ►';
+      }
+    }
     if (who) {
       const w = document.createElement('span');
-      w.className = 'who ' + (cls || ''); w.textContent = who + ':';
+      w.className = 'who ' + (cls || '');
+      w.textContent = (dirTag === '◄ ' ? '◄ ' : '') + who + (dirTag === ' ►' ? ' ►' : '') + ':';
       line.appendChild(w);
     }
     line.appendChild(document.createTextNode(text));
     wrap.appendChild(line);
     el.appendChild(wrap);
-    while (el.children.length > 2) el.removeChild(el.firstChild);
-    setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, ms);
+    const maxLines = dyn ? 3 : 2;
+    while (el.children.length > maxLines) el.removeChild(el.firstChild);
+    setTimeout(() => {
+      if (!wrap.parentNode) return;
+      if (dyn) {
+        wrap.classList.add('out');
+        setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 220);
+      } else {
+        wrap.parentNode.removeChild(wrap);
+      }
+    }, Math.max(500, ms || 2400));
   }
   A.clearSubs = function () { const el = subsEl(); if (el) el.innerHTML = ''; };
 
@@ -1321,10 +1494,12 @@
   }
   function speakNow(item, overlay) {
     const { role, text, opts, resolve } = item;
-    const names = { player: 'You', radio: 'Dispatch', siren: '???' };
+    const dyn = !LO.ver || LO.ver().dynamicSubs;
+    const meta = SUB_ROLES[role] || { name: '???', cls: role || '' };
+    const legacyNames = { player: 'You', radio: 'Dispatch', siren: '???' };
     const est = Math.max(1600, text.length * 75) / (opts.rate || 1);
-    const who = opts.who !== undefined ? opts.who : names[role];
-    const cls = role === 'siren' ? 'siren' : role === 'radio' ? 'radio' : '';
+    const who = opts.who !== undefined ? opts.who : (dyn ? meta.name : legacyNames[role]);
+    const cls = dyn ? meta.cls : (role === 'siren' ? 'siren' : role === 'radio' ? 'radio' : '');
     let done = false;
     const finish = () => {
       if (done) return; done = true;
@@ -1338,7 +1513,7 @@
     // recorded voice lines (player & dispatch), when there is a take for this line
     const rec = (role === 'player' || role === 'radio') && voiceSamples[text];
     if (rec && S.tts && S.voice > 0 && ctx) {
-      showSub(who, text, cls, rec.duration * 1000 + 900);
+      showSub(who, text, cls, rec.duration * 1000 + 900, opts);
       const src = ctx.createBufferSource(); src.buffer = rec;
       if (role === 'radio') {
         const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
@@ -1363,7 +1538,7 @@
       return;
     }
     const canSpeak = synth && S.tts && S.voice > 0 && (!overlay || !synth.speaking);
-    showSub(who, text, cls, est + 1200);
+    showSub(who, text, cls, est + 1200, opts);
     if (canSpeak) {
       try {
         const u = new SpeechSynthesisUtterance(text);

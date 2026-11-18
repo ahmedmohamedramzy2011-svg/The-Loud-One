@@ -221,7 +221,7 @@
     const vol = Math.max(0.15, 1 - dist / 140);
     LO.audio.staticBurst(this.voice, 0.5, 0.25);
     LO.audio.radioGarble(this.voice, 1.6 + line.length * 0.03, 0.35);
-    LO.audio.say('siren', line, { volume: vol });
+    LO.audio.say('siren', line, { volume: vol, pos: this.pos, urgent: kind === 'hunt' || dist < 45 });
   };
 
   // ------------------------------------------------------------

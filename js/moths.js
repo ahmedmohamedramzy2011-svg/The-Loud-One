@@ -31,14 +31,25 @@
   // candidate places: dark corners inside buildings and alleys between them
   Moths.prototype.buildSpots = function () {
     const W = this.world, spots = [];
+    const clearAt = (x, z) => {
+      for (let i = 0; i < W.colliders.length; i++) {
+        const c = W.colliders[i];
+        if (c.disabled || c.minY > 1.75 || c.maxY < 0.35) continue;
+        if (x + 0.45 > c.minX && x - 0.45 < c.maxX && z + 0.45 > c.minZ && z - 0.45 < c.maxZ) return false;
+      }
+      return true;
+    };
     W.interiors.forEach(r => {
       const m = 0.9;
-      spots.push({ x: r.minX + m, z: r.minZ + m, indoor: true }, { x: r.maxX - m, z: r.maxZ - m, indoor: true },
-        { x: r.minX + m, z: r.maxZ - m, indoor: true }, { x: r.maxX - m, z: r.minZ + m, indoor: true });
+      [[r.minX + m, r.minZ + m], [r.maxX - m, r.maxZ - m], [r.minX + m, r.maxZ - m], [r.maxX - m, r.minZ + m],
+       [(r.minX + r.maxX) * 0.5, r.minZ + 1.4], [(r.minX + r.maxX) * 0.5, r.maxZ - 1.4]].forEach(([sx, sz]) => {
+        if (clearAt(sx, sz)) spots.push({ x: sx, z: sz, indoor: true });
+      });
     });
     LO.World.BLOCK_C.forEach(bx => LO.World.BLOCK_C.forEach(bz => {
       [-14, -7, 7, 14].forEach(o => {
-        spots.push({ x: bx + o, z: bz, indoor: false }, { x: bx, z: bz + o, indoor: false });
+        if (clearAt(bx + o, bz)) spots.push({ x: bx + o, z: bz, indoor: false });
+        if (clearAt(bx, bz + o)) spots.push({ x: bx, z: bz + o, indoor: false });
       });
     }));
     // keep them away from the start
