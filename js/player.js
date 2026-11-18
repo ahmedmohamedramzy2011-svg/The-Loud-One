@@ -75,6 +75,7 @@
     this.hidden = null;
     this.hideAnim = null;
     this.hideView = false;
+    this.hideSpotType = 'locker';
     ((this.world && this.world.hideSpots) || []).forEach(sp => sp.setOpen && sp.setOpen(0));
     this.hideTime = 0;
     this.rocks = 0;
@@ -349,7 +350,9 @@
         this.windedTimer = 0;
         this.panting = 0;
       } else if (sprinting) {
-        this.stamina -= (this.adrenaline > 0 ? 4.5 : 21) * dt;
+        const Vst = LO.ver ? LO.ver() : { staminaBuff: true };
+        const baseDrain = Vst.staminaBuff ? 10.5 : 21;
+        this.stamina -= (this.adrenaline > 0 ? 4.5 : baseDrain) * dt;
         if (this.stamina <= 0) { this.stamina = 0; this.exhausted = true; this.panting = 1; }
       } else {
         this.stamina = Math.min(100, this.stamina + (moving ? 9 : 15) * windedMult * dt);
@@ -511,10 +514,9 @@
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
   };
 
-  Player.prototype.collide = function () {
-    const p = this.pos;
-    const all = this.world.evColliders.length ? this.world.colliders.concat(this.world.evColliders) : this.world.colliders;
-    for (const c of all) {
+  function collideList(p, list) {
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
       if (c.disabled) continue;
       if (c.maxY < p.y + 0.3) continue;
       if (c.minY > p.y + 1.75) continue;   // e.g. the wall above a doorway
@@ -528,11 +530,21 @@
         p.x += dx / d * push; p.z += dz / d * push;
       } else {
         // centre is inside the box: push out along the shortest axis
-        const opts = [[c.minX - RADIUS - p.x, 0], [c.maxX + RADIUS - p.x, 0], [0, c.minZ - RADIUS - p.z], [0, c.maxZ + RADIUS - p.z]];
-        opts.sort((a, b) => Math.abs(a[0] + a[1]) - Math.abs(b[0] + b[1]));
-        p.x += opts[0][0]; p.z += opts[0][1];
+        const dL = Math.abs(c.minX - RADIUS - p.x), dR = Math.abs(c.maxX + RADIUS - p.x);
+        const dB = Math.abs(c.minZ - RADIUS - p.z), dF = Math.abs(c.maxZ + RADIUS - p.z);
+        const m = Math.min(dL, dR, dB, dF);
+        if (m === dL) p.x = c.minX - RADIUS;
+        else if (m === dR) p.x = c.maxX + RADIUS;
+        else if (m === dB) p.z = c.minZ - RADIUS;
+        else p.z = c.maxZ + RADIUS;
       }
     }
+  }
+
+  Player.prototype.collide = function () {
+    const p = this.pos;
+    collideList(p, this.world.colliders);
+    if (this.world.evColliders.length) collideList(p, this.world.evColliders);
   };
 
   Player.prototype.kickOut = function () {
@@ -574,6 +586,13 @@
     this.spike = Math.max(this.spike, 3);   // the throw itself is quiet
     LO.audio.jumpGrunt();
   };
+  function hitCollider(list, py, nx, nz) {
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c.disabled && py < c.maxY && py > (c.minY || 0) && nx > c.minX && nx < c.maxX && nz > c.minZ && nz < c.maxZ) return true;
+    }
+    return false;
+  }
   Player.prototype.updateRocks = function (dt) {
     const W = this.world;
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
@@ -581,7 +600,7 @@
       r.vel.y -= 13 * dt;
       const nx = p.x + r.vel.x * dt, nz = p.z + r.vel.z * dt;
       // hit a wall: drop straight down
-      const hit = W.colliders.concat(W.evColliders).some(c => !c.disabled && p.y < c.maxY && p.y > (c.minY || 0) && nx > c.minX && nx < c.maxX && nz > c.minZ && nz < c.maxZ);
+      const hit = hitCollider(W.colliders, p.y, nx, nz) || (W.evColliders.length && hitCollider(W.evColliders, p.y, nx, nz));
       if (hit) { r.vel.x *= -0.15; r.vel.z *= -0.15; } else { p.x = nx; p.z = nz; }
       p.y += r.vel.y * dt;
       r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt;
@@ -626,6 +645,7 @@
   function angDiff(a, b) { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; }
   Player.prototype.startHideAnim = function (spot, dir) {
     if (dir === 'in' && this.adrenalineArmed) this.startWinded();
+    this.hideSpotType = spot.type || 'locker';
     const eyeOut = 1.62;
     this.hideAnim = {
       spot, dir, t: 0,
@@ -703,12 +723,16 @@
       const maxAng = THREE.MathUtils.degToRad(ev.ground ? 20 : 16);
       if (ang > maxAng) return;
       if (dist > ev.maxDist) { if (dist < ev.maxDist * 2.2) tooFar = ev; return; }
-      // line of sight
+      // line of sight (avoid per-call concat allocation)
       this.raycaster.set(cam.position, _dir);
       this.raycaster.far = dist;
-      const hits = this.raycaster.intersectObjects(this.world.occluders.concat(this.world.evOccluders), false);
       const margin = ev.margin || (ev.id === 'police' ? 3 : ev.id === 'tower' ? 2 : 1.2);
+      const hits = this.raycaster.intersectObjects(this.world.occluders, false);
       if (hits.length && hits[0].distance < dist - margin) return;
+      if (this.world.evOccluders.length) {
+        const hits2 = this.raycaster.intersectObjects(this.world.evOccluders, false);
+        if (hits2.length && hits2[0].distance < dist - margin) return;
+      }
       const score = 1 - ang / maxAng;
       if (score > bestScore) { bestScore = score; best = ev; }
     });

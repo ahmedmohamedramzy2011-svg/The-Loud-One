@@ -108,8 +108,10 @@
       windowLit: new THREE.MeshLambertMaterial({ color: 0x4b381a, emissive: 0x1a1206 }),
       rubble: mat({ map: T('concrete', { color: '#5b574f' }) }),
       fabric: mat({ color: 0x40302a }),
-      bark: mat({ color: 0x2a2018 }),
+      bark: mat({ color: 0x3b2c20 }),
       leaves: mat({ color: 0x18251a }),
+      pineBark: mat({ color: 0x433326, vertexColors: true }),
+      pineLeaves: mat({ color: 0x203324, vertexColors: true }),
       tire: mat({ color: 0x111111 }),
       cctv: new THREE.MeshBasicMaterial({ map: T('cctv', { size: 256 }) }),
       warning: mat({ map: T('warning') }),
@@ -184,18 +186,20 @@
     add(ground, { cast: false });
 
     const streetLen = HALF * 2;
+    const roadEWMat = M.road.clone();
+    roadEWMat.map = M.road.map.clone();
+    roadEWMat.map.rotation = Math.PI / 2;
+    roadEWMat.map.needsUpdate = true;
     STREETS.forEach((s, i) => {
       // N-S street
       let g = new THREE.PlaneGeometry(ST, streetLen);
       g.attributes.uv.array.forEach((v, k, a) => { a[k] = k % 2 ? v * streetLen / ST : v; });
       let m = new THREE.Mesh(g, M.road); m.rotation.x = -Math.PI / 2; m.position.set(s, 0.02, 0);
       add(m, { cast: false });
-      // E-W street
+      // E-W street (shared rotated texture & material)
       g = new THREE.PlaneGeometry(streetLen, ST);
       g.attributes.uv.array.forEach((v, k, a) => { a[k] = k % 2 ? v : v * streetLen / ST; });
-      const mat2 = M.road.clone(); mat2.map = M.road.map.clone(); mat2.map.needsUpdate = true;
-      mat2.map.rotation = Math.PI / 2;
-      m = new THREE.Mesh(g, mat2); m.rotation.x = -Math.PI / 2; m.position.set(0, 0.025, s);
+      m = new THREE.Mesh(g, roadEWMat); m.rotation.x = -Math.PI / 2; m.position.set(0, 0.025, s);
       add(m, { cast: false });
     });
     // intersections: plain asphalt patches to hide line overlap
@@ -253,7 +257,8 @@
     W.moonLight.position.set(-60, 120, 110);
     if (S.shadows === 'high') {
       W.moonLight.castShadow = true;
-      W.moonLight.shadow.mapSize.set(2048, 2048);
+      const sm = S.quality === 'ultra' ? 2048 : 1024;
+      W.moonLight.shadow.mapSize.set(sm, sm);
       const cam = W.moonLight.shadow.camera;
       cam.left = -130; cam.right = 130; cam.top = 130; cam.bottom = -130; cam.near = 1; cam.far = 400;
       W.moonLight.shadow.bias = -0.0008;
@@ -399,7 +404,7 @@
       }
     }
 
-    // dumpster: a bin on wheels with a lid hinged at the back (opens when you climb in/out)
+    // dumpster: a bin on wheels with a slightly propped hinged lid so you can peer through the rim gap
     function dumpster(x, z, ry) {
       const g = new THREE.Group();
       const b = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.18, 1.3), M.dumpster); b.position.y = 0.79; g.add(b);
@@ -411,11 +416,11 @@
       [[-0.95, -0.5], [0.95, -0.5], [-0.95, 0.5], [0.95, 0.5]].forEach(([wx, wz]) => {
         const w = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.08, 6), M.tire); w.rotation.z = Math.PI / 2; w.position.set(wx, 0.11, wz); g.add(w);
       });
-      // the lid: hinged along the back edge
+      // the lid: hinged along the back edge, cracked slightly when hiding/propped
       const hinge = new THREE.Group(); hinge.position.set(0, 1.45, -0.66); g.add(hinge);
       const lid = new THREE.Mesh(new THREE.BoxGeometry(2.26, 0.06, 1.36), M.dark); lid.position.set(0, 0.03, 0.68); hinge.add(lid);
       const lidRidge = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.05, 0.1), M.dark); lidRidge.position.set(0, 0.07, 1.25); hinge.add(lidRidge);
-      hinge.rotation.x = -0.03;
+      hinge.rotation.x = -0.075;
       g.position.set(x, 0, z); g.rotation.y = ry; add(g);
       addOccluder(b);
       const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
@@ -423,45 +428,55 @@
       const front = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
       const spot = {
         type: 'dumpster', mesh: g, disabled: false,
-        pos: new THREE.Vector3(x, 1.05, z), yaw: ry,
+        pos: new THREE.Vector3(x + front.x * 0.06, 1.47, z + front.z * 0.06), yaw: ry,
         interact: new THREE.Vector3(x, 1, z).addScaledVector(front, 1.3),
         exit: new THREE.Vector3(x, 0, z).addScaledVector(front, 1.6),
-        setOpen(a) { hinge.rotation.x = -0.03 - a * 1.5; },
+        setOpen(a) { hinge.rotation.x = -0.075 - a * 1.45; },
       };
       W.hideSpots.push(spot);
       if (curB) curB.hideSpots.push(spot);
     }
 
-    // locker: an open-fronted cabinet with a hinged, vented door
+    // locker: an open-fronted cabinet with a hinged door and real see-through eye-level louver slits
     function locker(x, z, ry) {
       const g = new THREE.Group();
-      const W2 = 0.9, H2 = 2.0, D2 = 0.6, t = 0.03;
+      const W2 = 0.9, H2 = 2.0, D2 = 0.68, t = 0.03;
       const part = (w, h, d, px, py, pz, m) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m || M.locker); o.position.set(px, py, pz); g.add(o); return o; };
       const back = part(W2, H2, t, 0, H2 / 2, -D2 / 2 + t / 2);
       part(t, H2, D2, -W2 / 2 + t / 2, H2 / 2, 0); part(t, H2, D2, W2 / 2 - t / 2, H2 / 2, 0);
       part(W2, t, D2, 0, H2 - t / 2, 0); part(W2, t, D2, 0, t / 2, 0);
-      part(W2 - 2 * t, 0.02, D2 - 0.06, 0, H2 - 0.35, -0.02);                         // inner shelf
+      part(W2 - 2 * t, 0.02, D2 - 0.06, 0, H2 - 0.16, -0.02);                         // upper shelf
       part(W2 - 2 * t, H2 - 2 * t, 0.01, 0, H2 / 2, -D2 / 2 + t + 0.006, M.dark);     // dark inside
-      // the door, hinged on the left edge
+      // the door, hinged on the left edge, framed around a real slotted eye-level vent cutout (y = 1.35..1.82)
       const hinge = new THREE.Group(); hinge.position.set(-W2 / 2, 0, D2 / 2); g.add(hinge);
-      const door = new THREE.Mesh(new THREE.BoxGeometry(W2, H2 - 0.02, 0.025), M.locker); door.position.set(W2 / 2, H2 / 2, 0); hinge.add(door);
-      for (let i = 0; i < 4; i++) {
-        const slot = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.02), M.dark);
-        slot.position.set(W2 / 2, 1.55 + i * 0.08, 0.015); hinge.add(slot);
+      const dPart = (w, h, d, px, py, pz, m, rx) => {
+        const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m || M.locker);
+        o.position.set(px, py, pz);
+        if (rx) o.rotation.x = rx;
+        hinge.add(o);
+        return o;
+      };
+      const lowerDoor = dPart(W2, 1.34, 0.025, W2 / 2, 0.68, 0);         // y = 0.01..1.35
+      dPart(W2, 0.17, 0.025, W2 / 2, 1.905, 0);                          // upper header y = 1.82..1.99
+      dPart(0.14, 0.47, 0.025, 0.07, 1.585, 0);                          // left stile
+      dPart(0.14, 0.47, 0.025, W2 - 0.07, 1.585, 0);                     // right stile
+      // open eye-level horizontal metal louver slats with clear ~6.8cm sightline gaps
+      for (let i = 0; i < 5; i++) {
+        dPart(W2 - 0.28, 0.022, 0.028, W2 / 2, 1.40 + i * 0.09, 0.002, M.trim, 0.22);
       }
+      // lower decorative vent slots
       for (let i = 0; i < 2; i++) {
-        const slot = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.02), M.dark);
-        slot.position.set(W2 / 2, 0.25 + i * 0.08, 0.015); hinge.add(slot);
+        dPart(0.46, 0.025, 0.02, W2 / 2, 0.25 + i * 0.08, 0.015, M.dark);
       }
-      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.04), M.pole); handle.position.set(W2 - 0.1, 1.05, 0.03); hinge.add(handle);
+      dPart(0.04, 0.16, 0.04, W2 - 0.07, 1.05, 0.03, M.pole);
       g.position.set(x, 0.12, z); g.rotation.y = ry; add(g);
-      addOccluder(back); addOccluder(door);
+      addOccluder(back); addOccluder(lowerDoor);
       const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
-      collider(x - (0.9 * c + 0.6 * s) / 2, x + (0.9 * c + 0.6 * s) / 2, z - (0.9 * s + 0.6 * c) / 2, z + (0.9 * s + 0.6 * c) / 2, 2.1);
+      collider(x - (W2 * c + D2 * s) / 2, x + (W2 * c + D2 * s) / 2, z - (W2 * s + D2 * c) / 2, z + (W2 * s + D2 * c) / 2, 2.1);
       const front = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
       const spot = {
         type: 'locker', mesh: g, disabled: false,
-        pos: new THREE.Vector3(x, 1.65, z), yaw: ry,
+        pos: new THREE.Vector3(x - front.x * 0.10, 1.65, z - front.z * 0.10), yaw: ry,
         interact: new THREE.Vector3(x, 1, z).addScaledVector(front, 0.9),
         exit: new THREE.Vector3(x, 0, z).addScaledVector(front, 1.1),
         setOpen(a) { hinge.rotation.y = -a * 1.85; },
@@ -482,37 +497,123 @@
       W.pickups.push({ type: 'battery', mesh: g, pos: g.position, baseY: y, taken: false });
     }
 
-    // shared low-poly tree geometries for weak devices
-    const treeTrunkGeo = new THREE.CylinderGeometry(0.14, 0.28, 5, 4, 1, true);
-    treeTrunkGeo.translate(0, 2.5, 0);
-    const treeCanopyGeo = new THREE.ConeGeometry(2.2, 6, 4);
-    treeCanopyGeo.translate(0, 6.0, 0);
-    const deadBranchGeo = new THREE.BoxGeometry(0.1, 2.0, 0.1);
-    deadBranchGeo.translate(0, 1.0, 0);
+    // remodeled multi-tier pine & gnarled dead tree geometries (shared across park & forest instances)
+    function mergeTreeParts(parts) {
+      const nonIdx = parts.map(p => {
+        const g = p.geo.index ? p.geo.toNonIndexed() : p.geo;
+        if (p.geo.index) p.geo.dispose();
+        const pos = g.attributes.position;
+        const cnt = pos.count;
+        const col = new Float32Array(cnt * 3);
+        const yMin = p.yMin, ySpan = Math.max(0.01, p.yMax - p.yMin);
+        for (let i = 0; i < cnt; i++) {
+          const py = pos.getY(i);
+          const k = Math.max(0, Math.min(1, (py - yMin) / ySpan));
+          col[i * 3]     = p.c0[0] + (p.c1[0] - p.c0[0]) * k;
+          col[i * 3 + 1] = p.c0[1] + (p.c1[1] - p.c0[1]) * k;
+          col[i * 3 + 2] = p.c0[2] + (p.c1[2] - p.c0[2]) * k;
+        }
+        g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        return g;
+      });
+      let n = 0; nonIdx.forEach(g => { n += g.attributes.position.count; });
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2), col = new Float32Array(n * 3);
+      let o = 0;
+      nonIdx.forEach(g => {
+        pos.set(g.attributes.position.array, o * 3);
+        nor.set(g.attributes.normal.array, o * 3);
+        if (g.attributes.uv) uv.set(g.attributes.uv.array, o * 2);
+        col.set(g.attributes.color.array, o * 3);
+        o += g.attributes.position.count;
+        g.dispose();
+      });
+      const merged = new THREE.BufferGeometry();
+      merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      merged.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      merged.computeBoundingSphere();
+      return merged;
+    }
+
+    const pineTrunkGeo = (() => {
+      const parts = [];
+      const addG = (geo, c0, c1, yMin, yMax) => parts.push({ geo, c0, c1, yMin, yMax });
+      // root flare + tapered trunk + lower dead branch snags
+      const flare = new THREE.CylinderGeometry(0.28, 0.50, 1.15, 6); flare.translate(0, 0.56, 0);
+      addG(flare, [0.42, 0.36, 0.31], [0.68, 0.60, 0.52], 0, 1.15);
+      const main = new THREE.CylinderGeometry(0.07, 0.30, 8.8, 6); main.translate(0, 4.4, 0);
+      addG(main, [0.62, 0.56, 0.48], [0.48, 0.42, 0.38], 0, 8.8);
+      [[1.9, 0.4, 0.9], [2.45, 2.5, -0.85], [3.05, 4.4, 0.78]].forEach(([by, rotY, tilt], i) => {
+        const sn = new THREE.CylinderGeometry(0.02, 0.055, 0.95 - i * 0.1, 4);
+        sn.translate(0, 0.45, 0);
+        sn.rotateZ(tilt);
+        sn.rotateY(rotY);
+        sn.translate(0, by, 0);
+        addG(sn, [0.55, 0.48, 0.40], [0.40, 0.35, 0.30], by - 0.2, by + 0.9);
+      });
+      return mergeTreeParts(parts);
+    })();
+
+    const pineCrownGeo = (() => {
+      const parts = [];
+      // 5 tiered bough skirts + pointed spire cap (darker shaded interior/bottom, misty pine needles outer/upper)
+      const tiers = [
+        { y: 3.35, rTop: 0.72, rBot: 2.55, h: 2.35, ry: 0.25, tilt: 0.03 },
+        { y: 4.85, rTop: 0.62, rBot: 2.18, h: 2.15, ry: 1.45, tilt: -0.025 },
+        { y: 6.25, rTop: 0.48, rBot: 1.78, h: 1.95, ry: 2.80, tilt: 0.02 },
+        { y: 7.55, rTop: 0.34, rBot: 1.38, h: 1.75, ry: 0.85, tilt: -0.02 },
+        { y: 8.75, rTop: 0.04, rBot: 0.96, h: 1.75, ry: 2.10, tilt: 0.015 },
+      ];
+      tiers.forEach(t => {
+        const c = new THREE.CylinderGeometry(t.rTop, t.rBot, t.h, 7, 1, false);
+        c.rotateY(t.ry);
+        c.rotateZ(t.tilt);
+        c.translate(0, t.y, 0);
+        parts.push({ geo: c, c0: [0.46, 0.54, 0.48], c1: [0.95, 1.05, 0.92], yMin: t.y - t.h * 0.5, yMax: t.y + t.h * 0.5 });
+      });
+      return mergeTreeParts(parts);
+    })();
+
+    const deadTreeGeo = (() => {
+      const parts = [];
+      const addSeg = (rT, rB, len, x, y, z, rx, ry, rz) => {
+        const g = new THREE.CylinderGeometry(rT, rB, len, 5);
+        g.translate(0, len * 0.5, 0);
+        g.rotateX(rx || 0); g.rotateZ(rz || 0); g.rotateY(ry || 0);
+        g.translate(x, y, z);
+        parts.push({ geo: g, c0: [0.46, 0.41, 0.36], c1: [0.70, 0.64, 0.56], yMin: 0, yMax: 6.5 });
+      };
+      // root flare + crooked trunk + gnarled primary & secondary branches
+      addSeg(0.28, 0.48, 1.0, 0, 0, 0, 0, 0, 0);
+      addSeg(0.16, 0.28, 2.7, 0, 0.9, 0, 0.05, 0.3, -0.08);
+      addSeg(0.09, 0.16, 2.3, 0.18, 3.45, 0.1, -0.1, 0.8, 0.22);
+      addSeg(0.05, 0.12, 1.85, 0.14, 3.25, 0.08, 0.25, 0.5, -0.78);
+      addSeg(0.04, 0.10, 1.65, -0.1, 2.85, -0.05, -0.2, 2.4, 0.85);
+      addSeg(0.03, 0.07, 1.35, 0.05, 4.3, 0.15, 0.35, 4.1, -0.65);
+      addSeg(0.025, 0.055, 1.15, -0.22, 4.6, -0.08, -0.25, 1.4, 0.72);
+      return mergeTreeParts(parts);
+    })();
 
     function tree(x, z, s, dead) {
-      const g = new THREE.Group();
-      const trunk = new THREE.Mesh(treeTrunkGeo, M.bark);
-      trunk.scale.set(s, s, s);
-      g.add(trunk);
+      const ry = R(0, Math.PI * 2);
       if (!dead) {
-        const top = new THREE.Mesh(treeCanopyGeo, M.leaves);
-        top.scale.set(s, s, s);
-        top.rotation.y = R(0, Math.PI);
-        g.add(top);
+        const g = new THREE.Group();
+        const tr = new THREE.Mesh(pineTrunkGeo, M.pineBark);
+        const cr = new THREE.Mesh(pineCrownGeo, M.pineLeaves);
+        g.add(tr, cr);
+        g.scale.set(s, s * R(0.92, 1.14), s);
+        g.rotation.y = ry;
+        g.position.set(x, 0, z);
+        add(g);
       } else {
-        for (let i = 0; i < 3; i++) {
-          const br = new THREE.Mesh(deadBranchGeo, M.bark);
-          const a = i * 2.1 + R(-0.3, 0.3);
-          br.scale.set(s, s * R(0.75, 1.05), s);
-          br.position.set(0, (3.1 + i * 0.45) * s, 0);
-          br.rotation.y = a;
-          br.rotation.z = (i % 2 ? 1 : -1) * R(0.55, 0.9);
-          g.add(br);
-        }
+        const dm = new THREE.Mesh(deadTreeGeo, M.pineBark);
+        dm.scale.set(s, s * R(0.9, 1.15), s);
+        dm.rotation.y = ry;
+        dm.position.set(x, 0, z);
+        add(dm);
       }
-      g.position.set(x, 0, z); add(g);
-      collider(x - 0.3 * s, x + 0.3 * s, z - 0.3 * s, z + 0.3 * s, 5);
+      collider(x - 0.32 * s, x + 0.32 * s, z - 0.32 * s, z + 0.32 * s, 6);
     }
 
     function rubblePile(x, z, r, n, parent) {
@@ -520,7 +621,7 @@
         const s = R(0.4, 1.45);
         const h = s * R(0.35, 0.85);
         const m = box(s * R(0.8, 1.9), h, s * R(0.8, 1.5), rand() < 0.6 ? M.rubble : M.brick,
-          x + R(-r, r), h * 0.42, z + R(-r, r), { ry: R(0, 3), rx: R(-0.14, 0.14), rz: R(-0.14, 0.14), parent });
+          x + R(-r, r), h * 0.42, z + R(-r, r), { ry: R(0, 3), rx: R(-0.14, 0.14), rz: R(-0.14, 0.14), parent, cast: false });
         m.userData.rubble = true;
       }
     }
@@ -1309,11 +1410,28 @@
         W.pickups.push({ type: 'rock', mesh: m, pos: m.position, baseY: 0.12, taken: false, still: true });
       }
     }
-    // debris (grounded flush on street)
-    for (let i = 0; i < 40; i++) {
-      const s = pick(STREETS), a = R(-HALF + 8, HALF - 8);
-      const v = rand() < 0.5, h = R(0.1, 0.4);
-      box(R(0.3, 1.2), h, R(0.3, 1.2), rand() < 0.5 ? M.rubble : M.wood, v ? s + R(-5, 5) : a, h * 0.5, v ? a : s + R(-5, 5), { ry: R(0, 3) });
+    // debris (instanced in 2 draw calls instead of 40, grounded flush on street)
+    {
+      const dg = new THREE.BoxGeometry(1, 1, 1);
+      const dmR = new THREE.InstancedMesh(dg, M.rubble, 20);
+      const dmW = new THREE.InstancedMesh(dg, M.wood, 20);
+      if (shadows) { dmR.receiveShadow = true; dmW.receiveShadow = true; }
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), eu = new THREE.Euler();
+      const sc = new THREE.Vector3(), pos = new THREE.Vector3();
+      let iR = 0, iW = 0;
+      for (let i = 0; i < 40; i++) {
+        const s = pick(STREETS), a = R(-HALF + 8, HALF - 8);
+        const v = rand() < 0.5, h = R(0.1, 0.4);
+        const px = v ? s + R(-5, 5) : a, pz = v ? a : s + R(-5, 5);
+        q.setFromEuler(eu.set(0, R(0, 3), 0));
+        m4.compose(pos.set(px, h * 0.5, pz), q, sc.set(R(0.3, 1.2), h, R(0.3, 1.2)));
+        if (rand() < 0.5 && iR < 20) dmR.setMatrixAt(iR++, m4);
+        else if (iW < 20) dmW.setMatrixAt(iW++, m4);
+        else dmR.setMatrixAt(iR++, m4);
+      }
+      dmR.count = iR; dmW.count = iW;
+      dmR.instanceMatrix.needsUpdate = true; dmW.instanceMatrix.needsUpdate = true;
+      W.root.add(dmR, dmW);
     }
 
     // =========================================================
@@ -1393,7 +1511,7 @@
         const px = r ? x : k + 3, pz = r ? k + 3 : z;
         p.position.set(px, 0, pz);
         p.rotation.y = r;
-        add(p);
+        add(p, { cast: false });
         const col = r
           ? collider(px - 0.18, px + 0.18, pz - 3.0, pz + 3.0, 2.4)
           : collider(px - 3.0, px + 3.0, pz - 0.18, pz + 0.18, 2.4);
@@ -1544,24 +1662,46 @@
       g.position.set(-8, 0, -150); g.rotation.y = 0.15; add(g);
       W.sign = g;
     }
-    // forest outside town (instanced low-poly 4-sided trees, no distant shadow casting)
+    // forest outside town (remodeled multi-tier pine InstancedMesh: 2 draw calls total, visible in cutscene & in-game)
     {
-      const n = S.viewDistance === 'near' ? 380 : 760;
-      const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.35, 6, 4, 1, true), M.bark, n);
-      const top = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 8, 4), M.leaves, n);
+      const n = S.quality === 'low' ? 320 : S.viewDistance === 'near' ? 420 : 720;
+      const trunk = new THREE.InstancedMesh(pineTrunkGeo, M.pineBark, n);
+      const top = new THREE.InstancedMesh(pineCrownGeo, M.pineLeaves, n);
       const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      // deterministic hero pine cluster just outside the south road for atmospheric treeline views
+      const heroPines = [
+        [15.8, -169.8, 1.32, 0.4],
+        [18.5, -168.1, 1.24, 1.9],
+        [19.9, -171.6, 1.42, 3.2],
+        [22.4, -170.2, 1.30, 4.7],
+        [17.1, -173.4, 1.18, 2.5],
+        [23.2, -174.5, 1.48, 0.9],
+      ];
       let i = 0;
+      for (; i < heroPines.length && i < n; i++) {
+        const [hx, hz, hs, hry] = heroPines[i];
+        q.setFromAxisAngle(yAxis, hry);
+        m4.compose(p.set(hx, 0, hz), q, sc.set(hs, hs * 1.05, hs));
+        trunk.setMatrixAt(i, m4);
+        top.setMatrixAt(i, m4);
+      }
       while (i < n) {
         const x = R(-420, 420), z = R(-560, 420);
         if (Math.abs(x) < HALF + 32 && Math.abs(z) < HALF + 32) continue;
         if (Math.abs(x) < 12 && z < -HALF) continue; // keep the road clear
         if (Math.abs(x + 8) < 6 && Math.abs(z + 150) < 6) continue;
-        const s = R(0.8, 1.6);
-        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R(0, 6.28));
-        m4.compose(p.set(x, 3 * s, z), q, sc.set(s, s, s)); trunk.setMatrixAt(i, m4);
-        m4.compose(p.set(x, 8.5 * s, z), q, sc.set(s, s * R(0.9, 1.3), s)); top.setMatrixAt(i, m4);
+        if (x > 9.5 && x < 24.5 && z > -176 && z < -162) continue; // keep hero ambush corridor unblocked
+        const s = R(0.85, 1.55);
+        const hs = s * R(0.92, 1.24);
+        q.setFromAxisAngle(yAxis, R(0, 6.28));
+        m4.compose(p.set(x, 0, z), q, sc.set(s, hs, s));
+        trunk.setMatrixAt(i, m4);
+        top.setMatrixAt(i, m4);
         i++;
       }
+      trunk.instanceMatrix.needsUpdate = true;
+      top.instanceMatrix.needsUpdate = true;
       W.root.add(trunk, top);
     }
     // outskirts: a ring of dark buildings beyond the fence
@@ -1914,7 +2054,7 @@
     // =========================================================
     // ---------- wind-blown dust and leaves around the camera ----------
     {
-      const N = S.textures === 'low' ? 220 : 480, BOX = 36, H = 10;
+      const N = S.quality === 'low' ? 140 : S.textures === 'low' ? 220 : 380, BOX = 36, H = 10;
       const pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
       for (let i = 0; i < N; i++) {
         pos[i * 3] = (rand() - 0.5) * BOX; pos[i * 3 + 1] = rand() * H; pos[i * 3 + 2] = (rand() - 0.5) * BOX;

@@ -1265,14 +1265,15 @@
     const find = re => voices.find(v => re.test(v.name));
     if (role === 'player') return find(/Daniel|Guy|Male|David|Alex|Fred|Google UK English Male/i) || voices[0];
     if (role === 'radio') {
-      // the most natural-sounding voice available: neural/online/enhanced voices first
+      // prefer deep, natural-sounding male voices when falling back to speech synthesis
       const score = v => {
         const n = v.name;
         let s = 0;
         if (/natural|neural|online|enhanced|premium|siri/i.test(n)) s += 10;
-        if (/Ava|Allison|Samantha|Aria|Jenny|Michelle|Sara|Emma|Joanna|Google US English/i.test(n)) s += 5;
+        if (/Daniel|Guy|Andrew|Brian|Christopher|Eric|Ryan|Steffan|David|Alex|Male/i.test(n)) s += 8;
+        if (/Zira|Hazel|Samantha|Ava|Allison|Jenny|Michelle|Sara|Emma|Joanna/i.test(n)) s -= 4;
         if (/en[-_]US/i.test(v.lang)) s += 2;
-        if (/Zira|Hazel|Fred|Albert|Bad News|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|eSpeak/i.test(n)) s -= 20;
+        if (/Albert|Bad News|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|eSpeak/i.test(n)) s -= 20;
         return s;
       };
       return voices.slice().sort((a, b) => score(b) - score(a))[0] || voices[0];
@@ -1334,16 +1335,31 @@
 
     if (role === 'radio') { A.radioIn(); }
     if (A.still) { setTimeout(finish, 50); return; } // the world is silent
-    // the player's own recorded voice, when there is a take for this line
-    const rec = role === 'player' && voiceSamples[text];
+    // recorded voice lines (player & dispatch), when there is a take for this line
+    const rec = (role === 'player' || role === 'radio') && voiceSamples[text];
     if (rec && S.tts && S.voice > 0 && ctx) {
       showSub(who, text, cls, rec.duration * 1000 + 900);
       const src = ctx.createBufferSource(); src.buffer = rec;
-      src.connect(voiceBus);
-      src.onended = () => { if (currentRec === src) currentRec = null; finish(); };
+      if (role === 'radio') {
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
+        const warm = ctx.createBiquadFilter(); warm.type = 'peaking'; warm.frequency.value = 150; warm.Q.value = 0.9; warm.gain.value = 3.5;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4600;
+        const g = ctx.createGain(); g.gain.value = 1.25;
+        src.connect(hp); hp.connect(warm); warm.connect(lp); lp.connect(g); g.connect(voiceBus);
+      } else {
+        src.connect(voiceBus);
+      }
+      let finished = false;
+      const doneRec = (quiet) => {
+        if (finished) return; finished = true;
+        if (currentRec === src) currentRec = null;
+        if (role === 'radio' && !quiet) A.radioOut();
+        finish();
+      };
+      src.onended = () => doneRec(!!src._stopped);
       src.start();
       currentRec = src;
-      setTimeout(finish, rec.duration * 1000 + 1500);  // safety net
+      setTimeout(() => doneRec(false), rec.duration * 1000 + 1500);  // safety net
       return;
     }
     const canSpeak = synth && S.tts && S.voice > 0 && (!overlay || !synth.speaking);
@@ -1353,7 +1369,7 @@
         const u = new SpeechSynthesisUtterance(text);
         const v = pickVoice(role); if (v) u.voice = v;
         if (role === 'player') { u.pitch = 0.9; u.rate = 0.98; }
-        if (role === 'radio') { u.pitch = 1.0; u.rate = 0.97; }
+        if (role === 'radio') { u.pitch = 0.78; u.rate = 0.96; }
         if (role === 'siren') { u.pitch = 0.05; u.rate = 0.55; }
         if (opts.rate) u.rate *= opts.rate;
         u.volume = Math.max(0, Math.min(1, S.voice * S.master * (opts.volume === undefined ? 1 : opts.volume)));
@@ -1384,7 +1400,7 @@
   A.isPlayingRecording = () => !!currentRec;
   A.stopVoices = function () {
     queue.length = 0;
-    if (currentRec) { try { currentRec.stop(); } catch (e) {} currentRec = null; }
+    if (currentRec) { try { currentRec._stopped = true; currentRec.stop(); } catch (e) {} currentRec = null; }
     if (synth) try { synth.cancel(); } catch (e) {}
     speaking = false;
     A.clearSubs();

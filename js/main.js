@@ -21,7 +21,7 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
@@ -97,7 +97,11 @@
       renderer.dispose();
       renderer.domElement.remove();
     }
-    renderer = new THREE.WebGLRenderer({ antialias: !!S.antialias, powerPreference: 'high-performance' });
+    renderer = new THREE.WebGLRenderer({
+      antialias: !!S.antialias,
+      powerPreference: 'high-performance',
+      precision: S.quality === 'low' ? 'mediump' : 'highp',
+    });
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.enabled = S.shadows !== 'off';
@@ -111,10 +115,13 @@
 
   function applyDisplay() {
     if (!renderer) return;
-    const pr = Math.min(2.5, Math.min(window.devicePixelRatio || 1, 2) * S.renderScale);
+    const rawDpr = window.devicePixelRatio || 1;
+    const capPr = S.quality === 'low' ? Math.min(rawDpr, 1.0) : Math.min(rawDpr, 2);
+    const pr = Math.min(2.0, capPr * S.renderScale);
     renderer.setPixelRatio(pr);
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     document.body.classList.toggle('pixelated', S.renderScale < 0.75);
+    document.body.classList.toggle('low-perf', S.quality === 'low' || S.lighting === 'simple');
     renderer.toneMappingExposure = 1.15 * S.brightness;
     if (camera) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); }
     if (scene && scene.fog && state !== 'ending') {
@@ -334,7 +341,7 @@
   }
 
   function syncVersionUI() {
-    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.5';
+    const latest = (LO.VERSIONS && LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.5';
     const cur = S.gameVersion || latest;
     const btn = $('version-btn');
     if (btn) btn.textContent = 'v' + cur;
@@ -357,7 +364,7 @@
     const list = $('version-list');
     if (!list || !LO.VERSIONS) return;
     list.innerHTML = '';
-    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.4.5';
+    const latest = (LO.VERSIONS[0] && LO.VERSIONS[0].id) || '2.5';
     const cur = S.gameVersion || latest;
     LO.VERSIONS.forEach((v, idx) => {
       const b = document.createElement('button');
@@ -411,11 +418,17 @@
     siren.forceLean = 0.2;
     siren.neckDip = 0; siren.armRaise = 0;
     siren.root.rotation.x = 0;
+    if (fastone) {
+      fastone.root.visible = false;
+      fastone.head.rotation.y = 0;
+      fastone.jaw.rotation.x = 0;
+    }
+    if (sneaky) sneaky.root.visible = false;
     world.hemi.intensity = 0.3; world.moonLight.intensity = 0.35;
     titleT = 0;
   }
-  // ---- title screen: slow shots of Siren Head and the Moths, fading through black
-  const SHOT_LEN = 7;
+  // ---- title screen: slow atmospheric shots fading through black ----
+  const SHOT_LEN = 6.5;
   const _tv = new THREE.Vector3();
   function titleMoth(i, x, z, faceX, faceZ, t) {
     const m = moths.moths[i];
@@ -444,34 +457,49 @@
   }
   function updateTitle(dt) {
     titleT += dt;
-    const shot = Math.floor(titleT / SHOT_LEN) % 5, k = (titleT % SHOT_LEN) / SHOT_LEN, lt = titleT % SHOT_LEN;
+    const shot = Math.floor(titleT / SHOT_LEN) % 8, k = (titleT % SHOT_LEN) / SHOT_LEN, lt = titleT % SHOT_LEN;
     // fade to black at the start and end of every shot
     const f = lt < 1.2 ? 1 - lt / 1.2 : lt > SHOT_LEN - 1.2 ? (lt - (SHOT_LEN - 1.2)) / 1.2 : 0;
     $('title-fade').style.opacity = f;
     world.updateWind(dt, 0.8, camera.position, titleT);
     moths.moths.forEach(m => { m.g.visible = false; });
+    if (fastone) {
+      fastone.root.visible = false;
+      fastone.head.rotation.y = 0;
+      fastone.jaw.rotation.x = 0;
+    }
+    if (sneaky) sneaky.root.visible = false;
     titleSpot.intensity = 0;
     siren.root.visible = true;
     siren.scripted = true;
     const S0 = world.STREETS;
-    if (!V().moths && (shot === 2 || shot === 4)) {
-      siren.pos.set(S0[2], 0, -40 + k * 14); siren.yaw = 0; siren.speedNow = 2.2; siren.glowOverride = 0.3;
-      camera.position.set(S0[2] - 3.5, 2.2, -72 + k * 3);
-      camera.lookAt(S0[2] + 5, 8, -34 + k * 14);
-      titleSpot.position.set(S0[2] - 3.5, 1.5, -70); titleSpot.target.position.set(S0[2], 9, -34 + k * 14); titleSpot.intensity = 10;
-    } else if (shot === 0) {                                  // looking up at him in the street
+    const ver = V();
+    if (shot === 0) {                                        // looking up at Siren Head in the street
       siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.35;
       camera.position.set(S0[3] - 3, 1.3 + k * 0.8, -6 + k * 5);
       camera.lookAt(S0[3] + 7, 9 + k * 3, 20);
       titleSpot.position.set(S0[3] - 3, 1, -4); titleSpot.target.position.set(S0[3], 10, 20); titleSpot.intensity = 9;
-    } else if (shot === 1) {                           // close on the horns
+    } else if (shot === 1 && ver.fastone && fastone) {       // The Fast One hiding in the dark outer forest, only its glowing red eyes exposed
+      siren.root.visible = false;
+      const cx = 11.4 + k * 0.85, cy = 1.24 - k * 0.08, cz = -163.5 - k * 1.1;
+      camera.position.set(cx, cy, cz);
+      fastone.root.visible = true;
+      fastone.root.position.set(17.9, 0, -169.8);
+      fastone.root.rotation.set(0, Math.atan2(cx - 17.9, cz - (-169.8)), 0);
+      fastone.jaw.rotation.x = 0.14 + Math.sin(titleT * 1.9) * 0.07;
+      fastone.head.rotation.y = Math.sin(titleT * 0.75) * 0.08;
+      camera.lookAt(17.4, 0.90, -169.3);
+      titleSpot.position.set(cx, 1.35, cz);
+      titleSpot.target.position.set(16.9, 1.35, -168.7);
+      titleSpot.intensity = 1.9;
+    } else if (shot === 2 || (shot === 1 && !ver.fastone)) { // close on the horns
       siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.55 + Math.sin(titleT * 2) * 0.1;
       siren.update(0, null, titleT);
       siren.root.updateMatrixWorld(true);
       siren.headWorldPos(_tv);
       camera.position.set(_tv.x - 6 + k * 2, _tv.y - 1.5, _tv.z - 8 + k);
       camera.lookAt(_tv.x, _tv.y - 0.3, _tv.z);
-    } else if (shot === 2) {                           // a moth at the end of an alley, caught in a torch beam
+    } else if (shot === 3 && ver.moths) {                    // a moth at the end of an alley, caught in a torch beam
       siren.root.visible = false;
       const spot = titleMothSpot();
       const mx = spot.x, mz = spot.z;
@@ -479,12 +507,23 @@
       titleMoth(0, mx, mz, camera.position.x, camera.position.z, titleT);
       camera.lookAt(mx, 1.5, mz - 2.8);
       titleSpot.position.copy(camera.position); titleSpot.target.position.set(mx, 1.4, mz); titleSpot.intensity = 7;
-    } else if (shot === 3) {                           // he walks between the buildings
+    } else if (shot === 4 || (!ver.moths && (shot === 3 || shot === 6))) { // Siren Head stalking between buildings
       siren.pos.set(S0[2], 0, -40 + k * 14); siren.yaw = 0; siren.speedNow = 2.2; siren.glowOverride = 0.3;
       camera.position.set(S0[2] - 3.5, 2.2, -72 + k * 3);
       camera.lookAt(S0[2] + 5, 8, -34 + k * 14);
       titleSpot.position.set(S0[2] - 3.5, 1.5, -70); titleSpot.target.position.set(S0[2], 9, -34 + k * 14); titleSpot.intensity = 10;
-    } else {                                           // two moths waiting just inside a doorway
+    } else if (shot === 5 && ver.sneaky && sneaky) {         // The Sneaky One grinning inside a pitch-black doorway
+      siren.root.visible = false;
+      const b = world.enterables.find(e => !e.sheriff) || world.enterables[0];
+      const sp = b.F.point(0.25, b.hd - 1.5);
+      const cp = b.F.point(-0.2 + k * 0.45, b.hd + 4.8 - k * 1.1);
+      camera.position.set(cp.x, 1.65, cp.z);
+      sneaky.root.visible = true;
+      sneaky.root.position.set(sp.x, 0, sp.z);
+      sneaky.root.lookAt(cp.x, 0, cp.z);
+      camera.lookAt(sp.x, 1.75, sp.z);
+      titleSpot.position.copy(camera.position); titleSpot.target.position.set(sp.x, 1.4, sp.z); titleSpot.intensity = 3.2;
+    } else if (shot === 6 && ver.moths) {                    // two moths waiting just inside a doorway
       siren.root.visible = false;
       const b = world.enterables.find(e => !e.sheriff) || world.enterables[0];
       const m1 = b.F.point(-0.7, b.hd - 1.6), m2 = b.F.point(0.8, b.hd - 3.2), cp = b.F.point(0.3 * Math.sin(titleT * 0.2), b.hd + 5.5 - k * 1.5);
@@ -494,6 +533,13 @@
       const in1 = b.F.point(0, b.hd - 2.2);
       camera.lookAt(in1.x, 1.5, in1.z);
       titleSpot.position.copy(camera.position); titleSpot.target.position.set(in1.x, 1.3, in1.z); titleSpot.intensity = 6;
+    } else {                                                 // Type-III ROAD CLOSED barricades & debris at the town gate
+      siren.root.visible = false;
+      camera.position.set(-6.8 + k * 3.8, 1.55, -124.0 + k * 2.2);
+      camera.lookAt(-1.2, 1.1, -113.5);
+      titleSpot.position.copy(camera.position);
+      titleSpot.target.position.set(0.2, 0.9, -113.5);
+      titleSpot.intensity = 7.5;
     }
     siren.update(dt, null, titleT);
     world.update(dt, titleT);
@@ -703,7 +749,7 @@
     A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0); A.setExposure(0);
     setTimeout(async () => {
       await A.say('player', 'That\'s enough. Sending everything to the county sheriff now.');
-      await A.say('radio', 'Hollow Creek caller, we... received your photos. Stay where you are. All units, heavy response to Hollow Creek. This is not a drill.');
+      await A.say('radio', 'Hollow Creek caller, we received your photos. Stay where you are. All units, heavy response to Hollow Creek. This is not a drill. I repeat, this is not a drill.');
       await A.say('player', 'They\'re coming. They\'re actually coming.');
       if (state === 'play' || state === 'paused') startEnding();
     }, 2500);
@@ -927,7 +973,7 @@
     calm: 'HE CAN\'T HEAR YOU', heard: 'HE HEARD SOMETHING', searching: 'HE\'S SEARCHING — STAY SILENT',
     angry: 'HE\'S ANGRY — GO SILENT!', hidden: 'HIDDEN — YOU MAKE NO SOUND',
   };
-  let lastStatus = '';
+  let lastStatus = '', lastRootFilter = '', lastHideType = '';
   function updateHUD() {
     const noisePct = Math.min(100, player.noiseRadius / 50 * 100);
     $('noise-fill').style.width = noisePct + '%';
@@ -945,7 +991,14 @@
     }
     $('prompt').innerHTML = player.prompt;
     $('crosshair').style.display = player.cameraUp ? 'none' : 'block';
+    const hideEl = $('hide-overlay');
     show('hide-overlay', !!player.hideView);
+    const hideType = player.hideView ? (player.hideSpotType || 'locker') : '';
+    if (hideType !== lastHideType) {
+      lastHideType = hideType;
+      hideEl.classList.toggle('type-locker', hideType === 'locker');
+      hideEl.classList.toggle('type-dumpster', hideType === 'dumpster');
+    }
     // the Tenant grows restless the longer you hide
     const tf = Math.min(1, player.hideTime / LO.TENANT_LIMIT);
     if (player.hidden) {
@@ -956,7 +1009,7 @@
       ex.style.transform = `translate(-50%, -50%) scale(${(0.18 + Math.pow(eye, 1.6) * 3.6).toFixed(3)})`;
       $('tenant-red').style.opacity = (Math.pow(eye, 1.3) * 0.95).toFixed(3);
       $('hide-text').textContent = eye > 0 ? 'Get out of there' : 'HIDING — press E to leave';
-      $('hide-overlay').classList.toggle('restless', eye > 0.6);
+      hideEl.classList.toggle('restless', eye > 0.6);
       A.setTenant(Math.max(0, (tf - 0.3) / 0.7));
     } else A.setTenant(0);
 
@@ -999,12 +1052,15 @@
     const glitch = sneaky && sneaky.attacking && player.zoom > 0.5;
     $('viewfinder').style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
     const rootEl = document.getElementById('game-root');
+    let nextFilter = '';
     if (glitch && Math.random() < 0.3) {
-      rootEl.style.filter = 'brightness(0.15) contrast(1.6)';
+      nextFilter = 'brightness(0.15) contrast(1.6)';
     } else if (!glitch && player.dizzy > 0.04) {
-      rootEl.style.filter = `blur(${(Math.min(1, player.dizzy) * 2.5).toFixed(2)}px)`;
-    } else {
-      rootEl.style.filter = '';
+      nextFilter = `blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)`;
+    }
+    if (nextFilter !== lastRootFilter) {
+      lastRootFilter = nextFilter;
+      rootEl.style.filter = nextFilter;
     }
     if (player.zoom > 0.5) {
       const vf = player.vfTarget;
