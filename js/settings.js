@@ -27,19 +27,22 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.6',
-    autoLatest: '2.6',
+    gameVersion: '2.6.3',
+    autoLatest: '2.6.3',
   }, PRESETS.medium);
 
   const VERSIONS = [
-    { id: '2.6',   label: 'v2.6',   era: 'Noise glitch warning, proximity forest chimes, multi-floor interiors & blockades, real SFX, collision & Fast One lag fixes' },
-    { id: '2.5.1', label: 'v2.5.1', era: 'Dynamic flashlight sway, dynamic color-coded subtitles, refined title screen & updated credits' },
-    { id: '2.5',   label: 'v2.5',   era: 'Deeper dispatcher radio voice lines, real locker peep slits, 2x stamina duration, remodeled trees, more title screen shots & performance optimizations' },
-    { id: '2.4.5', label: 'v2.4.5', era: 'Remodeled roadblock barricades & intro ramming, crisp highway sign text, perimeter fence collision & debris' },
-    { id: '2.4.4', label: 'v2.4.4', era: 'Visible giant footprint crater, 1m Fast One cooldown, randomized Sheriff\'s Station' },
-    { id: '2.4.3', label: 'v2.4.3', era: '2.5s breach telegraph, >10.5s Adrenaline w/ cooldown & exhaustion, Siren breach distractions, extra dumpsters' },
-    { id: '2.4.2', label: 'v2.4.2', era: 'Version selector, full notebook notes, CRT locker-slam tape, mobile scrolling UI' },
-    { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building smash & evidence pathing, low-poly fences & buildings' },
+    { id: '2.6.3', label: 'v2.6.3', era: 'Animated forest birds perching & taking flight, reactive birdsong fade-out on loud noises' },
+    { id: '2.6.2', label: 'v2.6.2', era: 'Interior layout fixes, title sign camera fix, exterior forest birdsong & heavy machinery camera shake' },
+    { id: '2.6.1', label: 'v2.6.1', era: '10 curated building presets, unique 2F + roof Sheriff HQ, stamina bar color gradient, audio & visual cleanup' },
+    { id: '2.6',   label: 'v2.6',   era: 'Multi-floor interiors, proximity forest audio, sound effects overhaul, spawn & performance fixes' },
+    { id: '2.5.1', label: 'v2.5.1', era: 'Dynamic flashlight sway, color-coded subtitles, refined title screen & credits' },
+    { id: '2.5',   label: 'v2.5',   era: 'Re-voiced dispatcher audio, locker slit visibility, 2x stamina, remodeled trees & optimization' },
+    { id: '2.4.5', label: 'v2.4.5', era: 'Remodeled roadblocks, intro barricade ramming, highway signage & fence debris' },
+    { id: '2.4.4', label: 'v2.4.4', era: 'Clearer footprint evidence, Fast One attack cooldown, randomized Sheriff\'s Station' },
+    { id: '2.4.3', label: 'v2.4.3', era: 'Fast One breach telegraph, adrenaline recovery balance & exterior dumpsters' },
+    { id: '2.4.2', label: 'v2.4.2', era: 'Version switcher, death screen sketches, CRT tape upgrade & mobile UI fixes' },
+    { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building destruction, evidence pathing & low-poly geometry pass' },
     { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-242), Sneaky fix, Silent 10 dmg, Tenant 90% blind' },
     { id: '2.3',   label: 'v2.3',   era: 'Remodeled props & hiding animations (before The Fast One)' },
     { id: '2.2',   label: 'v2.2',   era: 'The Sneaky One + 24 faster Moths (1s stare limit)' },
@@ -94,10 +97,13 @@ window.LO = window.LO || {};
       staminaBuff: v >= 20500,
       flashSway: v >= 20501,
       dynamicSubs: v >= 20501,
-      noiseGlitch: v >= 20600,
       proximityAmbient: v >= 20600,
       richInteriors: v >= 20600,
       cleanSubs: v >= 20600,
+      extBirdsong: v >= 20602,
+      envShake: v >= 20602,
+      forestBirds: v >= 20603,
+      birdFade: v >= 20603,
     };
   }
 
@@ -112,7 +118,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

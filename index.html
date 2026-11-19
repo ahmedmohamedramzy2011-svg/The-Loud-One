@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=61">
+<link rel="stylesheet" href="css/style.css?v=62">
 </head>
 <body>
 
@@ -18,7 +18,6 @@
 <div id="vignette"></div>
 <div id="grain"></div>
 <div id="damage"></div>
-<div id="noise-glitch"></div>
 <div id="fade"></div>
 
 <!-- Click-to-start gate (browsers need a click before audio can play) -->
@@ -44,7 +43,7 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.6</button>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.6.3</button>
     <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
     <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
@@ -102,53 +101,55 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.6"><h3>v2.6 <span>current</span></h3><ul>
-        <li>Multi-story building interiors with interior rooms, staircases, occasional roof access, and makeshift furniture barricades</li>
-        <li>Fixed overlapping cars, street props, evidence props, and doorway-blocking dumpsters</li>
-        <li>Near-max Noise chromatic aberration &amp; screen glitch warning effect</li>
-        <li>Procedural rustling forest &amp; eerie wind chimes proximity audio layer</li>
-        <li>Real wood-break, footstep, panting, and hurt sound effects</li>
-        <li>Cleaner subtitles (Siren Head labeled ??? only) and lag-free Fast One spawn pre-allocation</li>
+      <div class="upd" data-ver="2.6.3"><h3>v2.6.3 <span>current</span></h3><ul>
+        <li>Animated 3D birds perching on perimeter fences and outer pine canopies, flapping and scattering overhead</li>
+        <li>Ambient forest birdsong fades out when sprinting or making loud noises and resumes once calm</li>
+      </ul></div>
+      <div class="upd" data-ver="2.6.2"><h3>v2.6.2</h3><ul>
+        <li>Resolved building interior seams, stairwell blockages, and prop placement bugs</li>
+        <li>Corrected title screen Hollow Creek highway sign camera angle</li>
+        <li>Added randomized exterior forest birdsong ambiance</li>
+        <li>Added subtle proximity camera shake and low hum near large mechanical props</li>
+      </ul></div>
+      <div class="upd" data-ver="2.6.1"><h3>v2.6.1</h3><ul>
+        <li>10 structured building interior presets across single-story, two-story, and direct-rooftop layouts</li>
+        <li>Exclusive Sheriff&#39;s Station Police HQ featuring a holding cell, upstairs bureau, and rooftop radio mast</li>
+        <li>Smooth green-to-yellow-to-red stamina exhaustion indicator</li>
+        <li>Removed max-noise screen static and player panting audio</li>
+      </ul></div>
+      <div class="upd" data-ver="2.6"><h3>v2.6</h3><ul>
+        <li>Multi-story interiors, stairwell blockades, and improved prop placement</li>
+        <li>Proximity-reactive forest ambiance and updated wood-break, footstep, and hurt audio</li>
+        <li>Streamlined subtitles and eliminated Fast One spawn stutter</li>
       </ul></div>
       <div class="upd" data-ver="2.5.1"><h3>v2.5.1</h3><ul>
-        <li>Dynamic handheld flashlight sway reacting to movement, sprinting, breathing, and camera turns</li>
-        <li>Dynamic HUD-aware subtitle positioning with directional pan indicators and entity color coding</li>
-        <li>Refined title screen fade shots (removed The Fast One and The Sneaky One)</li>
-        <li>Updated credits screen for co-development and recorded voice lines</li>
+        <li>Dynamic handheld flashlight sway and color-coded adaptive subtitles</li>
+        <li>Refined title screen sequence and updated credits</li>
       </ul></div>
       <div class="upd" data-ver="2.5"><h3>v2.5</h3><ul>
-        <li>Deeper, re-voiced police dispatcher radio audio</li>
-        <li>Real see-through locker louver slits and cracked dumpster lid view</li>
-        <li>Doubled sprint stamina duration (~9.5s)</li>
-        <li>Expanded title screen shots featuring atmospheric town &amp; forest scenes</li>
-        <li>Remodeled pine and dead trees across Hollow Creek and the opening drive</li>
-        <li>Performance optimizations for lower-end devices</li>
+        <li>Re-voiced police dispatcher audio and real locker slit visibility</li>
+        <li>Doubled sprint stamina duration and remodeled forest foliage</li>
+        <li>Expanded title screen scenes and frame-rate optimizations</li>
       </ul></div>
       <div class="upd" data-ver="2.4.5"><h3>v2.4.5</h3><ul>
-        <li>Remodeled roadblock barricades and Hollow Creek highway sign</li>
-        <li>Opening car crash now physically rams through the entrance barricades</li>
-        <li>Solid perimeter fence collision with permanent broken-wood debris</li>
+        <li>Remodeled roadblocks, highway signage, and physical barricade ramming in the intro</li>
+        <li>Solid perimeter fence collision with scattered wood debris on breach</li>
       </ul></div>
       <div class="upd" data-ver="2.4.4"><h3>v2.4.4</h3><ul>
-        <li>Clearer, unobstructed Giant Footprint evidence placement</li>
-        <li>1-minute post-attack cooldown on The Fast One (Phenomenon-242)</li>
-        <li>Randomized Sheriff&#39;s Station location each run</li>
+        <li>Clearer Giant Footprint evidence placement and randomized Sheriff&#39;s Station location</li>
+        <li>Added a 1-minute post-attack cooldown for Phenomenon-242</li>
       </ul></div>
       <div class="upd" data-ver="2.4.3"><h3>v2.4.3</h3><ul>
-        <li>2.5s fence breach telegraph before The Fast One chases</li>
-        <li>Adrenaline now reserved for far dead zones with cooldown and winded recovery</li>
-        <li>Siren Head investigates entry and exit fence breaches</li>
-        <li>Added exterior dumpsters in open dead zones</li>
+        <li>Fence breach telegraph, rebalanced adrenaline recovery, and added exterior dumpsters</li>
+        <li>Siren Head now investigates perimeter fence breaches</li>
       </ul></div>
       <div class="upd" data-ver="2.4.2"><h3>v2.4.2</h3><ul>
-        <li>Playable Version Switcher on the title screen</li>
-        <li>Death screen entity sketches, mechanic notes, and CRT tape upgrade</li>
-        <li>Mobile touch scroll and panel close fixes</li>
+        <li>Added playable Version Switcher and expanded death screen entity notes</li>
+        <li>Upgraded death screen CRT visuals and mobile scroll support</li>
       </ul></div>
       <div class="upd" data-ver="2.4.1"><h3>v2.4.1</h3><ul>
-        <li>Siren Head smashes non-evidence buildings with shake and dizziness</li>
-        <li>Lower-poly fence, fire escape, window, and tree pass</li>
-        <li>Fixed floating plank glitches</li>
+        <li>Siren Head can demolish non-evidence structures with impact shake</li>
+        <li>Geometry cleanup and floating-plank fixes across town props</li>
       </ul></div>
       <div class="upd" data-ver="2.4"><h3>v2.4</h3><ul>
         <li>New entity: The Fast One (Phenomenon-242)</li>
@@ -416,14 +417,14 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=63"></script>
-<script src="audio/sounds.js?v=26"></script>
+<script src="js/settings.js?v=66"></script>
+<script src="audio/sounds.js?v=27"></script>
 <script src="audio/voice.js?v=17"></script>
-<script src="js/audio.js?v=54"></script>
+<script src="js/audio.js?v=57"></script>
 <script src="js/textures.js?v=60"></script>
-<script src="js/world.js?v=62"></script>
+<script src="js/world.js?v=65"></script>
 <script src="js/sirenhead.js?v=61"></script>
-<script src="js/player.js?v=60"></script>
+<script src="js/player.js?v=62"></script>
 <script src="js/moths.js?v=60"></script>
 <script src="js/deathroom.js?v=58"></script>
 <script src="js/sneaky.js?v=59"></script>
@@ -431,7 +432,7 @@
 <script src="js/cutscenes.js?v=60"></script>
 <script src="js/tvfx.js?v=52"></script>
 <script src="js/admin.js?v=61"></script>
-<script src="js/main.js?v=63"></script>
+<script src="js/main.js?v=67"></script>
 <script src="js/touch.js?v=50"></script>
 </body>
 </html>

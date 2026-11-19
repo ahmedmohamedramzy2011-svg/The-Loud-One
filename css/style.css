@@ -43,31 +43,6 @@ body.pixelated #game-root canvas { image-rendering: pixelated; }
   background: radial-gradient(ellipse at center, rgba(120,0,0,0) 30%, rgba(160,0,0,0.75) 100%);
   transition: opacity 0.2s;
 }
-#noise-glitch {
-  position: fixed; inset: 0; pointer-events: none; z-index: 8; opacity: 0;
-  mix-blend-mode: screen;
-  background: repeating-linear-gradient(
-    to bottom,
-    rgba(255,255,255,0.03) 0px,
-    rgba(255,255,255,0.03) 1px,
-    transparent 1px,
-    transparent 5px
-  );
-}
-#noise-glitch::before, #noise-glitch::after {
-  content: ""; position: absolute; inset: 0;
-  opacity: var(--ng-rgb, 0.35);
-}
-#noise-glitch::before {
-  transform: translate(var(--ng-x, 2px), var(--ng-y, 0px));
-  clip-path: inset(var(--ng-top, 18%) 0 var(--ng-bot, 64%) 0);
-  background: linear-gradient(90deg, rgba(255,40,65,0.34), rgba(255,40,65,0.08) 45%, rgba(255,40,65,0.28));
-}
-#noise-glitch::after {
-  transform: translate(calc(var(--ng-x, 2px) * -1), calc(var(--ng-y, 0px) * -1));
-  clip-path: inset(var(--ng-top, 18%) 0 var(--ng-bot, 64%) 0);
-  background: linear-gradient(90deg, rgba(45,220,255,0.28), rgba(45,220,255,0.06) 55%, rgba(45,220,255,0.34));
-}
 #fade {
   position: fixed; inset: 0; background: #000; z-index: 40; pointer-events: none;
   opacity: 1; transition: opacity 1.2s ease;
@@ -335,8 +310,22 @@ body.has-touch #subtitles.mode-cutscene { bottom: calc(11vh + 22px); }
 .bar.noise > div:first-child { background: linear-gradient(90deg, #3b8, #fc3 40%, #f33 80%); }
 .bar.noise { height: 12px; }
 .bar-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: rgba(255,255,255,0.6); }
-.bar.stamina > div:first-child { background: #ddd; }
-.bar.stamina.tired > div:first-child { background: #b44; }
+.bar.stamina > div:first-child {
+  background-color: #3ec45d;
+  transition: width 0.08s linear, background-color 0.35s ease, box-shadow 0.35s ease;
+}
+.bar.stamina.low > div:first-child {
+  background-color: #f0c430;
+}
+.bar.stamina.critical > div:first-child {
+  background-color: #e0342b;
+  box-shadow: 0 0 8px rgba(224,52,43,0.55);
+}
+.bar.stamina.tired > div:first-child {
+  background-color: #d11a1a;
+  box-shadow: 0 0 8px rgba(209,26,26,0.65);
+  animation: blink 0.9s infinite;
+}
 .bar.battery > div:first-child { background: #fd6; }
 .bar.battery.low > div:first-child { background: #f43; animation: blink 0.8s infinite; }
 

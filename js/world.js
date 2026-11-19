@@ -52,6 +52,7 @@
       debrisGroup: new THREE.Group(),
       fenceDebrisGroup: new THREE.Group(),
       barricades: [],
+      noisyObjects: [],
       _gridVersion: 0,
     };
     W.root.add(W.debrisGroup);
@@ -147,6 +148,8 @@
       leaves: mat({ color: 0x18251a }),
       pineBark: mat({ color: 0x433326, vertexColors: true }),
       pineLeaves: mat({ color: 0x203324, vertexColors: true }),
+      birdFeather: mat({ color: 0x1d222b, roughness: 0.78, metalness: 0.08 }),
+      birdBeak: mat({ color: 0x6b604e, roughness: 0.7 }),
       tire: mat({ color: 0x111111 }),
       cctv: new THREE.MeshBasicMaterial({ map: T('cctv', { size: 256 }) }),
       warning: mat({ map: T('warning') }),
@@ -768,15 +771,526 @@
       collider(x0, x1, z0, z1, baseY + 2.2, baseY);
     }
 
+    // Preset queue for rich enterable buildings (4x 1-floor, 4x 2-floor, 2x distinct rooftop-access = 10 presets + unique Sheriff HQ)
+    const ENTER_PRESETS = [
+      // 1. One-floor Ranch House
+      {
+        id: 'house_1f_ranch', kind: 'house', floors: 1, roofAccess: false, L: 14, D: 14, H: 4.6,
+        build(ctx) {
+          const { F, hl, hd, t, addCrossWall, addSideWall, placeFurn, placeLocker, placeCoffeeTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const pb = 0.6;
+          addCrossWall(pb, -hl + t, 0.6, 0, 3.5, -3.2, 1.55);
+          addSideWall(0.6, -hd + t, pb - 0.1, 0, 3.5, null);
+          const rightDoorA = 3.5;
+          addCrossWall(pb, 0.7, hl - t, 0, 3.5, rightDoorA, 1.45);
+          // Front living area
+          placeFurn('couch', -hl + t, 3.6, 1, 0, 2.0, 0.14);
+          placeCoffeeTable(-4.6, 3.6, 0, 0.14);
+          placeRug(-3.5, 3.6, 2.4, 3.0, 0.14);
+          placeFurn('bookshelf', hl - t, 3.2, -1, 0, 1.8, 0.14);
+          placePainting(-hl + t + 0.03, 1.8, 1, 0, 0.14);
+          placePainting(hl - t - 0.03, 5.2, -1, 0, 0.14);
+          placeLamp(-2.5, 3.6, 3.5);
+          placeLamp(3.5, 3.6, 3.5);
+          // Back-west bedroom
+          placeFurn('bed', -3.0, -hd + t, 0, 1, 2.1, 0.14);
+          placeFurn('dresser', -hl + t, -3.2, 1, 0, 1.3, 0.14);
+          placeRug(-3.0, -3.0, 2.2, 2.4, 0.14);
+          placePainting(-hl + t + 0.03, -5.0, 1, 0, 0.14);
+          placeLamp(-3.0, -3.0, 3.5);
+          // Back-east study (optionally barricaded if non-evidence)
+          placeFurn('desk', hl - t, -2.5, -1, 0, 1.8, 0.14);
+          placeLocker(2.6, -hd + t + 0.38, 0, 1, 0.14);
+          placeLamp(3.6, -3.0, 3.5);
+          if (R() < 0.28 && !ctx.sheriff) {
+            addBarricade(rightDoorA, pb, 0.14, 0, 1, 1.45);
+          } else {
+            addSafeDesk(3.6, -hd + t + 0.9, 0, 1, 0.14);
+          }
+          addSafeWall(0, pb + 0.12, 0, 1, 0.14);
+          addSafeWall(-1.8, -hd + t + 0.04, 0, 1, 0.14);
+          if (R() < 0.45) placeBattery(-4.2, -1.6, 0.14);
+        },
+      },
+      // 2. One-floor Split Parlor Residence
+      {
+        id: 'house_1f_parlor', kind: 'house', floors: 1, roofAccess: false, L: 14, D: 14, H: 4.8,
+        build(ctx) {
+          const { hl, hd, t, addSideWall, placeFurn, placeLocker, placeDiningTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          addSideWall(-2.2, -hd + t, hd - t - 1.6, 0, 3.5, 2.4, 1.55);
+          addSideWall(2.2, -hd + t, hd - t - 1.6, 0, 3.5, -2.2, 1.55);
+          // Center hall
+          placeRug(0, 0.5, 2.2, 5.0, 0.14);
+          placeLocker(-0.7, -hd + t + 0.38, 0, 1, 0.14);
+          placePainting(-2.08, -0.5, 1, 0, 0.14);
+          placePainting(2.08, -0.5, -1, 0, 0.14);
+          placeLamp(0, 2.2, 3.5);
+          placeLamp(0, -2.8, 3.5);
+          addSafeWall(0.9, -hd + t + 0.04, 0, 1, 0.14);
+          // West wing (living & bedroom)
+          placeFurn('couch', -hl + t, 3.2, 1, 0, 1.9, 0.14);
+          placeFurn('bookshelf', -hl + t, -0.2, 1, 0, 1.6, 0.14);
+          placeFurn('bed', -hl + t, -4.0, 1, 0, 2.1, 0.14);
+          placeRug(-4.4, -1.2, 2.0, 3.2, 0.14);
+          placeLamp(-4.4, -0.5, 3.5);
+          // East wing (study & dining)
+          placeDiningTable(4.4, 3.0, 0.14);
+          placeFurn('desk', hl - t, -2.2, -1, 0, 1.8, 0.14);
+          placeFurn('dresser', hl - t, -5.0, -1, 0, 1.3, 0.14);
+          placePainting(hl - t - 0.03, 0.8, -1, 0, 0.14);
+          placeLamp(4.4, 0.0, 3.5);
+          if (R() < 0.28 && !ctx.sheriff) {
+            addBarricade(2.2, -2.2, 0.14, -1, 0, 1.55);
+          } else {
+            addSafeDesk(4.2, -hd + t + 0.9, 0, 1, 0.14);
+            addSafeWall(hl - t - 0.04, 1.2, -1, 0, 0.14);
+          }
+          if (R() < 0.45) placeBattery(-4.2, 3.2, 0.56);
+        },
+      },
+      // 3. One-floor Corner General Store
+      {
+        id: 'shop_1f_corner', kind: 'shop', floors: 1, roofAccess: false, L: 15, D: 14, H: 4.9, awning: true,
+        build(ctx) {
+          const { hl, hd, t, addCrossWall, placeFurn, placeLocker, placeCrates, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const pb = -2.4;
+          const backDoorA = 3.2;
+          addCrossWall(pb, -hl + t, hl - t, 0, 3.5, backDoorA, 1.6);
+          // Front shop floor
+          placeFurn('counter', -hl + t, 3.4, 1, 0, 2.4, 0.14);
+          placeFurn('aisle', -1.8, 1.0, 1, 0, 2.6, 0.14);
+          placeFurn('aisle', 1.8, 1.0, 1, 0, 2.6, 0.14);
+          placeFurn('shopShelf', hl - t, 3.2, -1, 0, 2.2, 0.14);
+          placeFurn('shopShelf', hl - t, 0.0, -1, 0, 2.2, 0.14);
+          placeFurn('shopShelf', -hl + t, 0.2, 1, 0, 2.0, 0.14);
+          placeRug(-4.6, 3.4, 1.8, 2.8, 0.14);
+          placeLamp(-3.2, 2.2, 3.5);
+          placeLamp(3.2, 2.2, 3.5);
+          // Back stockroom
+          placeFurn('shopShelf', -hl + t, -4.6, 1, 0, 2.0, 0.14);
+          placeCrates(-4.8, -5.0, 0.14);
+          placeLocker(-1.2, -hd + t + 0.38, 0, 1, 0.14);
+          placeLocker(0.2, -hd + t + 0.38, 0, 1, 0.14);
+          placePainting(hl - t - 0.03, -4.5, -1, 0, 0.14);
+          placeLamp(0, -4.6, 3.5);
+          addSafeWall(-3.2, pb + 0.12, 0, 1, 0.14);
+          if (R() < 0.25 && !ctx.sheriff) {
+            addBarricade(backDoorA, pb, 0.14, 0, 1, 1.6);
+          } else {
+            addSafeDesk(4.4, -hd + t + 0.9, 0, 1, 0.14);
+            addSafeWall(4.2, -hd + t + 0.04, 0, 1, 0.14);
+          }
+          if (R() < 0.5) placeBattery(-5.0, -3.8, 0.72);
+        },
+      },
+      // 4. One-floor Records & Municipal Office
+      {
+        id: 'office_1f_records', kind: 'office', floors: 1, roofAccess: false, L: 14, D: 15, H: 4.9, awning: true,
+        build(ctx) {
+          const { hl, hd, t, addCrossWall, addSideWall, placeFurn, placeLocker, placeCoffeeTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const pb = 0.8;
+          addCrossWall(pb, -hl + t, hl - t, 0, 3.5, -2.6, 1.65);
+          addSideWall(0, -hd + t, pb - 0.1, 0, 3.5, -3.0, 1.45);
+          // Reception lobby
+          placeFurn('counter', -hl + t, 3.8, 1, 0, 2.2, 0.14);
+          placeFurn('couch', hl - t, 3.8, -1, 0, 2.0, 0.14);
+          placeCoffeeTable(4.4, 3.8, 0, 0.14);
+          placeRug(0, 4.0, 2.8, 2.8, 0.14);
+          placePainting(hl - t - 0.03, 3.8, -1, 0, 0.14);
+          placeLamp(0, 3.8, 3.5);
+          // West archive room
+          placeFurn('bookshelf', -hl + t, -1.6, 1, 0, 2.0, 0.14);
+          placeFurn('bookshelf', -hl + t, -4.6, 1, 0, 2.0, 0.14);
+          placeFurn('desk', -1.8, -hd + t, 0, 1, 1.7, 0.14);
+          placeLocker(-4.5, -hd + t + 0.38, 0, 1, 0.14);
+          placeLamp(-3.4, -3.2, 3.5);
+          addSafeWall(-0.12, -1.0, -1, 0, 0.14);
+          // East manager office
+          placeFurn('desk', hl - t, -3.2, -1, 0, 1.9, 0.14);
+          placeFurn('dresser', hl - t, -5.8, -1, 0, 1.3, 0.14);
+          placeRug(3.4, -3.2, 2.2, 2.6, 0.14);
+          placePainting(hl - t - 0.03, -3.2, -1, 0, 0.14);
+          placeLamp(3.4, -3.2, 3.5);
+          if (R() < 0.25 && !ctx.sheriff) {
+            addBarricade(0, -3.0, 0.14, 1, 0, 1.45);
+          } else {
+            addSafeDesk(3.2, -hd + t + 0.9, 0, 1, 0.14);
+          }
+          if (R() < 0.45) placeBattery(4.2, -5.6, 0.95);
+        },
+      },
+      // 5. Two-floor Colonial House (East Staircase)
+      {
+        id: 'house_2f_colonial', kind: 'house', floors: 2, roofAccess: false, L: 14, D: 14, H: 8.2,
+        build(ctx) {
+          const { hl, hd, t, floor2Y, ceil1, ceil2, addStair1to2, addF2SlabsAndRails, addCrossWall, addSideWall, placeFurn, placeLocker, placeCoffeeTable, placeDiningTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const stA0 = hl - t - 1.95, stA1 = hl - t - 0.04;
+          addStair1to2(stA0, stA1, 3.55, -1.55, 1);
+          addF2SlabsAndRails(stA0, stA1, 3.55, -1.55, 1);
+          // Floor 1 layout
+          const pb1 = 0.2;
+          addCrossWall(pb1, -hl + t, stA0 - 0.16, 0, ceil1, -2.5, 1.6);
+          placeFurn('couch', -hl + t, 3.4, 1, 0, 2.0, 0.14);
+          placeCoffeeTable(-4.5, 3.4, 0, 0.14);
+          placeRug(-3.2, 3.4, 2.4, 2.8, 0.14);
+          placeFurn('bookshelf', stA0 - 0.17, 2.2, -1, 0, 1.6, 0.14);
+          placePainting(-hl + t + 0.03, 1.5, 1, 0, 0.14);
+          placeLamp(-1.5, 3.4, ceil1);
+          // Floor 1 back room
+          placeDiningTable(-3.8, -3.4, 0.14);
+          placeFurn('dresser', -hl + t, -3.4, 1, 0, 1.3, 0.14);
+          placeLocker(1.8, -hd + t + 0.38, 0, 1, 0.14);
+          placeLamp(-1.2, -3.4, ceil1);
+          addSafeWall(-1.2, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(2.4, -hd + t + 0.9, 0, 1, 0.14);
+          // Floor 2 layout
+          const pb2 = -0.2;
+          const f2End = stA0 - 0.05;
+          addCrossWall(pb2, -hl + t, f2End, floor2Y, ceil2, -2.4, 1.5);
+          addSideWall(-0.2, pb2 + 0.1, hd - t, floor2Y, ceil2, 3.2, 1.45);
+          // F2 Front-west master bedroom
+          placeFurn('bed', -hl + t, 3.4, 1, 0, 2.1, floor2Y);
+          placeFurn('dresser', -4.4, pb2 + 0.1, 0, 1, 1.2, floor2Y);
+          placeRug(-3.5, 3.6, 2.2, 2.6, floor2Y);
+          placePainting(-hl + t + 0.03, 1.2, 1, 0, floor2Y);
+          placeLamp(-3.4, 3.4, ceil2);
+          // F2 Front-east sitting room
+          placeFurn('couch', 2.0, hd - t, 0, -1, 1.8, floor2Y);
+          placeLamp(2.0, 3.4, ceil2);
+          // F2 Back study
+          placeFurn('desk', -hl + t, -3.2, 1, 0, 1.8, floor2Y);
+          placeFurn('bookshelf', 1.8, -hd + t, 0, 1, 1.8, floor2Y);
+          placeLocker(-1.8, -hd + t + 0.38, 0, 1, floor2Y);
+          placeRug(-1.5, -3.4, 2.6, 2.4, floor2Y);
+          placeLamp(-1.2, -3.4, ceil2);
+          if (R() < 0.25 && !ctx.sheriff) {
+            addBarricade(-0.2, 3.2, floor2Y, 1, 0, 1.45);
+          } else {
+            addSafeDesk(1.8, -3.6, 0, 1, floor2Y);
+          }
+          if (R() < 0.5) placeBattery(-2.8, -3.4, floor2Y + 0.5);
+        },
+      },
+      // 6. Two-floor Shop + Upstairs Apartment (West Staircase)
+      {
+        id: 'shop_2f_apartment', kind: 'shop', floors: 2, roofAccess: false, L: 15, D: 14, H: 8.5, awning: true,
+        build(ctx) {
+          const { hl, hd, t, floor2Y, ceil1, ceil2, addStair1to2, addF2SlabsAndRails, addCrossWall, placeFurn, placeLocker, placeCoffeeTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const stA0 = -hl + t + 0.04, stA1 = -hl + t + 1.99;
+          addStair1to2(stA0, stA1, 3.55, -1.55, -1);
+          addF2SlabsAndRails(stA0, stA1, 3.55, -1.55, -1);
+          // Floor 1 Shop floor
+          const pb1 = -1.45;
+          addCrossWall(pb1, stA1 + 0.16, hl - t, 0, ceil1, 2.8, 1.55);
+          placeFurn('counter', hl - t, 3.4, -1, 0, 2.2, 0.14);
+          placeFurn('aisle', 0.2, 1.2, 1, 0, 2.6, 0.14);
+          placeFurn('shopShelf', hl - t, 0.2, -1, 0, 2.0, 0.14);
+          placeFurn('shopShelf', stA1 + 0.17, 1.6, 1, 0, 2.2, 0.14);
+          placeRug(4.6, 3.4, 1.8, 2.6, 0.14);
+          placeLamp(1.5, 2.0, ceil1);
+          // F1 back storeroom
+          placeFurn('shopShelf', -1.8, -hd + t, 0, 1, 2.0, 0.14);
+          placeLocker(-3.8, -hd + t + 0.38, 0, 1, 0.14);
+          placeLamp(1.5, -4.4, ceil1);
+          addSafeWall(hl - t - 0.04, -4.4, -1, 0, 0.14);
+          addSafeDesk(2.2, -hd + t + 0.9, 0, 1, 0.14);
+          // Floor 2 Apartment loft
+          const pb2 = -0.2;
+          addCrossWall(pb2, stA1 + 0.05, hl - t, floor2Y, ceil2, 1.5, 1.5);
+          placeFurn('couch', hl - t, 3.4, -1, 0, 2.0, floor2Y);
+          placeCoffeeTable(4.8, 3.4, 0, floor2Y);
+          placeFurn('bookshelf', -0.5, hd - t, 0, -1, 1.8, floor2Y);
+          placeRug(2.5, 3.4, 2.6, 2.6, floor2Y);
+          placePainting(hl - t - 0.03, 1.6, -1, 0, floor2Y);
+          placeLamp(2.0, 3.4, ceil2);
+          // F2 back bedroom
+          placeFurn('bed', hl - t, -3.4, -1, 0, 2.1, floor2Y);
+          placeFurn('desk', -2.6, -hd + t, 0, 1, 1.7, floor2Y);
+          placeLocker(0.4, -hd + t + 0.38, 0, 1, floor2Y);
+          placePainting(2.2, -hd + t + 0.03, 0, 1, floor2Y);
+          placeLamp(2.0, -3.4, ceil2);
+          if (R() < 0.25 && !ctx.sheriff) {
+            addBarricade(1.5, pb2, floor2Y, 0, 1, 1.5);
+          } else {
+            addSafeDesk(3.2, -3.6, 0, 1, floor2Y);
+          }
+          if (R() < 0.5) placeBattery(4.2, 3.4, floor2Y + 0.45);
+        },
+      },
+      // 7. Two-floor Municipal Office (East Staircase)
+      {
+        id: 'office_2f_archive', kind: 'office', floors: 2, roofAccess: false, L: 14, D: 15, H: 8.8, awning: true,
+        build(ctx) {
+          const { hl, hd, t, floor2Y, ceil1, ceil2, addStair1to2, addF2SlabsAndRails, addCrossWall, addSideWall, placeFurn, placeLocker, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const stA0 = hl - t - 1.95, stA1 = hl - t - 0.04;
+          addStair1to2(stA0, stA1, 3.55, -1.55, 1);
+          addF2SlabsAndRails(stA0, stA1, 3.55, -1.55, 1);
+          // Floor 1
+          const pb1 = 0.6;
+          addCrossWall(pb1, -hl + t, stA0 - 0.16, 0, ceil1, -1.5, 1.6);
+          placeFurn('counter', -hl + t, 4.0, 1, 0, 2.2, 0.14);
+          placeFurn('couch', 2.4, hd - t, 0, -1, 1.8, 0.14);
+          placeFurn('bookshelf', stA0 - 0.17, 2.1, -1, 0, 1.5, 0.14);
+          placeRug(-1.4, 4.0, 2.4, 2.8, 0.14);
+          placeLamp(-1.4, 4.0, ceil1);
+          // F1 back office
+          placeFurn('desk', -hl + t, -2.4, 1, 0, 1.8, 0.14);
+          placeFurn('bookshelf', -hl + t, -5.2, 1, 0, 1.8, 0.14);
+          placeLocker(2.0, -hd + t + 0.38, 0, 1, 0.14);
+          placePainting(-hl + t + 0.03, -3.5, 1, 0, 0.14);
+          placeLamp(-1.4, -3.4, ceil1);
+          addSafeWall(-1.2, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(2.2, -hd + t + 0.9, 0, 1, 0.14);
+          // Floor 2
+          const pb2 = 0.0;
+          addCrossWall(pb2, -hl + t, stA0 - 0.05, floor2Y, ceil2, -2.6, 1.5);
+          addSideWall(-0.2, -hd + t, pb2 - 0.1, floor2Y, ceil2, -3.6, 1.45);
+          placeFurn('desk', -hl + t, 3.6, 1, 0, 1.8, floor2Y);
+          placeFurn('bookshelf', 1.6, hd - t, 0, -1, 1.8, floor2Y);
+          placeRug(-1.4, 3.6, 2.6, 2.6, floor2Y);
+          placeLamp(-1.4, 3.6, ceil2);
+          // F2 back rooms
+          placeFurn('bookshelf', -hl + t, -3.6, 1, 0, 2.0, floor2Y);
+          placeFurn('desk', 2.0, -hd + t, 0, 1, 1.7, floor2Y);
+          placeLocker(-3.5, -hd + t + 0.38, 0, 1, floor2Y);
+          placePainting(hl - t - 0.03, -4.0, -1, 0, floor2Y);
+          placeLamp(-1.4, -3.6, ceil2);
+          if (R() < 0.25 && !ctx.sheriff) {
+            addBarricade(-0.2, -3.6, floor2Y, 1, 0, 1.45);
+          } else {
+            addSafeDesk(-3.2, -3.6, 0, 1, floor2Y);
+          }
+          if (R() < 0.45) placeBattery(1.6, 4.0, floor2Y + 0.45);
+        },
+      },
+      // 8. Two-floor Townhouse (West Staircase, deep parlor + library)
+      {
+        id: 'house_2f_townhouse', kind: 'house', floors: 2, roofAccess: false, L: 14, D: 14, H: 8.6,
+        build(ctx) {
+          const { hl, hd, t, floor2Y, ceil1, ceil2, addStair1to2, addF2SlabsAndRails, addCrossWall, placeFurn, placeLocker, placeDiningTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const stA0 = -hl + t + 0.04, stA1 = -hl + t + 1.99;
+          addStair1to2(stA0, stA1, 3.55, -1.55, -1);
+          addF2SlabsAndRails(stA0, stA1, 3.55, -1.55, -1);
+          // Floor 1
+          const pb1 = -0.6;
+          addCrossWall(pb1, stA1 + 0.16, hl - t, 0, ceil1, 2.8, 1.55);
+          placeFurn('couch', hl - t, 3.2, -1, 0, 2.0, 0.14);
+          placeFurn('bookshelf', stA1 + 0.17, 2.4, 1, 0, 1.8, 0.14);
+          placeRug(1.8, 3.0, 2.6, 2.8, 0.14);
+          placePainting(hl - t - 0.03, 1.0, -1, 0, 0.14);
+          placeLamp(1.5, 3.0, ceil1);
+          // F1 rear dining/den
+          placeDiningTable(2.0, -3.6, 0.14);
+          placeFurn('dresser', hl - t, -3.8, -1, 0, 1.3, 0.14);
+          placeLocker(-2.4, -hd + t + 0.38, 0, 1, 0.14);
+          placeLamp(1.5, -3.6, ceil1);
+          addSafeWall(0.6, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(4.0, -hd + t + 0.9, 0, 1, 0.14);
+          // Floor 2
+          const pb2 = 0.0;
+          addCrossWall(pb2, stA1 + 0.05, hl - t, floor2Y, ceil2, 0.4, 1.5);
+          placeFurn('bed', hl - t, 3.2, -1, 0, 2.1, floor2Y);
+          placeFurn('dresser', 2.2, hd - t, 0, -1, 1.3, floor2Y);
+          placeRug(2.0, 3.2, 2.4, 2.4, floor2Y);
+          placePainting(hl - t - 0.03, 5.0, -1, 0, floor2Y);
+          placeLamp(2.0, 3.2, ceil2);
+          // F2 rear library
+          placeFurn('bookshelf', hl - t, -3.2, -1, 0, 2.0, floor2Y);
+          placeFurn('desk', 1.6, -hd + t, 0, 1, 1.8, floor2Y);
+          placeLocker(-2.0, -hd + t + 0.38, 0, 1, floor2Y);
+          placeRug(1.8, -3.4, 2.4, 2.4, floor2Y);
+          placeLamp(1.8, -3.4, ceil2);
+          if (R() < 0.25 && !ctx.sheriff) {
+            addBarricade(0.4, pb2, floor2Y, 0, 1, 1.5);
+          } else {
+            addSafeDesk(4.0, -3.6, 0, 1, floor2Y);
+          }
+          if (R() < 0.5) placeBattery(2.2, -3.4, floor2Y + 0.45);
+        },
+      },
+      // 9. Rooftop Preset A: 1-Floor Brick Corner Store with West Stairwell -> Rooftop Water Tank Deck (no 2F)
+      {
+        id: 'rooftop_shop_loft', kind: 'shop', floors: 1, roofAccess: true, L: 14, D: 14, H: 3.75, awning: true,
+        build(ctx) {
+          const { hl, hd, t, ceil1, roofY, addF1RoofStairsAndDeck, addCrossWall, placeFurn, placeLocker, placeCrates, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const rStA0 = -hl + t + 0.04, rStA1 = -hl + t + 1.99;
+          // Stair climbs front -> back (+3.2 -> -2.2) along West wall straight to Rooftop
+          addF1RoofStairsAndDeck(rStA0, rStA1, 3.2, -2.2, -1);
+          // Floor 1 Shop + Back Storeroom
+          const pb1 = -2.1;
+          addCrossWall(pb1, rStA1 + 0.16, hl - t, 0, ceil1, 2.8, 1.6);
+          placeFurn('counter', hl - t, 3.2, -1, 0, 2.3, 0.14);
+          placeFurn('aisle', 0.4, 1.4, 1, 0, 2.4, 0.14);
+          placeFurn('shopShelf', rStA1 + 0.17, 1.4, 1, 0, 2.0, 0.14);
+          placeRug(3.6, 3.2, 2.0, 2.4, 0.14);
+          placePainting(hl - t - 0.03, 0.6, -1, 0, 0.14);
+          placeLamp(1.5, 2.0, ceil1);
+          // Rear storeroom
+          placeFurn('shopShelf', -1.8, -hd + t, 0, 1, 2.0, 0.14);
+          placeLocker(-3.8, -hd + t + 0.38, 0, 1, 0.14);
+          placeCrates(4.6, -4.8, 0.14);
+          placeLamp(1.5, -4.6, ceil1);
+          addSafeWall(hl - t - 0.04, -4.4, -1, 0, 0.14);
+          addSafeDesk(1.2, -hd + t + 0.9, 0, 1, 0.14);
+          // Rooftop deck: Wooden water tank on steel stilts + crates + locker
+          ctx.addRoofWaterTank(2.6, 2.2);
+          placeCrates(-2.2, -4.6, roofY);
+          placeLocker(4.8, -4.4, -1, 0, roofY);
+          if (R() < 0.28 && !ctx.sheriff) {
+            addBarricade((rStA0 + rStA1) * 0.5, -2.35, roofY, 0, -1, rStA1 - rStA0);
+          } else if (R() < 0.55) {
+            placeBattery(3.4, -4.6, roofY + 0.45);
+          }
+        },
+      },
+      // 10. Rooftop Preset B: 1-Floor Municipal Annex with East Reverse Stairwell -> Rooftop HVAC & Antenna Deck (no 2F)
+      {
+        id: 'rooftop_office_patio', kind: 'office', floors: 1, roofAccess: true, L: 15, D: 14, H: 3.75, awning: true,
+        build(ctx) {
+          const { hl, hd, t, ceil1, roofY, addF1RoofStairsAndDeck, addCrossWall, placeFurn, placeLocker, placeCoffeeTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const rStA0 = hl - t - 1.99, rStA1 = hl - t - 0.04;
+          // Stair climbs back -> front (-2.4 -> +2.8) along East wall straight to Rooftop
+          addF1RoofStairsAndDeck(rStA0, rStA1, -2.4, 2.8, 1);
+          // Floor 1 Reception + Back Office
+          const pb1 = 0.0;
+          addCrossWall(pb1, -hl + t, rStA0 - 0.16, 0, ceil1, -2.2, 1.6);
+          placeFurn('couch', -hl + t, 3.2, 1, 0, 2.0, 0.14);
+          placeCoffeeTable(-4.6, 3.2, 0, 0.14);
+          placeFurn('bookshelf', rStA0 - 0.17, 1.4, -1, 0, 1.6, 0.14);
+          placeRug(-1.4, 3.2, 2.6, 2.8, 0.14);
+          placeLamp(-1.4, 3.2, ceil1);
+          // Rear office
+          placeFurn('desk', -hl + t, -3.2, 1, 0, 1.9, 0.14);
+          placeFurn('dresser', -hl + t, -5.6, 1, 0, 1.2, 0.14);
+          placeLocker(2.0, -hd + t + 0.38, 0, 1, 0.14);
+          placePainting(-hl + t + 0.03, -1.6, 1, 0, 0.14);
+          placeLamp(-1.4, -3.4, ceil1);
+          addSafeWall(-1.2, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(2.4, -hd + t + 0.9, 0, 1, 0.14);
+          // Rooftop deck: Dual HVACs, Chimney, Radio Antenna & Locker
+          ctx.addRoofHVAC(-3.4, -3.6);
+          ctx.addRoofHVAC(-3.4, 3.2);
+          ctx.addRoofChimney(0.4, 4.4);
+          ctx.addRoofAntenna(-0.4, -4.6);
+          placeLocker(-5.0, -0.4, 1, 0, roofY);
+          if (R() < 0.28 && !ctx.sheriff) {
+            addBarricade((rStA0 + rStA1) * 0.5, 2.95, roofY, 0, 1, rStA1 - rStA0);
+          } else if (R() < 0.55) {
+            placeBattery(-3.4, 0.0, roofY + 0.45);
+          }
+        },
+      },
+    ];
+
+    // Unique Sheriff's Station Preset (ONLY building with 2nd floor + rooftop access, bespoke Police HQ design)
+    const SHERIFF_PRESET = {
+      id: 'sheriff_hq', kind: 'police', floors: 2, roofAccess: true, sheriff: true, L: 15, D: 15, H: 7.05, awning: true,
+      build(ctx) {
+        const { F, hl, hd, t, floor2Y, ceil1, ceil2, roofY, addStair1to2, addF2SlabsAndRails, addRoofStairsAndDeck, addCrossWall, addSideWall, placeFurn, placeLocker, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, decoBox, box, collider, add, M, R } = ctx;
+        const stA0 = hl - t - 1.99, stA1 = hl - t - 0.04;
+        const rStA0 = -hl + t + 0.04, rStA1 = -hl + t + 1.89;
+        addStair1to2(stA0, stA1, 3.6, -1.6, 1);
+        addF2SlabsAndRails(stA0, stA1, 3.6, -1.6, 1);
+        // Floor 1: Sheriff Lobby, Holding Cell (west rear) & Evidence Room (east rear)
+        const pb1 = 0.4;
+        // Front lobby counter + waiting area
+        placeFurn('counter', -hl + t, 3.8, 1, 0, 2.4, 0.14);
+        placeFurn('couch', 2.4, hd - t, 0, -1, 1.8, 0.14);
+        placeRug(0.0, 3.8, 3.2, 2.8, 0.14);
+        placePainting(-hl + t + 0.03, 1.8, 1, 0, 0.14);
+        placeLamp(-1.2, 3.8, ceil1);
+        placeLamp(2.8, 3.8, ceil1);
+        // Back-west Holding Cell with 3D steel jail bars & open cell doorway
+        const cellDivA = -2.0;
+        addSideWall(cellDivA, -hd + t, pb1 - 0.1, 0, ceil1, -3.2, 1.35);
+        // Cell front steel bar wall (pb1) from -hl+t to cellDivA with doorway at a = -4.6
+        const cellDoorA = -4.6, cellGap = 1.25;
+        for (let bx = -hl + t + 0.3; bx < cellDivA - 0.15; bx += 0.34) {
+          if (Math.abs(bx - cellDoorA) < cellGap * 0.5) continue;
+          const bp = F.point(bx, pb1);
+          decoBox(M.iron, 0.055, ceil1 - 0.14, 0.055, bp.x, (ceil1 + 0.14) * 0.5, bp.z);
+        }
+        {
+          const [hb0, hb1, hz0, hz1] = F.rect(-hl + t, cellDoorA - cellGap * 0.5, pb1 - 0.06, pb1 + 0.06);
+          collider(hb0, hb1, hz0, hz1, ceil1, 0.14);
+          const [hb2, hb3, hz2, hz3] = F.rect(cellDoorA + cellGap * 0.5, cellDivA - 0.1, pb1 - 0.06, pb1 + 0.06);
+          collider(hb2, hb3, hz2, hz3, ceil1, 0.14);
+          const [ht0, ht1, htz0, htz1] = F.rect(-hl + t, cellDivA, pb1 - 0.06, pb1 + 0.06);
+          box(ht1 - ht0, 0.22, htz1 - htz0, M.iron, (ht0 + ht1) * 0.5, 2.55, (htz0 + htz1) * 0.5, { collide: false });
+        }
+        // Bunk inside holding cell
+        placeFurn('bed', -hl + t, -4.4, 1, 0, 2.1, 0.14);
+        placeLamp(-4.6, -3.4, ceil1);
+        // Back-east Sheriff Evidence & Security Office (guaranteed unobstructed!)
+        addCrossWall(pb1, cellDivA + 0.09, stA0 - 0.16, 0, ceil1, 1.0, 1.8);
+        placeFurn('bookshelf', cellDivA + 0.12, -3.2, 1, 0, 1.8, 0.14);
+        placeLocker(-0.3, -hd + t + 0.38, 0, 1, 0.14);
+        placeLamp(1.5, -3.4, ceil1);
+        // Bulletin board on back partition wall (clear of doorway)
+        {
+          const bPos = F.point(3.4, pb1 - 0.13);
+          decoBox(M.wood, 1.6, 1.0, 0.05, bPos.x, 1.75, bPos.z, 0, F.yawBack(), 0);
+          decoBox(M.poster, 0.45, 0.6, 0.06, bPos.x, 1.75, bPos.z, 0, F.yawBack(), 0);
+        }
+        addSafeWall(hl - t - 0.04, -3.6, -1, 0, 0.14);
+        // Floor 2: Detective Bureau & Dispatch Room + West Roof Staircase
+        addRoofStairsAndDeck(rStA0, rStA1, -2.2, 2.6, -1);
+        addCrossWall(0.0, rStA1 + 0.16, stA0 - 0.05, floor2Y, ceil2, 0.2, 1.6);
+        placeFurn('desk', -2.6, hd - t, 0, -1, 1.8, floor2Y);
+        placeFurn('couch', 2.4, hd - t, 0, -1, 1.8, floor2Y);
+        placeRug(0.0, 3.6, 2.8, 2.6, floor2Y);
+        placePainting(-2.2, 0.13, 0, 1, floor2Y);
+        placeLamp(0.0, 3.6, ceil2);
+        // F2 rear Detective Archive
+        placeFurn('desk', -1.8, -hd + t, 0, 1, 1.8, floor2Y);
+        placeFurn('bookshelf', 1.6, -hd + t, 0, 1, 1.8, floor2Y);
+        placeLocker(3.8, -hd + t + 0.38, 0, 1, floor2Y);
+        placeRug(0.0, -3.6, 2.8, 2.4, floor2Y);
+        placeLamp(0.0, -3.6, ceil2);
+        // Unique Sheriff Roof Deck: Tall Steel Radio Mast + Beacon Lights + Dual HVAC + Rooftop Locker + Battery
+        ctx.addSheriffRadioTower(3.2, -3.4);
+        ctx.addRoofHVAC(-2.2, -4.4);
+        ctx.addRoofHVAC(3.4, 3.6);
+        placeLocker(5.2, 0.2, -1, 0, roofY);
+        placeBattery(4.2, -1.8, roofY + 0.45);
+        void add; void R;
+      },
+    };
+
+    const presetQueue = [];
+    function nextEnterPreset(kind) {
+      if (!presetQueue.length) {
+        for (let i = 0; i < ENTER_PRESETS.length; i++) presetQueue.push(ENTER_PRESETS[i]);
+        for (let i = presetQueue.length - 1; i > 0; i--) {
+          const j = (rand() * (i + 1)) | 0;
+          const tmp = presetQueue[i]; presetQueue[i] = presetQueue[j]; presetQueue[j] = tmp;
+        }
+      }
+      if (kind) {
+        const idx = presetQueue.findIndex(p => p.kind === kind);
+        if (idx >= 0) return presetQueue.splice(idx, 1)[0];
+        const matching = ENTER_PRESETS.filter(p => p.kind === kind);
+        if (matching.length) return matching[(rand() * matching.length) | 0];
+      }
+      return presetQueue.pop();
+    }
+
     function buildEnterable(cx, cz, L, D, H, axis, sign, kind, opts) {
       const rich = !LO.ver || LO.ver().richInteriors;
-      const hasRoof = rich && rand() < 0.42;
-      if (hasRoof) H = 7.05;
-      else if (rich) H = Math.max(H, 7.8);
+      let preset = null;
+      if (rich) {
+        if (opts && opts.sheriff) preset = SHERIFF_PRESET;
+        else preset = nextEnterPreset(opts && opts.kind ? opts.kind : null);
+        L = preset.L;
+        D = preset.D;
+        H = preset.H;
+        kind = preset.kind;
+      }
+      const hasRoof = !!(preset && preset.roofAccess);
 
       const F = frame(cx, cz, axis, sign, L, D);
       const t = 0.35, doorW = 2.2, doorH = 2.8;
-      const facade = pick(M.walls);
+      const facade = (preset && preset.sheriff) ? M.walls[3] : pick(M.walls);
       const inner = pick(M.plaster);
       const floorMat = kind === 'shop' || kind === 'police' ? M.tile : M.wood;
       const hl = L / 2, hd = D / 2;
@@ -787,6 +1301,7 @@
 
       const b = {
         id: W.buildings.length, type: 'enter', sheriff: !!(opts && opts.sheriff),
+        presetId: preset ? preset.id : 'legacy',
         cx, cz, minX: fx0, maxX: fx1, minZ: fz0, maxZ: fz1, L, D, H,
         group: new THREE.Group(), deco: new Map(), colliders: [], occluders: [], hideSpots: [], walkSurfaces: [],
         interior: null, debrisGroup: null, debrisColliders: [], debrisOccluders: [],
@@ -800,7 +1315,7 @@
       const ceil1 = rich ? 3.50 : 3.60;
       const floor2Y = 3.68;
       const ceil2 = 7.05;
-      const roofY = hasRoof ? 7.45 : undefined;
+      const roofY = hasRoof ? ((preset && preset.floors === 1) ? 3.90 : 7.45) : undefined;
 
       // Exterior walls (front with doorway, back, sides)
       wall(F, -hl, -doorW / 2, hd - t, hd, 0, H, facade, inner, 'front');
@@ -822,78 +1337,61 @@
       W.interiors.push(intr);
       b.interior = intr;
 
-      // Per-floor 2D local footprint planner so furniture, lockers, stairs, Sheriff desk & CCTV never overlap
-      const f1Occ = [], f2Occ = [];
-      const inBounds = (a0, a1, b0, b1) =>
-        Math.min(a0, a1) >= -hl + t + 0.02 && Math.max(a0, a1) <= hl - t - 0.02 &&
-        Math.min(b0, b1) >= -hd + t + 0.02 && Math.max(b0, b1) <= hd - t - 0.02;
-      const canOcc = (occ, a0, a1, b0, b1, pad) => {
-        pad = pad || 0;
-        const la0 = Math.min(a0, a1) - pad, la1 = Math.max(a0, a1) + pad;
-        const lb0 = Math.min(b0, b1) - pad, lb1 = Math.max(b0, b1) + pad;
-        if (!inBounds(Math.min(a0, a1), Math.max(a0, a1), Math.min(b0, b1), Math.max(b0, b1))) return false;
-        for (let i = 0; i < occ.length; i++) {
-          const r = occ[i];
-          if (la1 > r.a0 && la0 < r.a1 && lb1 > r.b0 && lb0 < r.b1) return false;
-        }
-        return true;
-      };
-      const addOcc = (occ, a0, a1, b0, b1, tag) => {
-        occ.push({ a0: Math.min(a0, a1), a1: Math.max(a0, a1), b0: Math.min(b0, b1), b1: Math.max(b0, b1), tag: tag || 'item' });
-      };
-
-      // Reserve main entrance foyer on Floor 1
-      addOcc(f1Occ, -2.1, 2.1, hd - t - 2.8, hd - t, 'entry');
-
-      // Helper for wall-mounted or free furniture using FloorPlan local bounds
-      const placeFloorLocker = (occ, a, bPos, faceYaw, baseY, frontDirA, frontDirB) => {
-        const halfW = 0.52, halfD = 0.42;
-        const a0 = a - halfW - Math.max(0, -frontDirA * 0.8), a1 = a + halfW + Math.max(0, frontDirA * 0.8);
-        const b0 = bPos - halfD - Math.max(0, -frontDirB * 0.8), b1 = bPos + halfD + Math.max(0, frontDirB * 0.8);
-        if (!canOcc(occ, a0, a1, b0, b1, 0.08)) return false;
-        addOcc(occ, a0, a1, b0, b1, 'locker');
-        const lp = F.point(a, bPos);
-        locker(lp.x, lp.z, faceYaw, baseY);
-        return true;
-      };
-
-      let sheriffReserve = null;
-      if (opts && opts.sheriff) {
-        const sSide = rand() < 0.5 ? -1 : 1;
-        const da = sSide * (hl - t - 2.2);
-        addOcc(f1Occ, da - 1.65, da + 1.65, -hd + t, -hd + t + 2.3, 'sheriff');
-        sheriffReserve = { da, sSide };
-      }
+      // Helper converting local building direction (da, db) into world orientation
+      const localWorldVec = (da, db) => axis === 'z' ? [da, sign * db] : [sign * db, da];
+      const yawFurnDir = (da, db) => { const [wx, wz] = localWorldVec(da, db); return Math.atan2(-wz, wx); };
+      const yawFaceDir = (da, db) => { const [wx, wz] = localWorldVec(da, db); return Math.atan2(wx, wz); };
 
       if (!rich) {
-        // Legacy <2.6 single-story enterable layout (still overlap-free via FloorPlan!)
+        // Legacy <2.6 single-story enterable layout
+        const f1Occ = [];
+        const inBounds = (a0, a1, b0, b1) =>
+          Math.min(a0, a1) >= -hl + t + 0.01 && Math.max(a0, a1) <= hl - t - 0.01 &&
+          Math.min(b0, b1) >= -hd + t + 0.01 && Math.max(b0, b1) <= hd - t - 0.01;
+        const canOcc = (occ, a0, a1, b0, b1, pad) => {
+          pad = pad || 0;
+          const la0 = Math.min(a0, a1) - pad, la1 = Math.max(a0, a1) + pad;
+          const lb0 = Math.min(b0, b1) - pad, lb1 = Math.max(b0, b1) + pad;
+          if (!inBounds(Math.min(a0, a1), Math.max(a0, a1), Math.min(b0, b1), Math.max(b0, b1))) return false;
+          for (let i = 0; i < occ.length; i++) {
+            const r = occ[i];
+            if (la1 > r.a0 && la0 < r.a1 && lb1 > r.b0 && lb0 < r.b1) return false;
+          }
+          return true;
+        };
+        const addOcc = (occ, a0, a1, b0, b1) => occ.push({ a0: Math.min(a0, a1), a1: Math.max(a0, a1), b0: Math.min(b0, b1), b1: Math.max(b0, b1) });
+        addOcc(f1Occ, -2.1, 2.1, hd - t - 2.8, hd - t);
+        if (opts && opts.sheriff) addOcc(f1Occ, -hl + t, -hl + t + 3.8, -hd + t, -hd + t + 2.3);
+
         const pb = R(-1, 1.5), gapA = R(-1.5, 1.5), gw = 1.6;
         wall(F, -hl + t, gapA - gw / 2, pb - 0.1, pb + 0.1, 0, ceil1, inner, inner, 'front');
         wall(F, gapA + gw / 2, hl - t, pb - 0.1, pb + 0.1, 0, ceil1, inner, inner, 'front');
         wall(F, gapA - gw / 2, gapA + gw / 2, pb - 0.1, pb + 0.1, 2.5, ceil1, inner, inner, 'front');
-        addOcc(f1Occ, -hl + t, hl - t, pb - 0.45, pb + 0.45, 'wall');
+        addOcc(f1Occ, -hl + t, hl - t, pb - 0.45, pb + 0.45);
         boxAt(fx0, fx1, ceil1, ceil1 + 0.15, fz0, fz1, inner, { collide: false, tile: 4 });
         boxAt(fx0 - 0.3, fx1 + 0.3, H, H + 0.4, fz0 - 0.3, fz1 + 0.3, M.roof, { collide: false, tile: 6 });
 
         const info = { F, hl, hd, t, pb, gapA, axis, sign, kind, sheriff: !!(opts && opts.sheriff), cx, cz, building: b };
-        // Place locker on back wall away from Sheriff desk
         for (let k = 0; k < 8; k++) {
           const la = R(-hl + 1.5, hl - 1.5);
-          if (placeFloorLocker(f1Occ, la, -hd + t + 0.38, F.yawFront(), 0.14, 0, 1)) break;
+          if (canOcc(f1Occ, la - 0.55, la + 0.55, -hd + t + 0.02, -hd + t + 1.15, 0.05)) {
+            addOcc(f1Occ, la - 0.55, la + 0.55, -hd + t + 0.02, -hd + t + 1.15);
+            const lp = F.point(la, -hd + t + 0.38);
+            locker(lp.x, lp.z, F.yawFront(), 0.14);
+            break;
+          }
         }
-        // Safe spots
         b.safeWallSpots.push({ p: F.point(gapA > 0 ? -hl + t + 0.03 : hl - t - 0.03, (-hd + pb) * 0.5), yaw: F.yawLeft() + (gapA > 0 ? 0 : Math.PI), y: 0.14 });
         b.safeWallSpots.push({ p: F.point(0, -hd + t + 0.03), yaw: F.yawFront(), y: 0.14 });
-        // Side furniture checked against f1Occ
         const placeAlongLegacy = (b0, b1, side) => {
           let bb = b0 + 0.5;
           while (bb < b1 - 1.2) {
             const len = R(1.3, 2.3);
             if (bb + len > b1 - 0.5) break;
-            const fa0 = side > 0 ? hl - t - 1.35 : -hl + t;
-            const fa1 = side > 0 ? hl - t : -hl + t + 1.35;
-            if (canOcc(f1Occ, fa0, fa1, bb, bb + len, 0.1)) {
-              addOcc(f1Occ, fa0, fa1, bb, bb + len, 'furn');
+            const fa0 = side > 0 ? hl - t - 1.35 : -hl + t + 0.03;
+            const fa1 = side > 0 ? hl - t - 0.03 : -hl + t + 1.35;
+            if (canOcc(f1Occ, fa0, fa1, bb, bb + len, 0.08)) {
+              addOcc(f1Occ, fa0, fa1, bb, bb + len);
               const p = F.point(side * (hl - t), bb + len / 2);
               const into = axis === 'z' ? (side > 0 ? Math.PI : 0) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
               let item = kind === 'shop' ? (rand() < 0.75 ? 'shopShelf' : 'counter')
@@ -911,402 +1409,314 @@
         W.enterables.push(info);
       } else {
         // ============================================================
-        // V2.6 MULTI-STORY RICH ENTERABLE INTERIORS
-        // Multi-room Floor 1, open stairwell + staircase, Floor 2 rooms,
-        // occasional walkable Roof Access, and occasional Barricades
+        // V2.6.1 PRESET-BASED ENTERABLE BUILDINGS (4x 1F, 4x 2F, 2x 1F+Rooftop + Unique 2F+Rooftop Sheriff HQ)
         // ============================================================
-        const stairSide = rand() < 0.5 ? 1 : -1;
-        const stairW = 1.95;
-        const stA0 = stairSide > 0 ? hl - t - stairW - 0.04 : -hl + t + 0.04;
-        const stA1 = stairSide > 0 ? hl - t - 0.04 : -hl + t + stairW + 0.04;
-        const stCenterA = (stA0 + stA1) * 0.5;
-        const stBotB = 3.55, stTopB = -1.55; // climb from front (+b) up toward back (-b)
-
-        // Reserve Floor 1 & Floor 2 stairwell & landing buffers
-        addOcc(f1Occ, stA0 - 0.35, stA1 + 0.35, stTopB - 1.2, stBotB + 1.4, 'stairwell');
-        addOcc(f2Occ, stA0 - 0.4, stA1 + 0.4, stTopB - 1.45, stBotB + 0.35, 'stairwell2');
-
-        // Roof access staircase (on Floor 2 opposite wing) if hasRoof
-        let rStA0 = 0, rStA1 = 0, rStBotB = -2.2, rStTopB = 2.6, rStCenterA = 0;
-        if (hasRoof) {
-          const rSide = -stairSide;
-          const rW = 1.85;
-          rStA0 = rSide > 0 ? hl - t - rW - 0.04 : -hl + t + 0.04;
-          rStA1 = rSide > 0 ? hl - t - 0.04 : -hl + t + rW + 0.04;
-          rStCenterA = (rStA0 + rStA1) * 0.5;
-          addOcc(f2Occ, rStA0 - 0.35, rStA1 + 0.35, rStBotB - 1.25, rStTopB + 1.35, 'roofStair');
-        }
-
-        // Partition wall helper with a framed doorway cutout
-        const addDoorWall = (occ, isCross, fixedCoord, rStart, rEnd, doorCenter, dW, yBot, yTop, matWall, orient) => {
-          const halfD = dW * 0.5, dH = 2.45;
-          const spanLen = Math.abs(rEnd - rStart);
-          if (spanLen < 0.8) return;
-          const dc = Math.max(rStart + halfD + 0.25, Math.min(rEnd - halfD - 0.25, doorCenter));
-          if (isCross) {
-            wall(F, rStart, dc - halfD, fixedCoord - 0.1, fixedCoord + 0.1, yBot, yTop, matWall, matWall, orient);
-            wall(F, dc + halfD, rEnd, fixedCoord - 0.1, fixedCoord + 0.1, yBot, yTop, matWall, matWall, orient);
-            if (yTop - yBot > dH) wall(F, dc - halfD, dc + halfD, fixedCoord - 0.1, fixedCoord + 0.1, yBot + dH, yTop, matWall, matWall, orient);
-            addOcc(occ, rStart, rEnd, fixedCoord - 0.25, fixedCoord + 0.25, 'pwall');
-            addOcc(occ, dc - halfD - 0.35, dc + halfD + 0.35, fixedCoord - 1.15, fixedCoord + 1.15, 'doorgap');
+        let roofSafeZone = null;
+        let hasBarricade = false;
+        const addBulkhead = (rStA0, rStA1, rStBotB, rStTopB) => {
+          const minB = Math.min(rStBotB, rStTopB), maxB = Math.max(rStBotB, rStTopB);
+          const bhH = roofY + 2.35;
+          if (rStTopB > rStBotB) {
+            wall(F, rStA0 - 0.14, rStA1 + 0.14, minB - 0.16, minB, roofY, bhH, facade, inner, 'back');
+            wall(F, rStA0 - 0.14, rStA0 + 0.02, minB, maxB + 0.14, roofY, bhH, facade, inner, 'left');
+            wall(F, rStA1 - 0.02, rStA1 + 0.14, minB, maxB + 0.14, roofY, bhH, facade, inner, 'right');
+            const [hx0, hx1, hz0, hz1] = F.rect(rStA0 - 0.14, rStA1 + 0.14, minB - 0.16, maxB + 0.14);
+            boxAt(hx0, hx1, bhH, bhH + 0.18, hz0, hz1, M.roof, { collide: false, tile: 4 });
+            roofSafeZone = { a0: rStA0 - 1.0, a1: rStA1 + 1.0, b0: minB - 0.8, b1: maxB + 2.0 };
           } else {
-            wall(F, fixedCoord - 0.1, fixedCoord + 0.1, rStart, dc - halfD, yBot, yTop, matWall, matWall, orient);
-            wall(F, fixedCoord - 0.1, fixedCoord + 0.1, dc + halfD, rEnd, yBot, yTop, matWall, matWall, orient);
-            if (yTop - yBot > dH) wall(F, fixedCoord - 0.1, fixedCoord + 0.1, dc - halfD, dc + halfD, yBot + dH, yTop, matWall, matWall, orient);
-            addOcc(occ, fixedCoord - 0.25, fixedCoord + 0.25, rStart, rEnd, 'pwall');
-            addOcc(occ, fixedCoord - 1.15, fixedCoord + 1.15, dc - halfD - 0.35, dc + halfD + 0.35, 'doorgap');
+            wall(F, rStA0 - 0.14, rStA1 + 0.14, maxB, maxB + 0.16, roofY, bhH, facade, inner, 'front');
+            wall(F, rStA0 - 0.14, rStA0 + 0.02, minB - 0.14, maxB, roofY, bhH, facade, inner, 'left');
+            wall(F, rStA1 - 0.02, rStA1 + 0.14, minB - 0.14, maxB, roofY, bhH, facade, inner, 'right');
+            const [hx0, hx1, hz0, hz1] = F.rect(rStA0 - 0.14, rStA1 + 0.14, minB - 0.14, maxB + 0.16);
+            boxAt(hx0, hx1, bhH, bhH + 0.18, hz0, hz1, M.roof, { collide: false, tile: 4 });
+            roofSafeZone = { a0: rStA0 - 1.0, a1: rStA1 + 1.0, b0: minB - 2.0, b1: maxB + 0.8 };
           }
-          return dc;
+          // Safety roof parapet colliders
+          const [p1x0, p1x1, p1z0, p1z1] = F.rect(-hl - 0.2, hl + 0.2, -hd - 0.2, -hd + 0.15);
+          collider(p1x0, p1x1, p1z0, p1z1, roofY + 1.15, roofY);
+          const [p2x0, p2x1, p2z0, p2z1] = F.rect(-hl - 0.2, hl + 0.2, hd - 0.15, hd + 0.2);
+          collider(p2x0, p2x1, p2z0, p2z1, roofY + 1.15, roofY);
+          const [p3x0, p3x1, p3z0, p3z1] = F.rect(-hl - 0.2, -hl + 0.15, -hd + 0.15, hd - 0.15);
+          collider(p3x0, p3x1, p3z0, p3z1, roofY + 1.15, roofY);
+          const [p4x0, p4x1, p4z0, p4z1] = F.rect(hl - 0.15, hl + 0.2, -hd + 0.15, hd - 0.15);
+          collider(p4x0, p4x1, p4z0, p4z1, roofY + 1.15, roofY);
         };
-
-        // ---- Decide occasional blocked sections (never blocking Sheriff's evidence room or front door!) ----
-        const layoutKind = (rand() * 3) | 0; // 0: lobby + 2 back rooms, 1: side corridor + rooms, 2: corner office + hall
-        const f1MainEnd = stairSide > 0 ? stA0 - 0.18 : hl - t;
-        const f1MainStart = stairSide > 0 ? -hl + t : stA1 + 0.18;
-        const mainCenterA = (f1MainStart + f1MainEnd) * 0.5;
-        const pb = R(0.0, 1.1);
-
-        // Side wall bounding the Floor 1 stairwell (with entry opening at bottom b > stBotB)
-        const stInnerA = stairSide > 0 ? stA0 - 0.08 : stA1 + 0.08;
-        wall(F, stInnerA - 0.09, stInnerA + 0.09, stTopB, stBotB + 0.1, 0, ceil1, inner, inner, 'left');
-        addOcc(f1Occ, stInnerA - 0.22, stInnerA + 0.22, stTopB, stBotB + 0.2, 'stairwall');
-
-        let f1RoomGate = null; // optional side/back room doorway on Floor 1 eligible for barricade
-        let f1BackGate = null;
-
-        if (layoutKind === 0) {
-          // Cross wall creating back wing + central divider between back-left & back-right rooms
-          const dFront = addDoorWall(f1Occ, true, pb, f1MainStart, f1MainEnd, mainCenterA - stairSide * 1.4, 1.6, 0, ceil1, inner, 'front');
-          const divA = mainCenterA + stairSide * 0.6;
-          wall(F, divA - 0.1, divA + 0.1, -hd + t, pb - 0.1, 0, ceil1, inner, inner, 'left');
-          addOcc(f1Occ, divA - 0.25, divA + 0.25, -hd + t, pb, 'pwall');
-          const backSideDoor = addDoorWall(f1Occ, true, pb, Math.min(divA, f1MainEnd), Math.max(divA, f1MainEnd), (divA + f1MainEnd) * 0.5, 1.45, 0, ceil1, inner, 'front');
-          // Keep Sheriff room unblocked; only mark the other back doorway as barri-candidate
-          const shInLeft = sheriffReserve && sheriffReserve.da < divA;
-          if (!opts || !opts.sheriff || shInLeft) {
-            f1BackGate = { a: (divA + (stairSide > 0 ? f1MainEnd : f1MainStart)) * 0.5, b: pb, w: 1.45, yaw: F.yawFront() };
-          }
-          void backSideDoor; void dFront;
-        } else if (layoutKind === 1) {
-          // Side corridor + enclosed side storage/office room
-          const divA = mainCenterA - stairSide * 1.3;
-          const dc1 = addDoorWall(f1Occ, false, divA, -hd + t, hd - t - 1.8, -2.0, 1.5, 0, ceil1, inner, 'left');
-          addDoorWall(f1Occ, true, pb, f1MainStart, divA, (f1MainStart + divA) * 0.5, 1.5, 0, ceil1, inner, 'front');
-          if (!opts || !opts.sheriff) {
-            f1RoomGate = { a: divA, b: dc1 || -2.0, w: 1.5, yaw: F.yawLeft() };
-          }
-        } else {
-          // Front hall + rear corner enclosed office + side alcove
-          const cornerA = mainCenterA;
-          addDoorWall(f1Occ, true, pb, f1MainStart, cornerA, (f1MainStart + cornerA) * 0.5, 1.55, 0, ceil1, inner, 'front');
-          const dcSide = addDoorWall(f1Occ, false, cornerA, -hd + t, pb, (-hd + pb) * 0.5, 1.5, 0, ceil1, inner, 'left');
-          if (!opts || !opts.sheriff) {
-            f1BackGate = { a: cornerA, b: dcSide || (-hd + pb) * 0.5, w: 1.5, yaw: F.yawLeft() };
-          }
-        }
-
-        // ---- Stairs Floor 1 -> Floor 2 ----
-        const numTreads = 12;
-        const treadRun = (stBotB - stTopB) / numTreads;
-        const treadRise = (floor2Y - 0.14) / numTreads;
-        for (let ti = 0; ti < numTreads; ti++) {
-          const tb0 = stBotB - (ti + 1) * treadRun;
-          const tb1 = stBotB - ti * treadRun + 0.04;
-          const ty1 = 0.14 + (ti + 1) * treadRise;
-          const ty0 = Math.max(0.14, ty1 - treadRise - 0.10);
-          const [sx0, sx1, sz0, sz1] = F.rect(stA0 + 0.05, stA1 - 0.05, tb0, tb1);
-          boxAt(sx0, sx1, ty0, ty1, sz0, sz1, M.wood, { collide: false, tile: 2 });
-        }
-        // Ramp walkable surface for Floor 1 -> Floor 2 stairs (slightly overlapped top & bottom for seamless transition)
-        {
-          const [rx0, rx1, rz0, rz1] = F.rect(stA0, stA1, stTopB - 0.15, stBotB + 0.15);
-          const botP = F.point(stCenterA, stBotB);
-          const topP = F.point(stCenterA, stTopB);
-          walkSurface({
-            type: 'ramp',
-            minX: rx0, maxX: rx1, minZ: rz0, maxZ: rz1,
-            axis: axis === 'z' ? 'z' : 'x',
-            u0: axis === 'z' ? botP.z : botP.x,
-            u1: axis === 'z' ? topP.z : topP.x,
-            y0: 0.14, y1: floor2Y,
-          });
-        }
-
-        // ---- Floor 2 slab with OPEN stairwell cutout [stA0..stA1, stTopB..stBotB] ----
-        const addFloorSlab = (a0, a1, b0, b1, y0, y1, matSlab) => {
-          if (a1 - a0 < 0.08 || b1 - b0 < 0.08) return;
-          const [sx0, sx1, sz0, sz1] = F.rect(a0, a1, b0, b1);
-          boxAt(sx0, sx1, y0, y1, sz0, sz1, matSlab, { tile: 3, collide: false });
-          walkSurface({ type: 'flat', minX: sx0, maxX: sx1, minZ: sz0, maxZ: sz1, y: y1 });
-        };
-        addFloorSlab(-hl + t, hl - t, -hd + t, stTopB, ceil1, floor2Y, floorMat);
-        addFloorSlab(-hl + t, hl - t, stBotB, hd - t, ceil1, floor2Y, floorMat);
-        if (stairSide > 0) addFloorSlab(-hl + t, stA0, stTopB, stBotB, ceil1, floor2Y, floorMat);
-        else addFloorSlab(stA1, hl - t, stTopB, stBotB, ceil1, floor2Y, floorMat);
-
-        // Floor 2 stairwell guardrails (solid waist-high railing preventing falling sideways into stairwell)
-        {
-          const railA = stairSide > 0 ? stA0 : stA1;
-          const [gx0, gx1, gz0, gz1] = F.rect(railA - 0.06, railA + 0.06, stTopB, stBotB);
-          boxAt(gx0, gx1, floor2Y, floor2Y + 0.95, gz0, gz1, M.wood, { tile: 2 });
-          const [fx0r, fx1r, fz0r, fz1r] = F.rect(stA0, stA1, stBotB - 0.06, stBotB + 0.06);
-          boxAt(fx0r, fx1r, floor2Y, floor2Y + 0.95, fz0r, fz1r, M.wood, { tile: 2 });
-        }
-
-        // ---- Floor 2 Rooms & Partitions ----
-        const f2pb = R(-0.3, 1.2);
-        const f2MainStart = hasRoof && stairSide > 0 ? rStA1 + 0.15 : (!hasRoof && stairSide < 0 ? stA1 + 0.15 : -hl + t);
-        const f2MainEnd = hasRoof && stairSide < 0 ? rStA0 - 0.15 : (!hasRoof && stairSide > 0 ? stA0 - 0.15 : hl - t);
-        const f2Mid = (f2MainStart + f2MainEnd) * 0.5;
-        let f2RoomGate = null;
-        if (f2MainEnd - f2MainStart > 4.0) {
-          addDoorWall(f2Occ, true, f2pb, f2MainStart, f2MainEnd, f2Mid - 0.6, 1.5, floor2Y, ceil2, inner, 'front');
-          if (f2MainEnd - f2MainStart > 6.5) {
-            const dc2 = addDoorWall(f2Occ, false, f2Mid + 0.8, f2pb, hd - t, (f2pb + hd - t) * 0.5, 1.45, floor2Y, ceil2, inner, 'left');
-            f2RoomGate = { a: f2Mid + 0.8, b: dc2 || (f2pb + hd - t) * 0.5, w: 1.45, yaw: F.yawLeft() };
-          }
-        }
-
-        // ---- Roof Deck vs Enclosed Floor 2 Ceiling ----
-        let roofBlocked = false;
-        let stairsBlocked = false;
-        let f1BlockedSide = false;
-        let f2BlockedSide = false;
-
-        // Roll barricade decisions (never block Sheriff's building floor 1 back rooms)
-        const canBlockStairs = (!opts || !opts.sheriff) && rand() < 0.22;
-        if (canBlockStairs) {
-          stairsBlocked = true;
-          buildBarricadeCluster(F, stCenterA, stBotB - 1.1, 0.72, F.yawFront(), stairW - 0.1);
-        } else if (f1BackGate && rand() < 0.34) {
-          f1BlockedSide = true;
-          buildBarricadeCluster(F, f1BackGate.a, f1BackGate.b, 0.14, f1BackGate.yaw, f1BackGate.w);
-        } else if (f1RoomGate && rand() < 0.34) {
-          f1BlockedSide = true;
-          buildBarricadeCluster(F, f1RoomGate.a, f1RoomGate.b, 0.14, f1RoomGate.yaw, f1RoomGate.w);
-        }
-
-        if (!stairsBlocked && f2RoomGate && rand() < 0.28) {
-          f2BlockedSide = true;
-          buildBarricadeCluster(F, f2RoomGate.a, f2RoomGate.b, floor2Y, f2RoomGate.yaw, f2RoomGate.w);
-        }
-
-        if (hasRoof) {
-          // Floor 2 -> Roof stairs in [rStA0..rStA1, rStBotB..rStTopB]
-          const rTreads = 12;
-          const rRun = (rStTopB - rStBotB) / rTreads;
-          const rRise = (roofY - floor2Y) / rTreads;
-          for (let ti = 0; ti < rTreads; ti++) {
-            const tb0 = rStBotB + ti * rRun - 0.04;
-            const tb1 = rStBotB + (ti + 1) * rRun;
-            const ty1 = floor2Y + (ti + 1) * rRise;
-            const ty0 = Math.max(floor2Y, ty1 - rRise - 0.10);
-            const [sx0, sx1, sz0, sz1] = F.rect(rStA0 + 0.05, rStA1 - 0.05, tb0, tb1);
-            boxAt(sx0, sx1, ty0, ty1, sz0, sz1, M.wood, { collide: false, tile: 2 });
-          }
-          {
-            const [rx0, rx1, rz0, rz1] = F.rect(rStA0, rStA1, rStBotB - 0.15, rStTopB + 0.15);
-            const botP = F.point(rStCenterA, rStBotB);
-            const topP = F.point(rStCenterA, rStTopB);
+        const pCtx = {
+          F, hl, hd, t, floor2Y, ceil1, ceil2, roofY,
+          sheriff: !!preset.sheriff,
+          R: rand,
+          M, collider, add, box, decoBox,
+          addCrossWall(bPos, a0, a1, y0, y1, doorA, doorW2) {
+            if (doorA === null || doorA === undefined) {
+              wall(F, a0, a1, bPos - 0.1, bPos + 0.1, y0, y1, inner, inner, 'front');
+              return;
+            }
+            const halfD = (doorW2 || 1.5) * 0.5, dH = 2.45;
+            wall(F, a0, doorA - halfD, bPos - 0.1, bPos + 0.1, y0, y1, inner, inner, 'front');
+            wall(F, doorA + halfD, a1, bPos - 0.1, bPos + 0.1, y0, y1, inner, inner, 'front');
+            if (y1 - y0 > dH) wall(F, doorA - halfD, doorA + halfD, bPos - 0.1, bPos + 0.1, y0 + dH, y1, inner, inner, 'front');
+          },
+          addSideWall(aPos, b0, b1, y0, y1, doorB, doorW2) {
+            if (doorB === null || doorB === undefined) {
+              wall(F, aPos - 0.1, aPos + 0.1, b0, b1, y0, y1, inner, inner, 'left');
+              return;
+            }
+            const halfD = (doorW2 || 1.5) * 0.5, dH = 2.45;
+            wall(F, aPos - 0.1, aPos + 0.1, b0, doorB - halfD, y0, y1, inner, inner, 'left');
+            wall(F, aPos - 0.1, aPos + 0.1, doorB + halfD, b1, y0, y1, inner, inner, 'left');
+            if (y1 - y0 > dH) wall(F, aPos - 0.1, aPos + 0.1, doorB - halfD, doorB + halfD, y0 + dH, y1, inner, inner, 'left');
+          },
+          addStair1to2(stA0, stA1, stBotB, stTopB, stairSide) {
+            const stCenterA = (stA0 + stA1) * 0.5;
+            const stInnerA = stairSide > 0 ? stA0 - 0.08 : stA1 + 0.08;
+            wall(F, stInnerA - 0.09, stInnerA + 0.09, stTopB, stBotB + 0.1, 0, ceil1, inner, inner, 'left');
+            const numTreads = 12, treadRun = (stBotB - stTopB) / numTreads, treadRise = (floor2Y - 0.14) / numTreads;
+            for (let ti = 0; ti < numTreads; ti++) {
+              const tb0 = stBotB - (ti + 1) * treadRun, tb1 = stBotB - ti * treadRun + 0.04;
+              const ty1 = 0.14 + (ti + 1) * treadRise, ty0 = Math.max(0.14, ty1 - treadRise - 0.10);
+              const [sx0, sx1, sz0, sz1] = F.rect(stA0 + 0.05, stA1 - 0.05, tb0, tb1);
+              boxAt(sx0, sx1, ty0, ty1, sz0, sz1, M.wood, { collide: false, tile: 2 });
+            }
+            const [rx0, rx1, rz0, rz1] = F.rect(stA0, stA1, stTopB - 0.18, stBotB + 0.18);
+            const botP = F.point(stCenterA, stBotB), topP = F.point(stCenterA, stTopB);
             walkSurface({
-              type: 'ramp',
-              minX: rx0, maxX: rx1, minZ: rz0, maxZ: rz1,
+              type: 'ramp', minX: rx0, maxX: rx1, minZ: rz0, maxZ: rz1,
+              axis: axis === 'z' ? 'z' : 'x',
+              u0: axis === 'z' ? botP.z : botP.x,
+              u1: axis === 'z' ? topP.z : topP.x,
+              y0: 0.14, y1: floor2Y,
+            });
+          },
+          addF2SlabsAndRails(stA0, stA1, stBotB, stTopB, stairSide) {
+            const addFloorSlab = (a0, a1, b0, b1) => {
+              if (a1 - a0 < 0.08 || b1 - b0 < 0.08) return;
+              const [sx0, sx1, sz0, sz1] = F.rect(a0, a1, b0, b1);
+              boxAt(sx0, sx1, ceil1, floor2Y, sz0, sz1, floorMat, { tile: 3, collide: false });
+              walkSurface({ type: 'flat', minX: sx0, maxX: sx1, minZ: sz0, maxZ: sz1, y: floor2Y });
+            };
+            addFloorSlab(-hl + t, hl - t, -hd + t, stTopB);
+            addFloorSlab(-hl + t, hl - t, stBotB, hd - t);
+            if (stairSide > 0) addFloorSlab(-hl + t, stA0, stTopB, stBotB);
+            else addFloorSlab(stA1, hl - t, stTopB, stBotB);
+            const railA = stairSide > 0 ? stA0 : stA1;
+            const [gx0, gx1, gz0, gz1] = F.rect(railA - 0.06, railA + 0.06, stTopB, stBotB);
+            boxAt(gx0, gx1, floor2Y, floor2Y + 0.95, gz0, gz1, M.wood, { tile: 2 });
+            const endA0 = stairSide > 0 ? stA0 + 0.06 : stA0;
+            const endA1 = stairSide > 0 ? stA1 : stA1 - 0.06;
+            const [fx0r, fx1r, fz0r, fz1r] = F.rect(endA0, endA1, stBotB - 0.06, stBotB + 0.06);
+            boxAt(fx0r, fx1r, floor2Y, floor2Y + 0.95, fz0r, fz1r, M.wood, { tile: 2 });
+          },
+          // Direct 1st-floor-to-rooftop enclosed staircase (used only by the 2 non-Sheriff rooftop presets)
+          addF1RoofStairsAndDeck(rStA0, rStA1, rStBotB, rStTopB, rSide) {
+            const minB = Math.min(rStBotB, rStTopB), maxB = Math.max(rStBotB, rStTopB);
+            const rStCenterA = (rStA0 + rStA1) * 0.5;
+            const rTreads = 12, treadRise = (roofY - 0.14) / rTreads;
+            for (let ti = 0; ti < rTreads; ti++) {
+              const bA = rStBotB + (rStTopB - rStBotB) * (ti / rTreads);
+              const bB = rStBotB + (rStTopB - rStBotB) * ((ti + 1) / rTreads);
+              const tb0 = Math.min(bA, bB) - 0.02, tb1 = Math.max(bA, bB) + 0.02;
+              const ty1 = 0.14 + (ti + 1) * treadRise, ty0 = Math.max(0.14, ty1 - treadRise - 0.10);
+              const [sx0, sx1, sz0, sz1] = F.rect(rStA0 + 0.05, rStA1 - 0.05, tb0, tb1);
+              boxAt(sx0, sx1, ty0, ty1, sz0, sz1, M.wood, { collide: false, tile: 2 });
+            }
+            const [rx0, rx1, rz0, rz1] = F.rect(rStA0, rStA1, minB - 0.18, maxB + 0.18);
+            const botP = F.point(rStCenterA, rStBotB), topP = F.point(rStCenterA, rStTopB);
+            walkSurface({
+              type: 'ramp', minX: rx0, maxX: rx1, minZ: rz0, maxZ: rz1,
+              axis: axis === 'z' ? 'z' : 'x',
+              u0: axis === 'z' ? botP.z : botP.x,
+              u1: axis === 'z' ? topP.z : topP.x,
+              y0: 0.14, y1: roofY,
+            });
+            const rInnerA = rSide > 0 ? rStA0 - 0.08 : rStA1 + 0.08;
+            wall(F, rInnerA - 0.09, rInnerA + 0.09, minB, maxB, 0, ceil1, inner, inner, 'left');
+            const addRoofSlab = (a0, a1, b0, b1) => {
+              if (a1 - a0 < 0.08 || b1 - b0 < 0.08) return;
+              const [sx0, sx1, sz0, sz1] = F.rect(a0, a1, b0, b1);
+              boxAt(sx0, sx1, ceil1, roofY, sz0, sz1, M.roof, { tile: 5, collide: false });
+              walkSurface({ type: 'flat', minX: sx0, maxX: sx1, minZ: sz0, maxZ: sz1, y: roofY });
+            };
+            addRoofSlab(-hl, hl, -hd, minB);
+            addRoofSlab(-hl, hl, maxB, hd);
+            if (rSide > 0) addRoofSlab(-hl, rStA0, minB, maxB);
+            else addRoofSlab(rStA1, hl, minB, maxB);
+            addBulkhead(rStA0, rStA1, rStBotB, rStTopB);
+          },
+          // 2nd-floor-to-rooftop staircase (used exclusively by Sheriff HQ)
+          addRoofStairsAndDeck(rStA0, rStA1, rStBotB, rStTopB, rSide) {
+            const minB = Math.min(rStBotB, rStTopB), maxB = Math.max(rStBotB, rStTopB);
+            const rStCenterA = (rStA0 + rStA1) * 0.5;
+            const rTreads = 12, rRun = (rStTopB - rStBotB) / rTreads, rRise = (roofY - floor2Y) / rTreads;
+            for (let ti = 0; ti < rTreads; ti++) {
+              const tb0 = rStBotB + ti * rRun - 0.04, tb1 = rStBotB + (ti + 1) * rRun;
+              const ty1 = floor2Y + (ti + 1) * rRise, ty0 = Math.max(floor2Y, ty1 - rRise - 0.10);
+              const [sx0, sx1, sz0, sz1] = F.rect(rStA0 + 0.05, rStA1 - 0.05, tb0, tb1);
+              boxAt(sx0, sx1, ty0, ty1, sz0, sz1, M.wood, { collide: false, tile: 2 });
+            }
+            const [rx0, rx1, rz0, rz1] = F.rect(rStA0, rStA1, minB - 0.18, maxB + 0.18);
+            const botP = F.point(rStCenterA, rStBotB), topP = F.point(rStCenterA, rStTopB);
+            walkSurface({
+              type: 'ramp', minX: rx0, maxX: rx1, minZ: rz0, maxZ: rz1,
               axis: axis === 'z' ? 'z' : 'x',
               u0: axis === 'z' ? botP.z : botP.x,
               u1: axis === 'z' ? topP.z : topP.x,
               y0: floor2Y, y1: roofY,
             });
-          }
+            const rInnerA = rSide > 0 ? rStA0 - 0.08 : rStA1 + 0.08;
+            wall(F, rInnerA - 0.09, rInnerA + 0.09, minB, maxB, floor2Y, ceil2, inner, inner, 'left');
+            const addRoofSlab = (a0, a1, b0, b1) => {
+              if (a1 - a0 < 0.08 || b1 - b0 < 0.08) return;
+              const [sx0, sx1, sz0, sz1] = F.rect(a0, a1, b0, b1);
+              boxAt(sx0, sx1, ceil2, roofY, sz0, sz1, M.roof, { tile: 5, collide: false });
+              walkSurface({ type: 'flat', minX: sx0, maxX: sx1, minZ: sz0, maxZ: sz1, y: roofY });
+            };
+            addRoofSlab(-hl, hl, -hd, minB);
+            addRoofSlab(-hl, hl, maxB, hd);
+            if (rSide > 0) addRoofSlab(-hl, rStA0, minB, maxB);
+            else addRoofSlab(rStA1, hl, minB, maxB);
+            addBulkhead(rStA0, rStA1, rStBotB, rStTopB);
+          },
+          placeFurn(type, a, bPos, da, db, len, baseY) {
+            const p = F.point(a, bPos);
+            furniture(type, p.x, p.z, yawFurnDir(da, db), len, kind, baseY);
+          },
+          placeLocker(a, bPos, da, db, baseY) {
+            const p = F.point(a, bPos);
+            locker(p.x, p.z, yawFaceDir(da, db), baseY);
+          },
+          placeCoffeeTable(a, bPos, ryOff, baseY) {
+            const p = F.point(a, bPos);
+            const ry = F.yawFront() + (ryOff || 0);
+            decoBox(M.wood, 0.95, 0.06, 0.56, p.x, baseY + 0.42, p.z, 0, ry, 0);
+            [-0.38, 0.38].forEach(lx => [-0.20, 0.20].forEach(lz => {
+              const c = Math.cos(ry), s = Math.sin(ry);
+              decoBox(M.wood, 0.05, 0.40, 0.05, p.x + lx * c + lz * s, baseY + 0.20, p.z - lx * s + lz * c);
+            }));
+            decoBox(LINEN, 0.22, 0.04, 0.30, p.x + 0.12, baseY + 0.47, p.z, 0, ry + 0.3, 0);
+            collider(p.x - 0.5, p.x + 0.5, p.z - 0.5, p.z + 0.5, baseY + 0.48, baseY);
+          },
+          placeDiningTable(a, bPos, baseY) {
+            const p = F.point(a, bPos);
+            decoBox(M.wood, 1.4, 0.06, 0.95, p.x, baseY + 0.76, p.z);
+            [[-0.58, -0.36], [0.58, -0.36], [-0.58, 0.36], [0.58, 0.36]].forEach(([lx, lz]) => {
+              decoBox(M.wood, 0.06, 0.74, 0.06, p.x + lx, baseY + 0.37, p.z + lz);
+            });
+            const chMat = pick(FABRICS);
+            [-0.45, 0.45].forEach(ox => {
+              decoBox(chMat, 0.42, 0.06, 0.42, p.x + ox, baseY + 0.44, p.z - 0.72);
+              decoBox(chMat, 0.42, 0.46, 0.06, p.x + ox, baseY + 0.68, p.z - 0.90);
+              decoBox(chMat, 0.42, 0.06, 0.42, p.x + ox, baseY + 0.44, p.z + 0.72);
+              decoBox(chMat, 0.42, 0.46, 0.06, p.x + ox, baseY + 0.68, p.z + 0.90);
+            });
+            collider(p.x - 0.9, p.x + 0.9, p.z - 0.9, p.z + 0.9, baseY + 0.8, baseY);
+          },
+          placeCrates(a, bPos, baseY) {
+            const p = F.point(a, bPos);
+            decoBox(M.wood, 0.78, 0.72, 0.78, p.x, baseY + 0.36, p.z, 0, 0.15, 0);
+            decoBox(M.wood, 0.66, 0.56, 0.66, p.x + 0.78, baseY + 0.28, p.z + 0.1, 0, -0.22, 0);
+            decoBox(M.wood, 0.52, 0.48, 0.52, p.x + 0.06, baseY + 0.96, p.z - 0.05, 0, 0.42, 0);
+            collider(p.x - 0.5, p.x + 1.2, p.z - 0.5, p.z + 0.5, baseY + 1.2, baseY);
+          },
+          placeRug(a, bPos, wA, dB, baseY) {
+            const p = F.point(a, bPos);
+            decoBox(pick(RUGS), axis === 'z' ? wA : dB, 0.02, axis === 'z' ? dB : wA, p.x, baseY + 0.015, p.z);
+          },
+          placePainting(a, bPos, da, db, baseY) {
+            const p = F.point(a, bPos);
+            const ry = yawFaceDir(da, db);
+            decoBox(M.wood, 0.78, 0.62, 0.04, p.x, baseY + 1.65, p.z, 0, ry, 0);
+            decoBox(pick(PAINTINGS), 0.64, 0.48, 0.05, p.x, baseY + 1.65, p.z, 0, ry, 0);
+          },
+          placeLamp(a, bPos, ceilY) {
+            const p = F.point(a, bPos);
+            decoCyl(M.pole, 0.02, 0.02, 0.45, p.x, ceilY - 0.22, p.z, 6);
+            decoCyl(M.lampOff, 0.30, 0.18, 0.16, p.x, ceilY - 0.48, p.z, 12);
+          },
+          placeBattery(a, bPos, y) {
+            const p = F.point(a, bPos);
+            battery(p.x, y, p.z);
+          },
+          addSafeWall(a, bPos, da, db, baseY) {
+            b.safeWallSpots.push({ p: F.point(a, bPos), yaw: yawFaceDir(da, db), y: baseY });
+          },
+          addSafeDesk(a, bPos, da, db, baseY) {
+            b.safeDeskSpots.push({ p: F.point(a, bPos), yaw: yawFaceDir(da, db), y: baseY });
+          },
+          addBarricade(a, bPos, baseY, da, db, spanW) {
+            hasBarricade = true;
+            buildBarricadeCluster(F, a, bPos, baseY, yawFaceDir(da, db), spanW);
+          },
+          addRoofWaterTank(a, bPos) {
+            const p = F.point(a, bPos);
+            decoCyl(M.wood, 1.1, 1.1, 1.9, p.x, roofY + 2.35, p.z, 8);
+            decoCyl(M.roof, 0.05, 1.2, 0.58, p.x, roofY + 3.6, p.z, 8);
+            [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]].forEach(([ox, oz]) => decoBox(M.pole, 0.1, 1.4, 0.1, p.x + ox, roofY + 0.7, p.z + oz));
+            collider(p.x - 1.1, p.x + 1.1, p.z - 1.1, p.z + 1.1, roofY + 3.5, roofY);
+            W.noisyObjects.push({ x: p.x, y: roofY + 1.2, z: p.z, radius: 6.2, strength: 0.75, kind: 'tank' });
+          },
+          addRoofHVAC(a, bPos) {
+            const p = F.point(a, bPos);
+            decoBox(M.metal, 1.45, 0.9, 1.25, p.x, roofY + 0.45, p.z);
+            decoBox(M.trim, 1.2, 0.08, 1.0, p.x, roofY + 0.93, p.z);
+            collider(p.x - 0.75, p.x + 0.75, p.z - 0.65, p.z + 0.65, roofY + 1.0, roofY);
+            W.noisyObjects.push({ x: p.x, y: roofY + 0.6, z: p.z, radius: 6.5, strength: 0.95, kind: 'hvac' });
+          },
+          addRoofChimney(a, bPos) {
+            const p = F.point(a, bPos);
+            decoBox(M.brick, 0.75, 1.45, 0.75, p.x, roofY + 0.725, p.z);
+            decoBox(M.rubble, 0.88, 0.12, 0.88, p.x, roofY + 1.48, p.z);
+            collider(p.x - 0.42, p.x + 0.42, p.z - 0.42, p.z + 0.42, roofY + 1.55, roofY);
+          },
+          addRoofAntenna(a, bPos) {
+            const p = F.point(a, bPos);
+            decoBox(M.iron, 0.45, 0.35, 0.45, p.x, roofY + 0.17, p.z);
+            decoBox(M.pole, 0.07, 4.2, 0.07, p.x, roofY + 2.1, p.z);
+            decoBox(M.pole, 0.9, 0.05, 0.05, p.x, roofY + 3.6, p.z);
+          },
+          addSheriffRadioTower(a, bPos) {
+            const p = F.point(a, bPos);
+            decoBox(M.concrete, 1.4, 0.3, 1.4, p.x, roofY + 0.15, p.z);
+            [[-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]].forEach(([ox, oz]) => {
+              decoBox(M.iron, 0.08, 4.6, 0.08, p.x + ox * 0.7, roofY + 2.45, p.z + oz * 0.7);
+            });
+            decoBox(M.pole, 0.07, 2.2, 0.07, p.x, roofY + 5.7, p.z);
+            decoBox(M.pole, 1.5, 0.06, 0.06, p.x, roofY + 5.4, p.z);
+            decoBox(M.amberBeacon, 0.18, 0.18, 0.18, p.x, roofY + 6.85, p.z);
+            collider(p.x - 0.75, p.x + 0.75, p.z - 0.75, p.z + 0.75, roofY + 4.8, roofY);
+            W.noisyObjects.push({ x: p.x, y: roofY + 1.5, z: p.z, radius: 7.5, strength: 1.0, kind: 'tower' });
+          },
+        };
 
-          // Floor 2 bulkhead side wall
-          const rInnerA = -stairSide > 0 ? rStA0 - 0.08 : rStA1 + 0.08;
-          wall(F, rInnerA - 0.09, rInnerA + 0.09, rStBotB, rStTopB, floor2Y, ceil2, inner, inner, 'left');
-          addOcc(f2Occ, rInnerA - 0.22, rInnerA + 0.22, rStBotB, rStTopB, 'rstairwall');
-
-          // Roof deck slab with open hatch cutout around [rStA0..rStA1, rStBotB..rStTopB]
-          const addRoofSlab = (a0, a1, b0, b1) => {
-            if (a1 - a0 < 0.08 || b1 - b0 < 0.08) return;
-            const [sx0, sx1, sz0, sz1] = F.rect(a0, a1, b0, b1);
-            boxAt(sx0, sx1, ceil2, roofY, sz0, sz1, M.roof, { tile: 5, collide: false });
-            walkSurface({ type: 'flat', minX: sx0, maxX: sx1, minZ: sz0, maxZ: sz1, y: roofY });
-          };
-          addRoofSlab(-hl, hl, -hd, rStBotB);
-          addRoofSlab(-hl, hl, rStTopB, hd);
-          if (-stairSide > 0) addRoofSlab(-hl, rStA0, rStBotB, rStTopB);
-          else addRoofSlab(rStA1, hl, rStBotB, rStTopB);
-
-          // Rooftop stairhead / bulkhead enclosure opening onto the roof at +rStTopB
-          const bhH = roofY + 2.35;
-          wall(F, rStA0 - 0.14, rStA1 + 0.14, rStBotB - 0.16, rStBotB, roofY, bhH, facade, inner, 'back');
-          wall(F, rStA0 - 0.14, rStA0 + 0.02, rStBotB, rStTopB + 0.14, roofY, bhH, facade, inner, 'left');
-          wall(F, rStA1 - 0.02, rStA1 + 0.14, rStBotB, rStTopB + 0.14, roofY, bhH, facade, inner, 'right');
-          {
-            const [hx0, hx1, hz0, hz1] = F.rect(rStA0 - 0.14, rStA1 + 0.14, rStBotB - 0.16, rStTopB + 0.14);
-            boxAt(hx0, hx1, bhH, bhH + 0.18, hz0, hz1, M.roof, { collide: false, tile: 4 });
-          }
-
-          // Safety roof parapet colliders (match visible parapet from decorate() so player can't walk off the roof)
-          {
-            const [p1x0, p1x1, p1z0, p1z1] = F.rect(-hl - 0.2, hl + 0.2, -hd - 0.2, -hd + 0.15);
-            collider(p1x0, p1x1, p1z0, p1z1, roofY + 1.15, roofY);
-            const [p2x0, p2x1, p2z0, p2z1] = F.rect(-hl - 0.2, hl + 0.2, hd - 0.15, hd + 0.2);
-            collider(p2x0, p2x1, p2z0, p2z1, roofY + 1.15, roofY);
-            const [p3x0, p3x1, p3z0, p3z1] = F.rect(-hl - 0.2, -hl + 0.15, -hd, hd);
-            collider(p3x0, p3x1, p3z0, p3z1, roofY + 1.15, roofY);
-            const [p4x0, p4x1, p4z0, p4z1] = F.rect(hl - 0.15, hl + 0.2, -hd, hd);
-            collider(p4x0, p4x1, p4z0, p4z1, roofY + 1.15, roofY);
-          }
-
-          if (!stairsBlocked && rand() < 0.28) {
-            roofBlocked = true;
-            buildBarricadeCluster(F, rStCenterA, rStTopB + 0.08, roofY, F.yawFront(), rStA1 - rStA0);
-          } else if (!stairsBlocked && rand() < 0.45) {
-            // Optional rooftop locker hiding spot away from bulkhead exit
-            const rlA = stairSide > 0 ? hl - 1.6 : -hl + 1.6;
-            const rlP = F.point(rlA, -hd + 1.2);
-            locker(rlP.x, rlP.z, F.yawFront(), roofY);
-            if (rand() < 0.45) {
-              const bp = F.point(rlA, hd - 2.2);
-              battery(bp.x, roofY + 0.45, bp.z);
-            }
-          }
-        } else {
-          // Standard enclosed Floor 2 ceiling + tall building roof
+        // Ceilings / Roof slab for non-rooftop presets
+        if (!hasRoof && preset.floors === 1) {
+          boxAt(fx0 + t, fx1 - t, ceil1, ceil1 + 0.15, fz0 + t, fz1 - t, inner, { collide: false, tile: 4 });
+          boxAt(fx0 - 0.3, fx1 + 0.3, H, H + 0.4, fz0 - 0.3, fz1 + 0.3, M.roof, { collide: false, tile: 6 });
+        } else if (!hasRoof) {
           boxAt(fx0 + t, fx1 - t, ceil2, ceil2 + 0.15, fz0 + t, fz1 - t, inner, { collide: false, tile: 4 });
           boxAt(fx0 - 0.3, fx1 + 0.3, H, H + 0.4, fz0 - 0.3, fz1 + 0.3, M.roof, { collide: false, tile: 6 });
         }
 
-        // ---- Place Floor 1 & Floor 2 Lockers FIRST (non-overlapping via f1Occ / f2Occ) ----
-        let f1LockerCount = 0;
-        for (let k = 0; k < 10 && f1LockerCount < 2; k++) {
-          const la = R(-hl + t + 1.1, hl - t - 1.1);
-          const lb = -hd + t + 0.38;
-          if (placeFloorLocker(f1Occ, la, lb, F.yawFront(), 0.14, 0, 1)) f1LockerCount++;
-        }
-        if (f1LockerCount === 0) {
-          // Guaranteed fallback along opposite front/side interior wall
-          for (let sd of [-1, 1]) {
-            if (placeFloorLocker(f1Occ, sd * (hl - t - 0.38), R(-1, 2.5), F.yawLeft() + (sd > 0 ? Math.PI : 0), 0.14, -sd, 0)) {
-              f1LockerCount++; break;
-            }
-          }
-        }
+        preset.build(pCtx);
 
-        if (!stairsBlocked) {
-          for (let k = 0; k < 8; k++) {
-            const la = R(f2MainStart + 0.9, f2MainEnd - 0.9);
-            if (placeFloorLocker(f2Occ, la, -hd + t + 0.38, F.yawFront(), floor2Y, 0, 1)) break;
-          }
-        }
-
-        // ---- Reserve clean unblocked Evidence Desk & Wall Spots BEFORE placing remaining furniture ----
-        if (!f1BlockedSide) {
-          for (const sideA of [-1, 1]) {
-            const da = sideA * (hl - t - 1.5);
-            const db = -hd + t + 0.85;
-            if (canOcc(f1Occ, da - 1.35, da + 1.35, db - 0.65, db + 0.85, 0.15)) {
-              addOcc(f1Occ, da - 1.35, da + 1.35, db - 0.65, db + 0.85, 'evdesk');
-              b.safeDeskSpots.push({ p: F.point(da, db), yaw: F.yawFront(), y: 0.14 });
-              break;
-            }
-          }
-          // Unblocked Floor 1 wall spots (kept completely clear of shelves/lockers)
-          if (canOcc(f1Occ, -2.0, 2.0, -hd + t, -hd + t + 0.8, 0.1)) {
-            addOcc(f1Occ, -1.8, 1.8, -hd + t, -hd + t + 0.6, 'evwall');
-            b.safeWallSpots.push({ p: F.point(0, -hd + t + 0.04), yaw: F.yawFront(), y: 0.14 });
-          }
-          for (const sd of [-1, 1]) {
-            const aWall = sd * (hl - t - 0.04);
-            const bTest = pb + 1.8;
-            if (bTest < hd - 2.0 && canOcc(f1Occ, aWall - (sd > 0 ? 0.8 : -0.05), aWall + (sd > 0 ? 0.05 : 0.8), bTest - 1.6, bTest + 1.6, 0.1)) {
-              addOcc(f1Occ, sd > 0 ? hl - t - 0.9 : -hl + t, sd > 0 ? hl - t : -hl + t + 0.9, bTest - 1.6, bTest + 1.6, 'evwall');
-              b.safeWallSpots.push({ p: F.point(aWall, bTest), yaw: F.yawLeft() + (sd > 0 ? Math.PI : 0), y: 0.14 });
-              break;
-            }
-          }
-        }
-        if (!stairsBlocked && !f2BlockedSide) {
-          const da2 = (f2MainStart + f2MainEnd) * 0.5;
-          const db2 = -hd + t + 0.9;
-          if (canOcc(f2Occ, da2 - 1.35, da2 + 1.35, db2 - 0.65, db2 + 0.85, 0.15)) {
-            addOcc(f2Occ, da2 - 1.35, da2 + 1.35, db2 - 0.65, db2 + 0.85, 'evdesk');
-            b.safeDeskSpots.push({ p: F.point(da2, db2), yaw: F.yawFront(), y: floor2Y });
-          }
-        }
-
-        // ---- Populate Floor 1 & Floor 2 Furniture cleanly via FloorPlan ----
-        const populateSide = (occ, baseY, bStart, bEnd, side, allowShop) => {
-          let bb = bStart + 0.4;
-          while (bb < bEnd - 1.2) {
-            const len = R(1.3, 2.2);
-            if (bb + len > bEnd - 0.4) break;
-            const fa0 = side > 0 ? hl - t - 1.35 : -hl + t;
-            const fa1 = side > 0 ? hl - t : -hl + t + 1.35;
-            if (canOcc(occ, fa0, fa1, bb, bb + len, 0.14)) {
-              addOcc(occ, fa0, fa1, bb, bb + len, 'furn');
-              const p = F.point(side * (hl - t), bb + len / 2);
-              const into = axis === 'z' ? (side > 0 ? Math.PI : 0) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-              let item;
-              if (allowShop && kind === 'shop') item = rand() < 0.72 ? 'shopShelf' : 'counter';
-              else if (kind === 'house') item = pick(['couch', 'bed', 'bookshelf', 'dresser', 'desk']);
-              else item = pick(['desk', 'bookshelf', 'dresser']);
-              furniture(item, p.x, p.z, into, len, kind, baseY);
-            }
-            bb += len + R(0.45, 1.15);
-          }
+        const info = {
+          F, hl, hd, t, pb: 0, gapA: 0, axis, sign, kind,
+          sheriff: !!(opts && opts.sheriff), presetId: preset.id,
+          floors: preset.floors,
+          cx, cz, building: b, hasRoof, hasBarricade, roofSafeZone,
         };
-        populateSide(f1Occ, 0.14, -hd + t, hd - t - 1.2, -1, true);
-        populateSide(f1Occ, 0.14, -hd + t, hd - t - 1.2, 1, true);
-        populateSide(f2Occ, floor2Y, -hd + t, hd - t - 0.6, -1, false);
-        populateSide(f2Occ, floor2Y, -hd + t, hd - t - 0.6, 1, false);
-
-        // Ceiling lights, rugs & paintings on Floor 1 AND Floor 2
-        {
-          const r1 = F.point(mainCenterA * 0.6, (pb + hd) / 2);
-          decoBox(pick(RUGS), axis === 'z' ? 2.4 : 3.0, 0.02, axis === 'z' ? 3.0 : 2.4, r1.x, 0.15, r1.z);
-          if (!stairsBlocked) {
-            const r2 = F.point(f2Mid, (-hd + f2pb) * 0.5);
-            decoBox(pick(RUGS), axis === 'z' ? 2.4 : 3.0, 0.02, axis === 'z' ? 3.0 : 2.4, r2.x, floor2Y + 0.015, r2.z);
-          }
-          [(pb + hd) / 2, (pb - hd) / 2].forEach(bb => {
-            const lp = F.point(mainCenterA * 0.5, bb);
-            decoCyl(M.pole, 0.02, 0.02, 0.45, lp.x, ceil1 - 0.22, lp.z, 6);
-            decoCyl(M.lampOff, 0.30, 0.18, 0.16, lp.x, ceil1 - 0.48, lp.z, 12);
-            const lp2 = F.point(f2Mid * 0.6, bb);
-            decoCyl(M.pole, 0.02, 0.02, 0.45, lp2.x, ceil2 - 0.22, lp2.z, 6);
-            decoCyl(M.lampOff, 0.30, 0.18, 0.16, lp2.x, ceil2 - 0.48, lp2.z, 12);
-          });
-          for (let i = 0; i < 3; i++) {
-            const sd = i % 2 === 0 ? -1 : 1, bb = R(-hd + 2.4, hd - 2.6);
-            const py = i < 2 ? 1.75 : floor2Y + 1.65;
-            const pp = F.point(sd * (hl - t - 0.03), bb);
-            const yaw = F.yawLeft() + (sd > 0 ? Math.PI : 0);
-            decoBox(M.wood, 0.75, 0.6, 0.04, pp.x, py, pp.z, 0, yaw, 0);
-            decoBox(pick(PAINTINGS), 0.62, 0.47, 0.05, pp.x, py, pp.z, 0, yaw, 0);
-          }
-        }
-        if (rand() < 0.5) {
-          const bp = F.point(R(f1MainStart + 1.0, f1MainEnd - 1.0), R(pb + 0.6, hd - 2.2));
-          battery(bp.x, 0.5, bp.z);
-        } else if (!stairsBlocked && rand() < 0.65) {
-          const bp = F.point(f2Mid, R(-hd + 2.0, f2pb - 1.0));
-          battery(bp.x, floor2Y + 0.45, bp.z);
-        }
-
-        const info = { F, hl, hd, t, pb, gapA: 0, axis, sign, kind, sheriff: !!(opts && opts.sheriff), cx, cz, building: b, hasRoof, roofBlocked, stairsBlocked, f1BlockedSide, f2BlockedSide, roofSafeZone: hasRoof ? { a0: rStA0 - 1.2, a1: rStA1 + 1.2, b0: rStBotB - 1.0, b1: rStTopB + 2.2 } : null };
         W.enterables.push(info);
       }
 
-      // Scattered papers / missing poster
-      for (let i = 0; i < 5; i++) {
-        const p = F.point(R(-hl + 1.2, hl - 1.2), R(-hd + 1.2, hd - 1.8));
-        box(R(0.2, 0.45), 0.01, R(0.2, 0.35), rand() < 0.5 ? M.poster : M.plaster[0], p.x, 0.15, p.z, { ry: R(0, 3) });
+      // Scattered papers / missing poster inside every enterable
+      for (let i = 0; i < 4; i++) {
+        const p = F.point(R(-1.6, 1.6), R(hd - 3.6, hd - 1.5));
+        box(R(0.2, 0.42), 0.01, R(0.2, 0.32), rand() < 0.5 ? M.poster : M.plaster[0], p.x, 0.15, p.z, { ry: R(0, 3) });
       }
       {
-        const p = F.point(hl - t - 0.02, hd - 2.5);
+        const p = F.point(1.4, hd - t - 0.02);
         const pm = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.8), M.poster);
         pm.position.set(p.x, 1.6, p.z);
-        pm.rotation.y = F.yawLeft() + Math.PI;
+        pm.rotation.y = F.yawBack();
         add(pm, { cast: false });
       }
 
@@ -1316,9 +1726,10 @@
         doorA: 0,
         sheriff: entInfo.sheriff,
         roofAccess: hasRoof,
+        skipRoofClutter: !!(preset && hasRoof),
         roofSafeZone: entInfo.roofSafeZone || null,
-        awning: kind === 'shop' || kind === 'office',
-        awningMat: kind === 'shop' ? mat({ color: 0x5a1f1a }) : mat({ color: 0x1f3a5a }),
+        awning: entInfo.sheriff || (preset ? !!preset.awning : (kind === 'shop' || kind === 'office')),
+        awningMat: entInfo.sheriff ? mat({ color: 0x16243d }) : kind === 'shop' ? mat({ color: 0x5a1f1a }) : mat({ color: 0x1f3a5a }),
       });
 
       if (entInfo.sheriff) {
@@ -1332,8 +1743,8 @@
         const sp = F.point(0, hd + 0.16);
         sm.position.set(sp.x, doorH + 1.35, sp.z); sm.rotation.y = F.yawFront();
         add(sm, { cast: false });
-        // Sheriff evidence desk (guaranteed free of lockers/furniture via sheriffReserve)
-        const da = sheriffReserve ? sheriffReserve.da : (-hl + t + 2.0);
+        // Sheriff evidence desk (in back-east Security Office, guaranteed free of lockers/bars)
+        const da = 2.6;
         const dp = F.point(da, -hd + t + 0.72);
         box(axis === 'z' ? 2.6 : 1.1, 0.9, axis === 'z' ? 1.1 : 2.6, M.wood, dp.x, 0.59, dp.z, { collide: true, minY: 0.14 });
         const tv = new THREE.Group();
@@ -1342,7 +1753,7 @@
         scr.position.z = 0.31; tv.add(scr);
         tv.position.set(dp.x, 1.34, dp.z); tv.rotation.y = F.yawFront();
         add(tv);
-        const tp = F.point(da + (da > 0 ? -0.7 : 0.7), -hd + t + 0.92);
+        const tp = F.point(da - 0.7, -hd + t + 0.92);
         const tape = new THREE.Group();
         const shell = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.025, 0.1), mat({ color: 0x111111 }));
         const lc = document.createElement('canvas'); lc.width = 128; lc.height = 64;
@@ -1636,39 +2047,41 @@
         });
       });
 
-      // rooftop clutter (when building has walkable roof access, place away from bulkhead stairs + add colliders)
-      const inSafeZone = (px, pz) => {
-        if (!opts.roofAccess || !F) return false;
-        const rz = opts.roofSafeZone;
-        if (!rz) return false;
-        const [rx0, rx1, rz0, rz1] = F.rect(rz.a0, rz.a1, rz.b0, rz.b1);
-        return px > rx0 && px < rx1 && pz > rz0 && pz < rz1;
-      };
-      const roofBase = opts.roofAccess ? (H + 0.4) : H;
-      const r = rand();
-      if (r < 0.45) {   // water tank on stilts (low-poly 8-sided)
-        const tx = cx + R(-w / 4, w / 4), tz = cz + R(-d / 4, d / 4);
-        if (!inSafeZone(tx, tz)) {
-          decoCyl(M.wood, 1.1, 1.1, 2.0, tx, roofBase + 2.4, tz, 8); decoCyl(M.roof, 0.05, 1.2, 0.6, tx, roofBase + 3.7, tz, 8);
-          [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]].forEach(([a, b]) => decoBox(M.pole, 0.1, 1.4, 0.1, tx + a, roofBase + 0.7, tz + b));
-          if (opts.roofAccess) collider(tx - 1.1, tx + 1.1, tz - 1.1, tz + 1.1, roofBase + 3.5, roofBase);
-        }
-      } else {
-        for (let i = 0; i < 2; i++) {
-          const ax = cx + R(-w / 3, w / 3), az = cz + R(-d / 3, d / 3);
-          const aw = R(1, 1.6), ah = R(0.7, 1.0), ad = R(1, 1.5);
-          if (!inSafeZone(ax, az)) {
-            decoBox(M.metal, aw, ah, ad, ax, roofBase + ah * 0.5, az);
-            if (opts.roofAccess) collider(ax - aw * 0.5, ax + aw * 0.5, az - ad * 0.5, az + ad * 0.5, roofBase + ah, roofBase);
+      // rooftop clutter (skipped on presets that build dedicated walkable rooftop layouts)
+      if (!opts.skipRoofClutter) {
+        const inSafeZone = (px, pz) => {
+          if (!opts.roofAccess || !F) return false;
+          const rz = opts.roofSafeZone;
+          if (!rz) return false;
+          const [rx0, rx1, rz0, rz1] = F.rect(rz.a0, rz.a1, rz.b0, rz.b1);
+          return px > rx0 && px < rx1 && pz > rz0 && pz < rz1;
+        };
+        const roofBase = opts.roofAccess ? (H + 0.4) : H;
+        const r = rand();
+        if (r < 0.45) {   // water tank on stilts (low-poly 8-sided)
+          const tx = cx + R(-w / 4, w / 4), tz = cz + R(-d / 4, d / 4);
+          if (!inSafeZone(tx, tz)) {
+            decoCyl(M.wood, 1.1, 1.1, 2.0, tx, roofBase + 2.4, tz, 8); decoCyl(M.roof, 0.05, 1.2, 0.6, tx, roofBase + 3.7, tz, 8);
+            [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]].forEach(([a, b]) => decoBox(M.pole, 0.1, 1.4, 0.1, tx + a, roofBase + 0.7, tz + b));
+            if (opts.roofAccess) collider(tx - 1.1, tx + 1.1, tz - 1.1, tz + 1.1, roofBase + 3.5, roofBase);
+          }
+        } else {
+          for (let i = 0; i < 2; i++) {
+            const ax = cx + R(-w / 3, w / 3), az = cz + R(-d / 3, d / 3);
+            const aw = R(1, 1.6), ah = R(0.7, 1.0), ad = R(1, 1.5);
+            if (!inSafeZone(ax, az)) {
+              decoBox(M.metal, aw, ah, ad, ax, roofBase + ah * 0.5, az);
+              if (opts.roofAccess) collider(ax - aw * 0.5, ax + aw * 0.5, az - ad * 0.5, az + ad * 0.5, roofBase + ah, roofBase);
+            }
           }
         }
-      }
-      if (rand() < 0.5) { decoBox(M.pole, 0.06, R(2.5, 4.5), 0.06, cx + R(-w / 3, w / 3), roofBase + 1.8, cz + R(-d / 3, d / 3)); }   // antenna
-      {
-        const vx = cx + R(-w / 3, w / 3), vz = cz + R(-d / 3, d / 3);
-        if (!inSafeZone(vx, vz)) {
-          decoBox(M.brick, 0.7, 1.4, 0.7, vx, roofBase + 0.7, vz);
-          if (opts.roofAccess) collider(vx - 0.35, vx + 0.35, vz - 0.35, vz + 0.35, roofBase + 1.4, roofBase);
+        if (rand() < 0.5) { decoBox(M.pole, 0.06, R(2.5, 4.5), 0.06, cx + R(-w / 3, w / 3), roofBase + 1.8, cz + R(-d / 3, d / 3)); }   // antenna
+        {
+          const vx = cx + R(-w / 3, w / 3), vz = cz + R(-d / 3, d / 3);
+          if (!inSafeZone(vx, vz)) {
+            decoBox(M.brick, 0.7, 1.4, 0.7, vx, roofBase + 0.7, vz);
+            if (opts.roofAccess) collider(vx - 0.35, vx + 0.35, vz - 0.35, vz + 0.35, roofBase + 1.4, roofBase);
+          }
         }
       }
 
@@ -2027,6 +2440,52 @@
         }
       });
     }
+    // large municipal power transformers & industrial backup generators along utility pads/alleys (noisy ground-level landmarks)
+    function powerUnit(x, z, ry) {
+      const g = new THREE.Group();
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.16, 1.5), M.concrete); pad.position.y = 0.08; g.add(pad);
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.95, 1.55, 1.15), M.metal); cab.position.y = 0.935; g.add(cab);
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(2.04, 0.10, 1.22), M.iron); lid.position.y = 1.74; g.add(lid);
+      // side cooling radiator fins + exhaust stack + porcelain bushings + caution beacon
+      [-0.7, -0.35, 0, 0.35, 0.7].forEach(fx => {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 1.24), M.iron); fin.position.set(fx, 0.95, 0); g.add(fin);
+      });
+      const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.55, 6), M.pole); vent.position.set(-0.65, 2.02, -0.2); g.add(vent);
+      [0.2, 0.55].forEach(ix => {
+        const ins = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.38, 6), M.dark); ins.position.set(ix, 1.96, 0.2); g.add(ins);
+      });
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.52, 0.04), M.dark); panel.position.set(0.48, 1.02, 0.58); g.add(panel);
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.05), M.amberBeacon); led.position.set(0.58, 1.18, 0.59); g.add(led);
+      g.position.set(x, 0, z); g.rotation.y = ry;
+      add(g);
+      addOccluder(cab);
+      const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
+      const hw = (2.3 * c + 1.5 * s) / 2, hd2 = (2.3 * s + 1.5 * c) / 2;
+      collider(x - hw, x + hw, z - hd2, z + hd2, 2.0, 0);
+      W.noisyObjects.push({ x, y: 1.0, z, radius: 6.8, strength: 1.0, kind: 'generator' });
+    }
+    {
+      let placedUnits = 0;
+      const trySites = [
+        [-78, -60, 0], [-26, -96, Math.PI / 2], [26, -60, 0], [78, -26, Math.PI / 2],
+        [-78, 26, Math.PI / 2], [-26, 78, 0], [26, 26, Math.PI / 2], [78, 78, 0],
+        [-45, -26, 0], [45, 26, 0], [-26, 45, Math.PI / 2], [26, -45, Math.PI / 2],
+      ];
+      for (const [ux, uz, ury] of trySites) {
+        if (placedUnits >= 6) break;
+        const tries = [[0, 0], [2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]];
+        for (const [ox, oz] of tries) {
+          const px = ux + ox, pz = uz + oz;
+          const [bx0, bx1, bz0, bz1] = rotBoxExtents(px, pz, 2.4, 1.6, ury);
+          if (canPlaceBox(bx0, bx1, bz0, bz1, 0.65)) {
+            powerUnit(px, pz, ury);
+            reserveBox(bx0, bx1, bz0, bz1, 'generator');
+            placedUnits++;
+            break;
+          }
+        }
+      }
+    }
     // outdoor batteries
     [[-58, -20], [47, 58], [-20, 47], [56, -80], [-102, 70], [80, 100], [4, -40]].forEach(([x, z]) => battery(x, 0.4, z));
     // throwable rocks lying around (sparse — you only find one occasionally)
@@ -2296,6 +2755,7 @@
       W.sign = g;
     }
     // forest outside town (remodeled multi-tier pine InstancedMesh: 2 draw calls total, visible in cutscene & in-game)
+    const treelinePerches = [];
     {
       const n = S.quality === 'low' ? 320 : S.viewDistance === 'near' ? 420 : 720;
       const trunk = new THREE.InstancedMesh(pineTrunkGeo, M.pineBark, n);
@@ -2318,6 +2778,7 @@
         m4.compose(p.set(hx, 0, hz), q, sc.set(hs, hs * 1.05, hs));
         trunk.setMatrixAt(i, m4);
         top.setMatrixAt(i, m4);
+        treelinePerches.push({ x: hx, y: 9.65 * hs * 1.05, z: hz });
       }
       while (i < n) {
         const x = R(-420, 420), z = R(-560, 420);
@@ -2331,6 +2792,9 @@
         m4.compose(p.set(x, 0, z), q, sc.set(s, hs, s));
         trunk.setMatrixAt(i, m4);
         top.setMatrixAt(i, m4);
+        if (treelinePerches.length < 28 && Math.abs(x) < HALF + 68 && Math.abs(z) < HALF + 68) {
+          treelinePerches.push({ x, y: 9.65 * hs, z });
+        }
         i++;
       }
       trunk.instanceMatrix.needsUpdate = true;
@@ -2356,6 +2820,107 @@
       const a = i / 14 * Math.PI * 2;
       const h = new THREE.Mesh(new THREE.ConeGeometry(R(120, 220), R(40, 90), 4), M.leaves);
       h.position.set(Math.cos(a) * 640, 0, Math.sin(a) * 640); W.root.add(h);
+    }
+
+    // subtle 3D forest birds (perching on perimeter fence posts / pine crowns & circling treeline sky)
+    W.birdsGroup = new THREE.Group();
+    W.root.add(W.birdsGroup);
+    W.birds = [];
+    {
+      const birdBodyGeo = new THREE.BoxGeometry(0.11, 0.10, 0.28);
+      const birdHeadGeo = new THREE.BoxGeometry(0.08, 0.08, 0.10);
+      const birdBeakGeo = new THREE.ConeGeometry(0.025, 0.08, 4); birdBeakGeo.rotateX(Math.PI * 0.5);
+      const birdTailGeo = new THREE.BoxGeometry(0.10, 0.02, 0.16);
+      const birdWingInGeo = new THREE.BoxGeometry(0.24, 0.018, 0.13);
+      const birdWingTipGeo = new THREE.BoxGeometry(0.15, 0.014, 0.09);
+
+      const makeBirdMesh = (scale) => {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(birdBodyGeo, M.birdFeather);
+        const head = new THREE.Group(); head.position.set(0, 0.055, 0.13);
+        const skull = new THREE.Mesh(birdHeadGeo, M.birdFeather);
+        const beak = new THREE.Mesh(birdBeakGeo, M.birdBeak); beak.position.set(0, -0.008, 0.075);
+        head.add(skull, beak);
+        const tail = new THREE.Mesh(birdTailGeo, M.birdFeather);
+        tail.position.set(0, 0.01, -0.18); tail.rotation.x = 0.18;
+        const makeWing = (side) => {
+          const piv = new THREE.Group(); piv.position.set(side * 0.05, 0.035, 0.02);
+          const inner = new THREE.Mesh(birdWingInGeo, M.birdFeather); inner.position.set(side * 0.12, 0, -0.01);
+          const tip = new THREE.Mesh(birdWingTipGeo, M.birdFeather); tip.position.set(side * 0.28, -0.01, -0.03);
+          tip.rotation.y = side * -0.25;
+          piv.add(inner, tip);
+          return piv;
+        };
+        const lw = makeWing(-1), rw = makeWing(1);
+        g.add(body, head, tail, lw, rw);
+        g.scale.setScalar(scale);
+        W.birdsGroup.add(g);
+        return { g, head, tail, lw, rw };
+      };
+
+      const totalFly = S.quality === 'low' ? 6 : 11;
+      const totalPerch = S.quality === 'low' ? 8 : 14;
+      const fenceSpots = [];
+      if (W.fences && W.fences.length) {
+        const stride = Math.max(1, Math.floor(W.fences.length / 7));
+        for (let fi = 2; fi < W.fences.length && fenceSpots.length < 6; fi += stride) {
+          const f = W.fences[fi];
+          const off = (fi % 2 === 0) ? 0 : -2.91;
+          fenceSpots.push({
+            x: f.pos.x + (f.axis === 'x' ? off : 0),
+            y: 2.46,
+            z: f.pos.z + (f.axis === 'z' ? off : 0),
+            fence: f,
+          });
+        }
+      }
+      const perchPool = fenceSpots.concat(treelinePerches.map(tp => ({ x: tp.x, y: tp.y + 0.04, z: tp.z, fence: null })));
+      for (let pi = 0; pi < totalPerch && pi < perchPool.length; pi++) {
+        const sp = perchPool[pi];
+        const parts = makeBirdMesh(R(0.9, 1.25));
+        const yaw = R(0, Math.PI * 2);
+        parts.g.position.set(sp.x, sp.y, sp.z);
+        parts.g.rotation.y = yaw;
+        const outLen = Math.hypot(sp.x, sp.z) || 1;
+        W.birds.push({
+          mode: 'perch',
+          parts,
+          homeX: sp.x, homeY: sp.y, homeZ: sp.z,
+          homeYaw: yaw,
+          fence: sp.fence,
+          outX: sp.x / outLen, outZ: sp.z / outLen,
+          state: 'perched', // perched | flee | return
+          fleeT: 0,
+          calmTimer: 0,
+          lookTimer: R(0.6, 2.8),
+          targetHeadYaw: 0,
+          targetHeadPitch: 0,
+          ruffleT: R(2, 7),
+          phase: R(0, 6.28),
+          flapSpeed: R(11, 14),
+        });
+      }
+      for (let fi = 0; fi < totalFly; fi++) {
+        const parts = makeBirdMesh(R(0.95, 1.35));
+        const ang = (fi / totalFly) * Math.PI * 2 + R(-0.2, 0.2);
+        const rad = R(HALF + 16, HALF + 56);
+        const alt = R(10.5, 18.5);
+        W.birds.push({
+          mode: 'fly',
+          parts,
+          cx: Math.cos(ang) * rad * 0.25,
+          cz: Math.sin(ang) * rad * 0.25,
+          rx: rad * R(0.75, 1.05),
+          rz: rad * R(0.75, 1.05),
+          ang,
+          speed: (fi % 2 ? 1 : -1) * R(0.055, 0.095),
+          alt,
+          bobAmp: R(0.6, 1.4),
+          phase: R(0, 6.28),
+          flapSpeed: R(9.5, 12.5),
+          scareBoost: 0,
+        });
+      }
     }
 
     // =========================================================
@@ -2754,7 +3319,130 @@
       D.pts.geometry.attributes.position.needsUpdate = true;
     };
 
-    W.update = function (dt, time) {
+    W.updateBirds = function (dt, time, opts) {
+      if (!W.birdsGroup) return;
+      opts = opts || {};
+      const enabled = opts.enabled !== false;
+      if (W.birdsGroup.visible !== enabled) W.birdsGroup.visible = enabled;
+      if (!enabled || !W.birds || !W.birds.length) return;
+      const pPos = opts.pos || null;
+      const disturbed = !!opts.disturbed;
+      const still = !!opts.still;
+      const t = time || 0;
+
+      for (let i = 0; i < W.birds.length; i++) {
+        const b = W.birds[i];
+        const { g, head, tail, lw, rw } = b.parts;
+        if (b.mode === 'fly') {
+          if (disturbed) b.scareBoost = Math.min(1, b.scareBoost + dt * 2.5);
+          else b.scareBoost = Math.max(0, b.scareBoost - dt * 0.22);
+          const mul = still ? 0.45 : (1 + b.scareBoost * 0.85);
+          b.ang += b.speed * mul * dt;
+          const nx = b.cx + Math.cos(b.ang) * b.rx;
+          const nz = b.cz + Math.sin(b.ang) * b.rz;
+          const ny = b.alt + Math.sin(t * 0.9 + b.phase) * b.bobAmp + b.scareBoost * 6.5;
+          const tx = -Math.sin(b.ang) * b.rx * (b.speed >= 0 ? 1 : -1);
+          const tz = Math.cos(b.ang) * b.rz * (b.speed >= 0 ? 1 : -1);
+          g.position.set(nx, ny, nz);
+          g.rotation.y = Math.atan2(tx, tz);
+          g.rotation.z = (b.speed >= 0 ? -0.18 : 0.18);
+          // natural flap bursts alternating with calm glides
+          const cycle = (t * 0.42 + b.phase) % 3.2;
+          const flapping = !still && (cycle < 1.55 || b.scareBoost > 0.2);
+          const wAng = flapping
+            ? Math.sin(t * b.flapSpeed + b.phase * 3) * (0.68 + b.scareBoost * 0.25) + 0.12
+            : 0.14 + Math.sin(t * 1.8 + b.phase) * 0.04;
+          lw.rotation.z = -wAng;
+          rw.rotation.z = wAng;
+          tail.rotation.x = 0.08 + Math.sin(t * 2 + b.phase) * 0.05;
+          head.rotation.set(0.06, 0, 0);
+        } else {
+          // perched birds react to nearby player approach, broken fences, running, or loud noises
+          let nearLoud = false;
+          if (pPos && !still) {
+            const d = Math.hypot(pPos.x - b.homeX, pPos.z - b.homeZ);
+            if ((disturbed && d < 95) || (b.fence && d < 16)) nearLoud = true;
+          }
+          if (b.fence && b.fence.broken) nearLoud = true;
+
+          if (b.state === 'perched') {
+            if (nearLoud) {
+              b.state = 'flee';
+              b.fleeT = 0;
+              b.calmTimer = 11 + (i % 5) * 1.4;
+            } else {
+              b.lookTimer -= dt;
+              if (b.lookTimer <= 0) {
+                b.lookTimer = 0.9 + ((i * 17 + Math.floor(t * 3)) % 20) * 0.12;
+                b.targetHeadYaw = (Math.sin(t * 4.3 + i * 2.1) * 0.55);
+                b.targetHeadPitch = Math.cos(t * 3.1 + i) * 0.18;
+              }
+              head.rotation.y += (b.targetHeadYaw - head.rotation.y) * Math.min(1, dt * 9);
+              head.rotation.x += (b.targetHeadPitch - head.rotation.x) * Math.min(1, dt * 9);
+              // occasional wing tuck/ruffle
+              b.ruffleT -= dt;
+              let ruffle = 0;
+              if (b.ruffleT <= 0 && !still) {
+                if (b.ruffleT > -0.45) ruffle = Math.sin((b.ruffleT + 0.45) * 28) * 0.35;
+                else b.ruffleT = 3.5 + ((i * 23) % 7);
+              }
+              lw.rotation.z = 1.05 - Math.abs(ruffle);
+              rw.rotation.z = -1.05 + Math.abs(ruffle);
+              tail.rotation.x = 0.25 + Math.sin(t * 2.4 + b.phase) * 0.08;
+              g.position.set(b.homeX, b.homeY + Math.abs(ruffle) * 0.03, b.homeZ);
+              g.rotation.set(0, b.homeYaw, 0);
+            }
+          } else if (b.state === 'flee') {
+            b.fleeT += dt;
+            if (nearLoud) b.calmTimer = Math.max(b.calmTimer, 11);
+            const k = Math.min(1, b.fleeT / 3.8);
+            const arc = b.fleeT * 6.2;
+            const fx = b.homeX + b.outX * arc + Math.sin(b.fleeT * 1.8 + b.phase) * 3.5;
+            const fz = b.homeZ + b.outZ * arc + Math.cos(b.fleeT * 1.6 + b.phase) * 3.5;
+            const fy = b.homeY + Math.min(16, b.fleeT * 3.2) + Math.sin(b.fleeT * 3 + b.phase) * 0.35;
+            g.position.set(fx, fy, fz);
+            g.rotation.y = Math.atan2(b.outX, b.outZ) + Math.sin(b.fleeT * 1.4 + b.phase) * 0.35;
+            g.rotation.z = Math.sin(b.fleeT * 2 + b.phase) * 0.14;
+            const flap = Math.sin(t * 17 + b.phase) * 0.78 + 0.1;
+            lw.rotation.z = -flap;
+            rw.rotation.z = flap;
+            tail.rotation.x = 0.08;
+            head.rotation.set(0.05, 0, 0);
+            if (!nearLoud && !disturbed) {
+              b.calmTimer -= dt;
+              if (b.calmTimer <= 0 && (!b.fence || !b.fence.broken)) {
+                b.state = 'return';
+                b.fleeT = 0;
+              }
+            }
+            if (k >= 1 && b.state === 'flee') {
+              // circle discreetly above the outer trees until calm
+              const cx = b.homeX + b.outX * 26 + Math.cos(t * 0.45 + b.phase) * 8;
+              const cz = b.homeZ + b.outZ * 26 + Math.sin(t * 0.45 + b.phase) * 8;
+              g.position.set(cx, b.homeY + 13.5 + Math.sin(t + b.phase) * 0.7, cz);
+              g.rotation.y = Math.atan2(-Math.sin(t * 0.45 + b.phase), Math.cos(t * 0.45 + b.phase));
+            }
+          } else {
+            // glide gently back down to perch
+            b.fleeT += dt;
+            if (nearLoud) { b.state = 'flee'; b.fleeT = 0; b.calmTimer = 11; continue; }
+            const r = Math.min(1, b.fleeT / 2.6);
+            const ease = r * r * (3 - 2 * r);
+            const sx = b.homeX + b.outX * 22, sz = b.homeZ + b.outZ * 22, sy = b.homeY + 12;
+            g.position.set(sx + (b.homeX - sx) * ease, sy + (b.homeY - sy) * ease, sz + (b.homeZ - sz) * ease);
+            g.rotation.y = Math.atan2(-b.outX, -b.outZ) * (1 - ease) + b.homeYaw * ease;
+            g.rotation.z = 0;
+            const flap = r < 0.85 ? Math.sin(t * 11 + b.phase) * 0.55 + 0.1 : 0.4;
+            lw.rotation.z = -flap;
+            rw.rotation.z = flap;
+            if (r >= 1) b.state = 'perched';
+          }
+        }
+      }
+    };
+
+    W.update = function (dt, time, birdCtx) {
+      W.updateBirds(dt, time, birdCtx);
       W.flickers.forEach(f => {
         f.t -= dt;
         if (f.mode === 'flicker') {

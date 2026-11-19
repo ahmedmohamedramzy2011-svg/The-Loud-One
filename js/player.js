@@ -8,7 +8,7 @@
 
   // noise radii in metres: how far away Siren Head can hear each thing
   const NOISE = {
-    flashlight: 9, crouch: 4, walk: 16, sprint: 46, panting: 6,
+    flashlight: 9, crouch: 4, walk: 16, sprint: 46,
     jump: 30, land: 36, shutter: 14, hide: 5, kicked: 42,
   };
   const TENANT_LIMIT = 14;
@@ -97,6 +97,8 @@
     this.vfTarget = null;
     this.bob = 0;
     this.shake = 0;
+    this.envShake = 0;
+    this.envProx = 0;
     this.swayX = 0;
     this.swayY = 0;
     this.swayVelX = 0;
@@ -226,7 +228,6 @@
       LO.audio.setFlashlightBuzz(this.flashOn);
       if (this.windedTimer > 0) {
         this.panting = Math.max(this.panting, this.windedTimer > 2.0 ? 1.0 : 0.7);
-        LO.audio.setBreathing(Math.min(1, this.panting * 1.2));
       }
       this.zoom = 0;
       return;
@@ -408,7 +409,6 @@
     let n = 0;
     if (this.flashOn) n += NOISE.flashlight;
     if (this.moving && !this.hidden) n += this.sprinting ? NOISE.sprint : this.crouch > 0.5 ? NOISE.crouch : NOISE.walk;
-    if (this.panting > 0.05 && !(this.crouch > 0.5 && !this.moving) && !this.hidden) n += NOISE.panting;
     n += this.spike;
     if (indoor) n *= 0.6;
     if (this.hidden) n = this.spike > 0 ? this.spike * 0.5 : 0;
@@ -429,7 +429,6 @@
         }
       }
     }
-    LO.audio.setBreathing(Math.min(1, this.panting * 1.2) * (this.crouch > 0.5 && !this.moving && this.windedTimer <= 0 ? 0.15 : 1));
 
     // ---------- pickups ----------
     W.pickups.forEach(p => {
@@ -513,16 +512,43 @@
     const sh = this.shake;
     const dz = Math.min(1, this.dizzy || 0);
     const dtz = this.dizzyT || 0;
+    const Ve = LO.ver ? LO.ver() : { envShake: true };
+    let envProx = 0;
+    if (Ve.envShake && !this.hidden && this.world && this.world.noisyObjects) {
+      const py = this.pos.y + 0.9;
+      const list = this.world.noisyObjects;
+      for (let i = 0; i < list.length; i++) {
+        const o = list[i];
+        if (Math.abs(py - o.y) >= 3.2) continue;
+        const d = Math.hypot(this.pos.x - o.x, this.pos.z - o.z);
+        if (d < o.radius) {
+          const p = Math.pow(1 - d / o.radius, 1.35) * (o.strength || 1);
+          if (p > envProx) envProx = p;
+        }
+      }
+      if (envProx > 1) envProx = 1;
+    }
+    this.envProx = envProx;
+    const targetEnvShake = (Ve.envShake && !this.hidden && this.moving)
+      ? envProx * (this.sprinting ? 1.0 : this.crouch > 0.5 ? 0.25 : 0.65)
+      : 0;
+    this.envShake = (this.envShake || 0) + (targetEnvShake - (this.envShake || 0)) * Math.min(1, (dt || 0.016) * 8);
+    const esh = this.envShake;
+    const tt = time || 0;
+    const ex = esh > 0.002 ? esh * (Math.sin(tt * 31.3) * 0.011 + Math.sin(tt * 47.7) * 0.006) : 0;
+    const ey = esh > 0.002 ? esh * (Math.cos(tt * 37.9) * 0.013 + Math.sin(tt * 53.1) * 0.005) : 0;
+    const ez = esh > 0.002 ? esh * (Math.sin(tt * 29.1) * 0.011 + Math.cos(tt * 43.3) * 0.006) : 0;
+    const eroll = esh > 0.002 ? esh * (Math.sin(tt * 34.7) * 0.0038 + Math.cos(tt * 51.9) * 0.0018) : 0;
     cam.position.set(
-      this.pos.x + (Math.random() - 0.5) * sh,
-      this.pos.y + eye + this.bob * 0.05 * bobAmt + (Math.random() - 0.5) * sh,
-      this.pos.z + (Math.random() - 0.5) * sh,
+      this.pos.x + (Math.random() - 0.5) * sh + ex,
+      this.pos.y + eye + this.bob * 0.05 * bobAmt + (Math.random() - 0.5) * sh + ey,
+      this.pos.z + (Math.random() - 0.5) * sh + ez,
     );
     cam.rotation.order = 'YXZ';
     cam.rotation.y = this.yaw + dz * Math.cos(dtz * 2.1) * 0.055;
     cam.rotation.x = this.pitch + dz * Math.sin(dtz * 3.1) * 0.045;
     cam.rotation.z = Math.sin(this.stepPhase * Math.PI * 0.5) * 0.006 * bobAmt * (this.moving ? 1 : 0)
-      + dz * (Math.sin(dtz * 2.5) * 0.14 + Math.sin(dtz * 5.2) * 0.045);
+      + dz * (Math.sin(dtz * 2.5) * 0.14 + Math.sin(dtz * 5.2) * 0.045) + eroll;
     const fov = LO.settings.fov * (1 - this.zoom * 0.35) + dz * Math.sin(dtz * 3.7) * 5.5;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
 

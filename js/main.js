@@ -21,7 +21,7 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, noiseGlitch: true, proximityAmbient: true, richInteriors: true, cleanSubs: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
@@ -247,12 +247,22 @@
     if (fastone) {
       fastone.getWalkGrid && fastone.getWalkGrid();
       fastone.root.visible = true;
-      fastone.clones.forEach(c => { c.mesh.visible = true; });
+      if (fastone.clones) fastone.clones.forEach(c => { if (c.g) c.g.visible = true; });
+      if (fastone.splinterPool && fastone.splinterPool[0]) fastone.splinterPool[0].visible = true;
+      if (fastone.dustPool && fastone.dustPool[0]) fastone.dustPool[0].visible = true;
+      if (world && world.hideSpots && world.hideSpots[0] && world.hideSpots[0]._hlGroup) {
+        world.hideSpots[0]._hlGroup.visible = true;
+      }
     }
     if (renderer) renderer.compile(scene, camera);
     if (fastone) {
       fastone.root.visible = false;
-      fastone.clones.forEach(c => { c.mesh.visible = false; });
+      if (fastone.clones) fastone.clones.forEach(c => { if (c.g) c.g.visible = false; });
+      if (fastone.splinterPool && fastone.splinterPool[0]) fastone.splinterPool[0].visible = false;
+      if (fastone.dustPool && fastone.dustPool[0]) fastone.dustPool[0].visible = false;
+      if (world && world.hideSpots && world.hideSpots[0] && world.hideSpots[0]._hlGroup) {
+        world.hideSpots[0]._hlGroup.visible = false;
+      }
     }
   }
 
@@ -488,13 +498,13 @@
       camera.position.set(S0[3] - 3, 1.3 + k * 0.8, -6 + k * 5);
       camera.lookAt(S0[3] + 7, 9 + k * 3, 20);
       titleSpot.position.set(S0[3] - 3, 1, -4); titleSpot.target.position.set(S0[3], 10, 20); titleSpot.intensity = 9;
-    } else if (shot === 1) {                                 // Hollow Creek highway sign & dark pine treeline
+    } else if (shot === 1) {                                 // Hollow Creek highway sign (front face) & dark pine treeline
       siren.root.visible = false;
-      camera.position.set(-4.0 + k * 2.2, 2.2, -160.5 + k * 2.0);
-      camera.lookAt(-7.6, 3.0, -149.5);
+      camera.position.set(-4.8 - k * 2.2, 2.25, -140.5 + k * 1.0);
+      camera.lookAt(-8.0, 3.2, -150.0);
       titleSpot.position.copy(camera.position);
-      titleSpot.target.position.set(-8.0, 3.2, -150.0);
-      titleSpot.intensity = 5.5;
+      titleSpot.target.position.set(-8.0, 3.3, -150.0);
+      titleSpot.intensity = 6.0;
     } else if (shot === 2) {                                 // close on the horns
       siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.55 + Math.sin(titleT * 2) * 0.1;
       siren.update(0, null, titleT);
@@ -534,7 +544,7 @@
       titleSpot.intensity = 7.5;
     }
     siren.update(dt, null, titleT);
-    world.update(dt, titleT);
+    world.update(dt, titleT, { still: false, enabled: !!ver.forestBirds });
   }
 
   function goTitle() {
@@ -548,9 +558,11 @@
     if (document.pointerLockElement) document.exitPointerLock();
     player.enabled = false;
     player.flashOn = false;
-    A.setFlashlightBuzz(false); A.setBreathing(0); A.setHeartbeat(0); A.setTenant(0); A.setSilentOne(0);
+    A.setFlashlightBuzz(false); A.setHeartbeat(0); A.setTenant(0); A.setSilentOne(0);
     A.setStillness(false); document.body.classList.remove('still'); A.setMothFlutter(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
+    A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+    A.setEnvHum && A.setEnvHum(0);
     $('silent-one').style.opacity = 0;
     if (worldDirty || state === 'ending' || state === 'credits' || state === 'dead') buildWorld();
     setupTitleScene();
@@ -686,8 +698,10 @@
     clearGlitch();
     show('pause');
     if (window.speechSynthesis) try { speechSynthesis.pause(); } catch (e) {}
-    A.setFlashlightBuzz(false); A.setBreathing(0); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
+    A.setFlashlightBuzz(false); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
+    A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+    A.setEnvHum && A.setEnvHum(0);
   }
   function resume() {
     hideAllScreens();
@@ -758,8 +772,10 @@
     player.enabled = false;
     if (document.pointerLockElement) document.exitPointerLock();
     clearGlitch();
-    A.setFlashlightBuzz(false); A.setBreathing(0); A.setHeartbeat(0);
+    A.setFlashlightBuzz(false); A.setHeartbeat(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
+    A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+    A.setEnvHum && A.setEnvHum(0);
     player.flashOn = false; player.flash.intensity = 0;
     hideAllScreens();
     ui.fadeOut(1.5);
@@ -829,8 +845,6 @@
     if (gr) gr.style.filter = '';
     const vf = $('viewfinder');
     if (vf) vf.style.opacity = '';
-    const ng = $('noise-glitch');
-    if (ng) ng.style.opacity = 0;
     lastRootFilter = '';
   }
   function dieBy(cause) {
@@ -907,6 +921,8 @@
       deathShown = false;
       A.setSilentOne(0); A.setExposure(0); A.setMothFlutter(0); A.setTenant(0);
       A.setProximityAmbient && A.setProximityAmbient(0);
+      A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+      A.setEnvHum && A.setEnvHum(0);
       A.setStillness(false); document.body.classList.remove('still');
       $('silent-one').style.opacity = 0;
       const deathEl = $('death');
@@ -979,14 +995,18 @@
     calm: 'HE CAN\'T HEAR YOU', heard: 'HE HEARD SOMETHING', searching: 'HE\'S SEARCHING — STAY SILENT',
     angry: 'HE\'S ANGRY — GO SILENT!', hidden: 'HIDDEN — YOU MAKE NO SOUND',
   };
-  let lastStatus = '', lastRootFilter = '', lastHideType = '', noiseGlitchPhase = 0;
+  let lastStatus = '', lastRootFilter = '', lastHideType = '';
   function updateHUD(dt) {
     const noisePct = Math.min(100, player.noiseRadius / 50 * 100);
     $('noise-fill').style.width = noisePct + '%';
     const d = siren.distToPlayer || 999;
     $('bars').querySelector('.bar-mark').style.left = Math.min(99, d / 50 * 100) + '%';
     $('stamina-fill').style.width = player.stamina + '%';
-    $('stamina-fill').parentNode.classList.toggle('tired', !!(player.exhausted || player.windedTimer > 0));
+    const stamBar = $('stamina-fill').parentNode;
+    const isTired = !!(player.exhausted || player.windedTimer > 0);
+    stamBar.classList.toggle('tired', isTired);
+    stamBar.classList.toggle('critical', !isTired && player.stamina <= 25);
+    stamBar.classList.toggle('low', !isTired && player.stamina > 25 && player.stamina <= 55);
     $('battery-fill').style.width = player.battery + '%';
     $('battery-fill').parentNode.classList.toggle('low', player.battery < 15);
     const st = siren.status(player);
@@ -1057,45 +1077,13 @@
       A.setSilentOne(0);
     }
     show('viewfinder', player.zoom > 0.5);
-    // the Sneaky One makes your camera glitch too, Siren Head smashes cause dizziness blur,
-    // and near-max Noise triggers subtle chromatic aberration & frame-rate dependent scan glitch
+    // the Sneaky One makes your camera glitch too, and Siren Head smashes cause dizziness blur
     const glitch = sneaky && sneaky.attacking && player.zoom > 0.5;
     $('viewfinder').style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
-    const ng = $('noise-glitch');
-    const nearMaxNoise = V().noiseGlitch && noisePct >= 80;
-    let noiseAbFilter = '';
-    if (nearMaxNoise && ng) {
-      const k = Math.min(1, (noisePct - 80) / 20);
-      const stepDt = Math.min(0.05, dt || 0.016);
-      noiseGlitchPhase += stepDt * (16 + k * 24);
-      const j1 = Math.sin(noiseGlitchPhase * 1.7 + Math.cos(noiseGlitchPhase * 3.1));
-      const j2 = Math.cos(noiseGlitchPhase * 2.3);
-      const burst = Math.sin(noiseGlitchPhase * 0.73) > (0.52 - k * 0.28) ? 1 : 0;
-      const sx = (j1 * (1.4 + k * 2.8) * (0.45 + 0.55 * burst)).toFixed(2);
-      const sy = (j2 * (0.4 + k * 0.9)).toFixed(2);
-      const topPct = Math.round(((Math.sin(noiseGlitchPhase * 1.9) + 1) * 0.5) * 72);
-      const botPct = Math.min(96, topPct + Math.round(6 + k * 14));
-      ng.style.opacity = (0.28 + k * 0.55).toFixed(3);
-      ng.style.setProperty('--ng-x', sx + 'px');
-      ng.style.setProperty('--ng-y', sy + 'px');
-      ng.style.setProperty('--ng-top', topPct + '%');
-      ng.style.setProperty('--ng-bot', (100 - botPct) + '%');
-      ng.style.setProperty('--ng-rgb', (burst ? (0.35 + k * 0.5) : (0.12 + k * 0.28)).toFixed(3));
-      const ab = (1.1 + k * 2.2 + burst * 1.2).toFixed(2);
-      noiseAbFilter = `drop-shadow(${ab}px 0 0 rgba(255,40,60,0.34)) drop-shadow(-${ab}px 0 0 rgba(45,220,255,0.34))`;
-    } else if (ng) {
-      ng.style.opacity = 0;
-    }
     const rootEl = document.getElementById('game-root');
-    let nextFilter = '';
-    if (glitch && Math.random() < 0.3) {
-      nextFilter = 'brightness(0.15) contrast(1.6)';
-    } else {
-      const parts = [];
-      if (player.dizzy > 0.04) parts.push(`blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)`);
-      if (noiseAbFilter) parts.push(noiseAbFilter);
-      nextFilter = parts.join(' ');
-    }
+    const nextFilter = (glitch && Math.random() < 0.3)
+      ? 'brightness(0.15) contrast(1.6)'
+      : (player.dizzy > 0.04 ? `blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)` : '');
     if (nextFilter !== lastRootFilter) {
       lastRootFilter = nextFilter;
       rootEl.style.filter = nextFilter;
@@ -1161,7 +1149,14 @@
         if (state === 'play') moths.update(simDt, player, camera, gameTime);
         if (state === 'play' && sneaky.update(simDt, player, camera, siren) === 'kill') dieBy('sneaky');
         if (state === 'play' && fastone.update(simDt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
-        world.update(simDt, gameTime);
+        const verNow = V();
+        const birdDisturbed = !!(player.sprinting || player.noiseRadius >= 28 || player.spike >= 12);
+        world.update(simDt, gameTime, {
+          pos: player.pos,
+          disturbed: birdDisturbed && !!verNow.birdFade,
+          still: A.still,
+          enabled: !!verNow.forestBirds,
+        });
         if (state === 'play') {
           updateHUD(simDt);
           updateHintUI();
@@ -1186,7 +1181,9 @@
             }
             if (dm < 22) entNear = Math.max(entNear, Math.max(0, 1 - dm / 22) * 0.72);
           }
-          A.setProximityAmbient && A.setProximityAmbient(V().proximityAmbient && !A.still ? entNear : 0);
+          A.setProximityAmbient && A.setProximityAmbient(verNow.proximityAmbient && !A.still ? entNear : 0);
+          A.updateBirdsong && A.updateBirdsong(simDt, player.pos, player.indoor, world.HALF, !!verNow.extBirdsong, birdDisturbed && !!verNow.birdFade);
+          A.setEnvHum && A.setEnvHum(verNow.envShake && !A.still ? (player.envProx || 0) : 0);
           // the ground trembles when he's right on top of you
           if (d < 35 && !A.still) player.shake = Math.max(player.shake, Math.pow(1 - d / 35, 1.5) * 0.3);
           if (siren.state === 'hunt') A.playMusic('chase', 1);
@@ -1197,7 +1194,7 @@
       }
     } else if (state === 'dying') {
       updateDying(dt);
-      world.update(dt, gameTime);
+      world.update(dt, gameTime, { still: true, enabled: !!V().forestBirds });
     } else if (cutscene) {
       // hold space to skip
       if ((player.keys.Space || LO.touchHold) && state === 'opening') {
@@ -1208,7 +1205,7 @@
       if (cutscene) cutscene.update(dt);
       A.setSubMode && A.setSubMode('mode-cutscene');
       if (world && world.updateWind) world.updateWind(dt, 0.5, camera.position, gameTime);
-      if (world) world.update(dt, gameTime += dt);
+      if (world) world.update(dt, gameTime += dt, { still: false, enabled: !!V().forestBirds });
     } else if (state !== 'play') {
       A.setSubMode && A.setSubMode('');
     }

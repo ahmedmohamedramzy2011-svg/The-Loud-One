@@ -82,6 +82,7 @@
     const D = LO.SOUND_DATA;
     if (!D) return;
     Object.keys(D).forEach(key => {
+      if (key === 'panting') return;
       try {
         const bin = atob(D[key]);
         const buf = new Uint8Array(bin.length);
@@ -168,7 +169,7 @@
 
   // the wind has stopped: silence music, voices and every sound the world makes
   // the player is dead: cut every sound that belongs to the living world at once
-  // (panting, flashlight, heartbeat, wind, entities, Siren Head). Death sounds and music are unaffected.
+  // (flashlight, heartbeat, wind, entities, Siren Head). Death sounds and music are unaffected.
   A.worldMuted = false;
   A.silenceWorld = function (on) {
     if (!ctx) return;
@@ -176,11 +177,13 @@
     const t = ctx.currentTime;
     if (on) {
       heartAmt = 0;
-      [breath && breath.g, buzz && buzz.g, wind && wind.g, wind && wind.wg, tenant && tenant.g, tenant && tenant.og,
-       silent && silent.og, silent && silent.sg, moth && moth.g, expo && expo.g1, expo && expo.g2, proxAmb && proxAmb.out, worldBus]
+      [buzz && buzz.g, wind && wind.g, wind && wind.wg, tenant && tenant.g, tenant && tenant.og,
+       silent && silent.og, silent && silent.sg, moth && moth.g, expo && expo.g1, expo && expo.g2,
+       proxAmb && proxAmb.out, envHum && envHum.g, birdBus, worldBus]
         .forEach(g => { if (g && g.gain) { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0, t); } });
     } else if (worldBus && !A.still) {
       worldBus.gain.cancelScheduledValues(t); worldBus.gain.setTargetAtTime(1, t, 0.3);
+      if (birdBus) birdBus.gain.setTargetAtTime(birdState.enabled && !birdState.indoor ? 1 : 0, t, 0.4);
     }
   };
 
@@ -314,54 +317,8 @@
     n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t); n.stop(t + 0.2);
   };
 
-  // breathing — called with intensity 0..1 each frame (uses recorded panting loop when decoded)
-  let breath = null;
-  A.setBreathing = function (amount) {
-    if (A.worldMuted) return;
-    if (!ctx) return;
-    const a = Math.max(0, Math.min(1, amount || 0));
-    if (breath && !breath.isSample && samples.panting) {
-      try { breath.stopNodes.forEach(nd => nd.stop()); } catch (e) {}
-      breath.g.disconnect();
-      breath = null;
-    }
-    if (!breath) {
-      if (samples.panting) {
-        const s = ctx.createBufferSource();
-        s.buffer = samples.panting;
-        s.loop = true;
-        s.loopStart = 0.18;
-        s.loopEnd = Math.max(2.0, samples.panting.duration - 0.25);
-        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
-        const g = ctx.createGain(); g.gain.value = 0;
-        s.connect(f); f.connect(g); g.connect(sfxBus);
-        s.start(0, Math.random() * 2.0);
-        breath = { isSample: true, src: s, f, g, stopNodes: [s] };
-      } else {
-        const n = noiseSrc(false, true);
-        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1100; f.Q.value = 1.2;
-        const g = ctx.createGain(); g.gain.value = 0;
-        const lfo = ctx.createOscillator(); lfo.frequency.value = 1.6;
-        const lg = ctx.createGain(); lg.gain.value = 0;
-        const amp = ctx.createGain(); amp.gain.value = 0;
-        lfo.connect(lg); lg.connect(amp.gain);
-        n.connect(f); f.connect(amp); amp.connect(g); g.connect(sfxBus);
-        n.start(); lfo.start();
-        breath = { isSample: false, g, lg, amp, lfo, stopNodes: [n, lfo] };
-      }
-    }
-    const t = ctx.currentTime;
-    if (breath.isSample) {
-      breath.g.gain.setTargetAtTime(a > 0.02 ? a * 0.52 : 0, t, 0.22);
-      breath.src.playbackRate.setTargetAtTime(0.92 + a * 0.20, t, 0.35);
-      breath.f.frequency.setTargetAtTime(900 + a * 2100, t, 0.3);
-    } else {
-      breath.g.gain.setTargetAtTime(a * 0.35, t, 0.3);
-      breath.lg.gain.setTargetAtTime(0.5, t, 0.3);
-      breath.amp.gain.setTargetAtTime(0.5, t, 0.3);
-      breath.lfo.frequency.setTargetAtTime(0.7 + a * 1.2, t, 0.5);
-    }
-  };
+  // panting audio removed in v2.6.1 (no-op preserved for older callers if any)
+  A.setBreathing = function () {};
 
   // flashlight hum (the "slight buzzing")
   let buzz = null;
@@ -537,6 +494,142 @@
       });
     }
   }
+
+  // subtle randomized exterior forest birdsong — contrasts with the dead-quiet streets
+  let birdBus = null;
+  const birdState = { enabled: false, indoor: false, perimK: 0, nextAt: 0, calmUntil: 0, hushed: false };
+  A.updateBirdsong = function (dt, pos, indoor, halfSize, enabled, disturbed) {
+    if (!ctx) return;
+    if (!birdBus) {
+      birdBus = ctx.createGain();
+      birdBus.gain.value = 0;
+      birdBus.connect(worldBus);
+    }
+    const wasOff = !birdState.enabled || birdState.indoor;
+    birdState.enabled = !!enabled;
+    birdState.indoor = !!indoor;
+    if (pos) {
+      const lim = halfSize || 110;
+      const edgeDist = Math.max(Math.abs(pos.x), Math.abs(pos.z)) / lim;
+      birdState.perimK = Math.max(0, Math.min(1, (edgeDist - 0.35) / 0.65));
+    } else {
+      birdState.perimK = 0;
+    }
+    const t = ctx.currentTime;
+    if (!birdState.enabled || A.still || A.worldMuted) {
+      birdBus.gain.setTargetAtTime(0, t, 0.35);
+      return;
+    }
+    if (disturbed) {
+      birdState.calmUntil = Math.max(birdState.calmUntil, t + 6.5 + Math.random() * 2.5);
+      birdState.hushed = true;
+      birdBus.gain.setTargetAtTime(0, t, 0.22);
+      return;
+    }
+    if (t < birdState.calmUntil) {
+      birdBus.gain.setTargetAtTime(0, t, 0.3);
+      return;
+    }
+    if (birdState.hushed) {
+      birdState.hushed = false;
+      birdState.nextAt = Math.max(birdState.nextAt, t + 2.0 + Math.random() * 4.5);
+    }
+    if (birdState.indoor) {
+      birdBus.gain.setTargetAtTime(0.12, t, 0.6);
+      return;
+    }
+    birdBus.gain.setTargetAtTime(1, t, 1.0);
+    if (wasOff || birdState.nextAt <= 0) {
+      birdState.nextAt = t + 4.5 + Math.random() * 5.0;
+    }
+  };
+
+  function birdTick() {
+    if (!ctx || !birdBus || !birdState.enabled || birdState.indoor || A.still || A.worldMuted) return;
+    const t = ctx.currentTime;
+    if (t < birdState.calmUntil || t < birdState.nextAt) return;
+    birdState.nextAt = t + 11.0 + Math.random() * 13.5;
+
+    const species = (Math.random() * 3) | 0;
+    const count = species === 0 ? 2 : species === 1 ? 3 : 2 + ((Math.random() * 3) | 0);
+    const baseFreq = species === 0 ? (1580 + Math.random() * 280)
+      : species === 1 ? (2120 + Math.random() * 380)
+      : (1820 + Math.random() * 340);
+    const pan = (Math.random() < 0.5 ? -1 : 1) * (0.42 + Math.random() * 0.53);
+    const dest = ctx.createStereoPanner
+      ? (() => { const sp = ctx.createStereoPanner(); sp.pan.value = pan; sp.connect(birdBus); return sp; })()
+      : birdBus;
+
+    const scale = (0.72 + birdState.perimK * 0.38) * (0.75 + Math.random() * 0.4);
+    let nt = t + 0.05;
+    for (let i = 0; i < count; i++) {
+      const dur = species === 0 ? (0.14 + Math.random() * 0.09)
+        : species === 1 ? (0.075 + Math.random() * 0.05)
+        : (0.11 + Math.random() * 0.08);
+      const f0 = baseFreq * (i === 0 ? 1 : (0.9 + Math.random() * 0.24));
+      const f1 = f0 * (species === 0 ? (i % 2 ? 0.84 : 1.12) : species === 1 ? 1.18 : 0.92);
+
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = (f0 + f1) * 0.5; bp.Q.value = 3.2;
+
+      const g = ctx.createGain();
+      const peak = (0.011 + Math.random() * 0.007) * scale;
+      env(g, nt, 0.014, peak, dur * 0.5, peak * 0.3, dur * 0.45, nt + 0.014 + dur * 0.55);
+
+      const o1 = ctx.createOscillator();
+      o1.type = 'sine';
+      o1.frequency.setValueAtTime(f0, nt);
+      o1.frequency.exponentialRampToValueAtTime(f1, nt + dur);
+
+      const o2 = ctx.createOscillator();
+      o2.type = 'triangle';
+      o2.frequency.setValueAtTime(f0 * 2.005, nt);
+      o2.frequency.exponentialRampToValueAtTime(f1 * 2.005, nt + dur);
+      const og2 = ctx.createGain(); og2.gain.value = 0.14;
+
+      o1.connect(bp); o2.connect(og2); og2.connect(bp);
+      bp.connect(g); g.connect(dest);
+
+      // faint distant treeline echo
+      const eg = ctx.createGain(); eg.gain.value = 0.24;
+      const dl = ctx.createDelay ? ctx.createDelay(0.5) : null;
+      if (dl) {
+        dl.delayTime.value = 0.19 + Math.random() * 0.11;
+        g.connect(dl); dl.connect(eg); eg.connect(dest);
+      }
+
+      o1.start(nt); o1.stop(nt + dur + 0.18);
+      o2.start(nt); o2.stop(nt + dur + 0.18);
+      nt += dur + (species === 1 ? 0.06 + Math.random() * 0.05 : 0.16 + Math.random() * 0.22);
+    }
+  }
+
+  // subtle low mechanical hum when standing/moving near large noisy machinery (HVAC, transformers, water tanks)
+  let envHum = null;
+  A.setEnvHum = function (amt) {
+    if (!ctx) return;
+    const v = (A.worldMuted || A.still) ? 0 : Math.max(0, Math.min(1, amt || 0));
+    if (!envHum) {
+      if (v <= 0.01) return;
+      const g = ctx.createGain(); g.gain.value = 0; g.connect(worldBus);
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+      const o1 = ctx.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = 60;
+      const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = 120.4;
+      const og1 = ctx.createGain(); og1.gain.value = 0.45;
+      const og2 = ctx.createGain(); og2.gain.value = 0.25;
+      const fan = noiseSrc(true, true);
+      const ff = ctx.createBiquadFilter(); ff.type = 'bandpass'; ff.frequency.value = 190; ff.Q.value = 0.9;
+      const fg = ctx.createGain(); fg.gain.value = 0.45;
+      o1.connect(og1); og1.connect(lp);
+      o2.connect(og2); og2.connect(lp);
+      fan.connect(ff); ff.connect(fg); fg.connect(lp);
+      lp.connect(g);
+      o1.start(); o2.start(); fan.start();
+      envHum = { g };
+    }
+    envHum.g.gain.setTargetAtTime(v * v * 0.028, ctx.currentTime, 0.18);
+  };
+
 
   // ---------- THE MOTHS ----------
   let moth = null;
@@ -1356,6 +1449,7 @@
       if (!ctx) return;
       heartTick();
       chimeTick();
+      birdTick();
       if (!current) return;
       const tr = current;
       while (tr.nextTime < ctx.currentTime + STEP_AHEAD) {
