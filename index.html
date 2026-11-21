@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=62">
+<link rel="stylesheet" href="css/style.css?v=63">
 </head>
 <body>
 
@@ -43,7 +43,7 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.6.3</button>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.7.2</button>
     <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
     <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
@@ -83,9 +83,10 @@
         <tr><td>F</td><td>Flashlight (buzzes)</td></tr>
         <tr><td>Right mouse / Q</td><td>Raise camera</td></tr>
         <tr><td>Left mouse</td><td>Take photo (while camera raised)</td></tr>
-        <tr><td>E</td><td>Hide / leave hiding spot</td></tr>
+        <tr><td>E</td><td>Hide / take Town Map / leave</td></tr>
         <tr><td>G</td><td>Throw a rock</td></tr>
         <tr><td>H</td><td>Hint (after 3 minutes without new evidence)</td></tr>
+        <tr><td>M / Tab</td><td>Toggle Town Map (once collected)</td></tr>
         <tr class="admin-only"><td>` / F9</td><td>Admin testing panel</td></tr>
         <tr><td>Esc</td><td>Pause</td></tr>
       </table>
@@ -101,7 +102,27 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.6.3"><h3>v2.6.3 <span>current</span></h3><ul>
+      <div class="upd" data-ver="2.7.2"><h3>v2.7.2 <span>current</span></h3><ul>
+        <li>Extracted survey map renderer and added outlined POI labels for every enterable town house, shop, office, Sheriff HQ, woodland trail gates, and Lookout Tower</li>
+        <li>Town Survey Map now consistently spawns inside the left-hand building upon arriving in Hollow Creek</li>
+        <li>Sealed perimeter fence corner seams and the left entrance roadblock shoulder gap</li>
+        <li>Increased tree density across the Woodland Perimeter Ring and outer forest belt</li>
+        <li>Low-end device optimizations: 2D spatial collider grid, static world matrix freezing, quantized procedural textures, bird distance culling, software-WebGL DPR cap, and HUD DOM caching</li>
+      </ul></div>
+      <div class="upd" data-ver="2.7.1"><h3>v2.7.1</h3><ul>
+        <li>Added a physical Hollow Creek Town Survey Map mounted inside one random enterable town building; interact with [E] to collect it</li>
+        <li>Toggleable interactive survey map ([M] or [Tab], or MAP on touch) displaying live player orientation, streets, woodland trails, open gates, building layouts, Sheriff HQ, Lookout Tower, and photographed evidence</li>
+        <li>Shows dynamic perimeter fence breaches caused by The Fast One and blocks structural demolition of the map building until collected</li>
+      </ul></div>
+      <div class="upd" data-ver="2.7"><h3>v2.7</h3><ul>
+        <li>Playable Woodland Perimeter Ring with open timber gates, weaving dirt trails, town-styled outskirt structures, and navigable treeline cover</li>
+        <li>Abandoned Fire Lookout Tower with walkable stairs and supply stash, plus optional Wrecked Ranger Truck evidence outside the town fence</li>
+        <li>Flock-scattering bird clusters triggered by approaching threats or player proximity, paired with dynamic wind-reactive forest rustle audio and louder twig footsteps</li>
+        <li>Siren Head echolocation timer now resets to 60s and pauses while within 50m; stalks slower through thick pines</li>
+        <li>The Fast One skips town fence breaches while you are in the forest and instead stalks through the trees until driven back by direct eye contact</li>
+        <li>Fixed missing chair legs across dining rooms and interior barricades</li>
+      </ul></div>
+      <div class="upd" data-ver="2.6.3"><h3>v2.6.3</h3><ul>
         <li>Animated 3D birds perching on perimeter fences and outer pine canopies, flapping and scattering overhead</li>
         <li>Ambient forest birdsong fades out when sprinting or making loud noises and resumes once calm</li>
       </ul></div>
@@ -261,6 +282,7 @@
   </div>
   <div id="minimap-hint"></div>
   <button id="hint-btn" type="button">HINT 3:00</button>
+  <button id="map-hud-badge" type="button">[M] TOWN MAP</button>
   <div id="hint-arrow"><div id="hint-needle">▲</div><div id="hint-label"></div></div>
   <!-- Touch controls (shown on phones / tablets) -->
   <div id="touch">
@@ -276,6 +298,7 @@
       <button class="t-btn" data-t="jump">JUMP</button>
       <button class="t-btn" data-t="sprint" id="t-sprint">SPRINT</button>
       <button class="t-btn" data-t="throw" id="t-throw">THROW</button>
+      <button class="t-btn" data-t="map" id="t-map" style="display:none">MAP</button>
       <button class="t-btn" data-t="hint" id="t-hint">HINT</button>
     </div>
   </div>
@@ -340,6 +363,28 @@
     </svg>
   </div>
   <div class="hide-text" id="hide-text">HIDING — press E to leave</div>
+</div>
+
+<!-- Town Survey Map overlay -->
+<div id="map-overlay" class="screen">
+  <div class="map-card">
+    <div class="map-head">
+      <div>
+        <div class="map-title">HOLLOW CREEK — SURVEY MAP</div>
+        <div class="map-zone" id="map-zone">HOLLOW CREEK STREETS</div>
+      </div>
+      <button type="button" id="map-close-btn" aria-label="Close Map">✕</button>
+    </div>
+    <canvas id="map-canvas" width="760" height="760"></canvas>
+    <div class="map-legend">
+      <span class="map-leg-item"><i class="ml-dot ml-you"></i>YOU</span>
+      <span class="map-leg-item"><i class="ml-dot ml-enter"></i>ENTERABLE</span>
+      <span class="map-leg-item"><i class="ml-dot ml-hq"></i>SHERIFF HQ</span>
+      <span class="map-leg-item"><i class="ml-dot ml-ev"></i>FOUND</span>
+      <span class="map-leg-item"><i class="ml-dot ml-breach"></i>BREACH</span>
+    </div>
+    <div class="map-foot-hint">Press M, Tab, E, or Left Click to put away</div>
+  </div>
 </div>
 
 <!-- Pause -->
@@ -417,22 +462,23 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=66"></script>
+<script src="js/settings.js?v=69"></script>
 <script src="audio/sounds.js?v=27"></script>
 <script src="audio/voice.js?v=17"></script>
-<script src="js/audio.js?v=57"></script>
-<script src="js/textures.js?v=60"></script>
-<script src="js/world.js?v=65"></script>
-<script src="js/sirenhead.js?v=61"></script>
-<script src="js/player.js?v=62"></script>
-<script src="js/moths.js?v=60"></script>
+<script src="js/audio.js?v=58"></script>
+<script src="js/textures.js?v=62"></script>
+<script src="js/world.js?v=68"></script>
+<script src="js/sirenhead.js?v=62"></script>
+<script src="js/player.js?v=65"></script>
+<script src="js/moths.js?v=61"></script>
 <script src="js/deathroom.js?v=58"></script>
-<script src="js/sneaky.js?v=59"></script>
-<script src="js/fastone.js?v=62"></script>
+<script src="js/sneaky.js?v=60"></script>
+<script src="js/fastone.js?v=63"></script>
 <script src="js/cutscenes.js?v=60"></script>
 <script src="js/tvfx.js?v=52"></script>
-<script src="js/admin.js?v=61"></script>
-<script src="js/main.js?v=67"></script>
-<script src="js/touch.js?v=50"></script>
+<script src="js/admin.js?v=62"></script>
+<script src="js/map.js?v=1"></script>
+<script src="js/main.js?v=70"></script>
+<script src="js/touch.js?v=51"></script>
 </body>
 </html>

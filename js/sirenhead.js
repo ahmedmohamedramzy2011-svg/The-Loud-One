@@ -294,21 +294,26 @@
     // ---------- ECHOLOCATION ----------
     // roughly once a minute he pings the town. It finds you even if you are
     // silent or hidden, and every ping narrows down where you are.
+    // v2.7+: within 50m of the player, echolocation resets to 1 min and pauses until >50m away.
     if (V.echo && !adminIgnore) {
-      this.echoTimer -= dt;
-      if (!fenceLocked && this.echoTimer <= 0 && this.state !== 'hunt') {
-        this.echoTimer = 52 + Math.random() * 16;
-        this.echoCount++;
-        LO.audio.echoPing(this.voice);
-        const err = Math.max(6, Math.min(45, dist * 0.45) * Math.pow(0.8, this.echoCount - 1));
-        const a = Math.random() * Math.PI * 2, r = Math.random() * err;
-        this.lastHeard.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
-        this.lastHeardTime = time;
-        this.echoApproach = true;
-        this.setState('investigate');
-        this.onEcho && this.onEcho(dist);
-      } else if (fenceLocked && this.echoTimer <= 0) {
-        this.echoTimer = 10; // defer echo until fence distraction finishes
+      if (V.echoClosePause && dist <= 50) {
+        this.echoTimer = 60;
+      } else {
+        this.echoTimer -= dt;
+        if (!fenceLocked && this.echoTimer <= 0 && this.state !== 'hunt') {
+          this.echoTimer = 52 + Math.random() * 16;
+          this.echoCount++;
+          LO.audio.echoPing(this.voice);
+          const err = Math.max(6, Math.min(45, dist * 0.45) * Math.pow(0.8, this.echoCount - 1));
+          const a = Math.random() * Math.PI * 2, r = Math.random() * err;
+          this.lastHeard.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
+          this.lastHeardTime = time;
+          this.echoApproach = true;
+          this.setState('investigate');
+          this.onEcho && this.onEcho(dist);
+        } else if (fenceLocked && this.echoTimer <= 0) {
+          this.echoTimer = 10; // defer echo until fence distraction finishes
+        }
       }
     }
     if (heard) {
@@ -409,7 +414,11 @@
         this.searchPause = (this.searchPause || 0) - dt;
         if (!this.path.length && this.searchPause <= 0) {
           const a = Math.random() * Math.PI * 2, r = 4 + Math.random() * 14;
-          const p = W.projectToStreet({ x: this.lastHeard.x + Math.cos(a) * r, z: this.lastHeard.z + Math.sin(a) * r });
+          const rawP = { x: this.lastHeard.x + Math.cos(a) * r, z: this.lastHeard.z + Math.sin(a) * r };
+          const outerLim = (W.OUTER_E || (W.HALF + 3)) - 5;
+          const p = (V.forestRing && W.isForest && (W.isForest(this.lastHeard) || W.isForest(this.pos)))
+            ? { x: Math.max(-outerLim, Math.min(outerLim, rawP.x)), z: Math.max(-outerLim, Math.min(outerLim, rawP.z)) }
+            : W.projectToStreet(rawP);
           const safeP = this.clampOutsideEvidence(p);
           const ev = W.hitsEvidenceBuilding && W.hitsEvidenceBuilding(this.pos, safeP, 1.8);
           if (ev) {
@@ -580,12 +589,14 @@
   // but always path around buildings that contain evidence
   SirenHead.prototype.goTo = function (target, dt) {
     const W = this.world;
+    const V = LO.ver ? LO.ver() : { forestRing: true };
     const dest = this.clampOutsideEvidence(target);
     const d = Math.hypot(dest.x - this.pos.x, dest.z - this.pos.z);
     this.reached = d < 3.5;
     if (this.reached) { this.speedNow = 0; this.path = []; return; }
     this.repathTimer -= dt;
-    const directLimit = this.state === 'hunt' ? 52 : 34;
+    const inForestArea = !!(V.forestRing && W.isForest && (W.isForest(this.pos) || W.isForest(dest)));
+    const directLimit = inForestArea ? 78 : (this.state === 'hunt' ? 52 : 34);
     const blockedEv = W.hitsEvidenceBuilding && W.hitsEvidenceBuilding(this.pos, dest, 1.8);
     if (d < directLimit && !blockedEv) {
       this.path = [dest];
@@ -598,7 +609,7 @@
       }
     } else if (this.repathTimer <= 0 || !this.path.length) {
       this.repathTimer = 1.4;
-      const proj = W.projectToStreet(dest);
+      const proj = inForestArea ? dest : W.projectToStreet(dest);
       this.path = this.buildSafeStreetPath(this.pos, proj);
     }
     this.followPath(dt);
@@ -607,6 +618,7 @@
   SirenHead.prototype.followPath = function (dt) {
     if (!this.path.length) { this.speedNow = 0; return; }
     const W = this.world;
+    const V = LO.ver ? LO.ver() : { forestRing: true };
     const t = this.path[0];
     const dx = t.x - this.pos.x, dz = t.z - this.pos.z;
     const d = Math.hypot(dx, dz);
@@ -618,7 +630,8 @@
     const turnRate = this.state === 'investigate_breach' ? 4.2 : 1.6;
     this.yaw += Math.max(-turnRate * dt, Math.min(turnRate * dt, diff));
     const facing = Math.max(0, Math.cos(diff));
-    const step = this.speed * dt * (0.25 + 0.75 * facing);
+    const forestSlow = (V.forestRing && W.isForest && W.isForest(this.pos)) ? 0.68 : 1;
+    const step = this.speed * forestSlow * dt * (0.25 + 0.75 * facing);
     const move = Math.min(step, d);
     let nx = this.pos.x + Math.sin(this.yaw) * move;
     let nz = this.pos.z + Math.cos(this.yaw) * move;

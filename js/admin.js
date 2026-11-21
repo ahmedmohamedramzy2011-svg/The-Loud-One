@@ -608,6 +608,16 @@
         player.shake = Math.max(player.shake, 1.0);
         setStatus('Applied heavy shake & dizziness.');
         break;
+      case 'p-give-map':
+        if (!ensurePlayContext()) return;
+        player.hasMap = true;
+        if (world && world.wallMap) {
+          world.wallMap.taken = true;
+          if (world.wallMap.mesh) world.wallMap.mesh.visible = false;
+          if (world.wallMap.building) world.wallMap.building.hasMap = false;
+        }
+        setStatus('Town Map granted (press M or Tab to view).');
+        break;
 
       // ---- World / Evidence / Teleports ----
       case 'ev-mark': {
@@ -710,6 +720,17 @@
         const inward = new V3(-far.pos.x, 0, -far.pos.z).normalize();
         safeTeleport({ x: far.pos.x + inward.x * 5, y: 0, z: far.pos.z + inward.z * 5 }, far.pos);
         setStatus('Teleported near farthest perimeter fence.');
+        break;
+      }
+      case 'tp-wallmap': {
+        if (!ensurePlayContext() || !world) return;
+        const wm = world.wallMap;
+        if (!wm || wm.disabled) { setStatus('Town Map disabled in selected game version.'); break; }
+        const stepOut = 2.0;
+        const px = wm.pos.x + Math.sin(wm.yaw) * stepOut;
+        const pz = wm.pos.z + Math.cos(wm.yaw) * stepOut;
+        safeTeleport({ x: px, y: wm.baseY || 0.14, z: pz }, wm.pos);
+        setStatus(wm.taken ? 'Teleported to Wall Map building (already collected).' : 'Teleported inside facing the Town Wall Map.');
         break;
       }
 
@@ -910,6 +931,7 @@
         btn('Reset Adr. Cooldown', 'p-adrenaline-cd'),
         btn('Apply Winded (5s)', 'p-winded'),
         btn('Test Dizzy + Shake', 'p-dizzy'),
+        btn('Give Town Map', 'p-give-map', null, 'primary'),
       ]));
 
       const speedCard = document.createElement('div');
@@ -973,6 +995,7 @@
         btn('Nearest Hiding Spot', 'tp-hide'),
         btn('Nearest Exterior Dumpster', 'tp-dumpster'),
         btn('Farthest Perimeter Fence', 'tp-fence'),
+        btn('Wall Map Location', 'tp-wallmap'),
       ]));
 
       body.appendChild(group('WORLD & PROPS', [
@@ -1051,11 +1074,12 @@
     const snTxt = sneaky ? (sneaky.attacking ? 'ATTACK' : `${Math.max(0, Math.ceil(sneaky.timer))}s`) : '-';
     const brokenFences = world && world.fences ? world.fences.filter(f => f.broken).length : 0;
     const smashedBldgs = world && world.buildings ? world.buildings.filter(b => b.smashed).length : 0;
+    const mapTxt = !player ? '-' : (player.hasMap ? (player.mapOpen ? 'OPEN' : 'CARRIED') : 'ON WALL');
 
     strip.innerHTML =
       `<div><b>STATE</b> ${st.toUpperCase()} (${LO.settings ? 'v' + LO.settings.gameVersion : ''})</div>` +
       `<div><b>POS</b> ${px}, ${py}, ${pz}</div>` +
-      `<div><b>PLAYER</b> ${hp}HP · ${sta}% STA · ${bat}% BAT · ${noise}m NOISE</div>` +
+      `<div><b>PLAYER</b> ${hp}HP · ${sta}% STA · ${bat}% BAT · ${noise}m NOISE · MAP ${mapTxt}</div>` +
       `<div><b>ADRENALINE</b> ${adr}${player && player.windedTimer > 0 ? ` · WINDED ${player.windedTimer.toFixed(1)}s` : ''}</div>` +
       `<div><b>SIREN</b> ${shState} · ${shDist} · ANGER ${shAnger}</div>` +
       `<div><b>AMBUSH</b> FAST:${foTxt} · SNEAKY:${snTxt}</div>` +

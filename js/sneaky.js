@@ -55,6 +55,7 @@
   };
 
   LO.ambush = LO.ambush || { active: null, gapUntil: 0, now: 0 };
+  const _fwd = new V3(), _back = new V3(), _toIt = new V3(), _f2 = new V3();
 
   Sneaky.prototype.reset = function () {
     this.lastReal = performance.now();
@@ -88,13 +89,13 @@
     if (!player || !camera) return false;
     if (player.hidden || player.hideAnim) player.ejectFromHide && player.ejectFromHide();
     if (LO.ambush) { LO.ambush.active = null; LO.ambush.gapUntil = 0; }
-    const fwd = new V3(); camera.getWorldDirection(fwd);
+    camera.getWorldDirection(_fwd);
     this.attacking = true; this.t = 0;
     LO.ambush.active = 'sneaky';
-    const back = new V3(-fwd.x, 0, -fwd.z);
-    if (back.lengthSq() < 1e-4) back.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
-    back.normalize();
-    this.root.position.set(player.pos.x + back.x * 1.5, 0, player.pos.z + back.z * 1.5);
+    _back.set(-_fwd.x, 0, -_fwd.z);
+    if (_back.lengthSq() < 1e-4) _back.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+    _back.normalize();
+    this.root.position.set(player.pos.x + _back.x * 1.5, 0, player.pos.z + _back.z * 1.5);
     this.root.lookAt(player.pos.x, 0, player.pos.z);
     this.root.visible = true;
     player.flickerForce = true;
@@ -113,7 +114,7 @@
       if (this.attacking) this.vanish(player, false);
       return;
     }
-    const fwd = new V3(); camera.getWorldDirection(fwd);
+    camera.getWorldDirection(_fwd);
     if (!this.attacking) {
       // it won't come while Siren Head is close enough to hear the flashlight
       const hearFlash = LO.NOISE.flashlight * 1.3 * (player.indoor ? 0.6 : 1);
@@ -129,10 +130,10 @@
       // creep up right behind you
       this.attacking = true; this.t = 0;
       LO.ambush.active = 'sneaky';
-      const back = new V3(-fwd.x, 0, -fwd.z);
-      if (back.lengthSq() < 1e-4) back.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
-      back.normalize();
-      this.root.position.set(player.pos.x + back.x * 1.5, 0, player.pos.z + back.z * 1.5);
+      _back.set(-_fwd.x, 0, -_fwd.z);
+      if (_back.lengthSq() < 1e-4) _back.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      _back.normalize();
+      this.root.position.set(player.pos.x + _back.x * 1.5, 0, player.pos.z + _back.z * 1.5);
       this.root.lookAt(player.pos.x, 0, player.pos.z);
       this.root.visible = true;
       player.flickerForce = true;
@@ -146,22 +147,22 @@
     if (!this.breath) this.breath = LO.audio.sneakyBreath(this.root.position);
     this.t += dt;
     // keep it pressed close behind you if you back away
-    const toIt = new V3(this.root.position.x - camera.position.x, 0, this.root.position.z - camera.position.z);
-    const dist = toIt.length();
+    _toIt.set(this.root.position.x - camera.position.x, 0, this.root.position.z - camera.position.z);
+    const dist = _toIt.length();
     if (dist > 2.2) {
-      toIt.normalize();
-      this.root.position.x = camera.position.x + toIt.x * 1.8;
-      this.root.position.z = camera.position.z + toIt.z * 1.8;
+      _toIt.normalize();
+      this.root.position.x = camera.position.x + _toIt.x * 1.8;
+      this.root.position.z = camera.position.z + _toIt.z * 1.8;
     }
     this.root.lookAt(player.pos.x, 0, player.pos.z);
     if (this.breath) this.breath.move(this.root.position);
-    this.eyes.forEach(e => { e.scale.y = 0.7 * (Math.random() < 0.03 ? 0.1 : 1); });
+    for (let i = 0; i < this.eyes.length; i++) { this.eyes[i].scale.y = 0.7 * (Math.random() < 0.03 ? 0.1 : 1); }
     // facing it in time makes it vanish
-    const f2 = new V3(fwd.x, 0, fwd.z);
-    if (f2.lengthSq() > 1e-4 && toIt.lengthSq() > 1e-4) {
-      f2.normalize();
-      toIt.normalize();
-      if (f2.dot(toIt) > FACE_COS) { this.vanish(player, true); return; }
+    _f2.set(_fwd.x, 0, _fwd.z);
+    if (_f2.lengthSq() > 1e-4 && _toIt.lengthSq() > 1e-4) {
+      _f2.normalize();
+      _toIt.normalize();
+      if (_f2.dot(_toIt) > FACE_COS) { this.vanish(player, true); return; }
     }
     if (this.t >= (this.window || WINDOW)) { this.vanish(player, false); return 'kill'; }
   };

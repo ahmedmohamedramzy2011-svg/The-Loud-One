@@ -21,7 +21,7 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true, forestRing: true, echoClosePause: true, townMap: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
@@ -92,6 +92,7 @@
   // ============================================================
   //  RENDERER / SCENE
   // ============================================================
+  let _isSoftwareGl = false;
   function createRenderer() {
     if (renderer) {
       renderer.dispose();
@@ -102,6 +103,12 @@
       powerPreference: 'high-performance',
       precision: S.quality === 'low' ? 'mediump' : 'highp',
     });
+    try {
+      const gl = renderer.getContext();
+      const dbg = gl && gl.getExtension && gl.getExtension('WEBGL_debug_renderer_info');
+      const rName = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '') : '';
+      _isSoftwareGl = /swiftshader|llvmpipe|softpipe|software|mesa offscreen|microsoft basic render/i.test(rName);
+    } catch (e) { _isSoftwareGl = false; }
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.enabled = S.shadows !== 'off';
@@ -116,7 +123,7 @@
   function applyDisplay() {
     if (!renderer) return;
     const rawDpr = window.devicePixelRatio || 1;
-    const capPr = S.quality === 'low' ? Math.min(rawDpr, 1.0) : Math.min(rawDpr, 2);
+    const capPr = (S.quality === 'low' || _isSoftwareGl) ? Math.min(rawDpr, 1.0) : Math.min(rawDpr, 2);
     const pr = Math.min(2.0, capPr * S.renderScale);
     renderer.setPixelRatio(pr);
     renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -148,6 +155,7 @@
   }
 
   function buildWorld() {
+    if (LO.Map && LO.Map.resetCache) LO.Map.resetCache();
     if (siren) siren.dispose();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x05070a);
@@ -556,12 +564,16 @@
     A.stopVoices();
     hideAllScreens();
     if (document.pointerLockElement) document.exitPointerLock();
-    player.enabled = false;
-    player.flashOn = false;
+    if (player) { player.enabled = false; player.flashOn = false; player.mapOpen = false; }
+    show('map-overlay', false);
+    const mb = $('map-hud-badge'); if (mb) mb.classList.remove('show', 'open');
+    document.body.classList.remove('map-open', 'has-map');
+    resetHudCache();
     A.setFlashlightBuzz(false); A.setHeartbeat(0); A.setTenant(0); A.setSilentOne(0);
     A.setStillness(false); document.body.classList.remove('still'); A.setMothFlutter(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
     A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+    A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
     A.setEnvHum && A.setEnvHum(0);
     $('silent-one').style.opacity = 0;
     if (worldDirty || state === 'ending' || state === 'credits' || state === 'dead') buildWorld();
@@ -661,6 +673,10 @@
     if (throwBtn) throwBtn.style.display = ver.rocks ? '' : 'none';
     lastEvidenceTime = gameTime; hintUntil = 0; hintTarget = null;
     player.enabled = true;
+    show('map-overlay', false);
+    const mb = $('map-hud-badge'); if (mb) mb.classList.remove('show', 'open');
+    document.body.classList.remove('map-open', 'has-map');
+    resetHudCache();
     state = 'play';
     show('hud');
     ui.fadeIn(1.5);
@@ -694,6 +710,9 @@
     if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
     state = 'paused';
     player.enabled = false;
+    player.mapOpen = false;
+    show('map-overlay', false);
+    document.body.classList.remove('map-open');
     if (sneaky && sneaky.pause) sneaky.pause();
     clearGlitch();
     show('pause');
@@ -701,6 +720,7 @@
     A.setFlashlightBuzz(false); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
     A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+    A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
     A.setEnvHum && A.setEnvHum(0);
   }
   function resume() {
@@ -770,11 +790,16 @@
     if (moths) { moths.root.visible = false; A.setMothFlutter(0); }
     state = 'ending';
     player.enabled = false;
+    player.mapOpen = false;
+    show('map-overlay', false);
+    const mb = $('map-hud-badge'); if (mb) mb.classList.remove('show', 'open');
+    document.body.classList.remove('map-open', 'has-map');
     if (document.pointerLockElement) document.exitPointerLock();
     clearGlitch();
     A.setFlashlightBuzz(false); A.setHeartbeat(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
     A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+    A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
     A.setEnvHum && A.setEnvHum(0);
     player.flashOn = false; player.flash.intensity = 0;
     hideAllScreens();
@@ -836,6 +861,7 @@
     ] },
     fastone: { title: 'TOO SLOW', tips: [
       'When The Fast One breaches the perimeter fence, sprint straight to the blue-outlined locker or dumpster.',
+      'In the forest with nowhere to hide, look directly at The Fast One when it gets close to drive it back into the trees.',
       'If safety is far away, an adrenaline surge doubles your sprint speed.',
     ] },
   };
@@ -860,6 +886,9 @@
     player.adrenaline = 0;
     player.enabled = false;
     player.flashOn = false;
+    player.mapOpen = false;
+    show('map-overlay', false);
+    document.body.classList.remove('map-open');
     A.stopVoices();
     A.setTenant(0);
     if (document.pointerLockElement) document.exitPointerLock();
@@ -880,6 +909,9 @@
     player.adrenaline = 0;
     player.enabled = false;
     player.flashOn = false;
+    player.mapOpen = false;
+    show('map-overlay', false);
+    document.body.classList.remove('map-open');
     A.stopVoices();
     if (document.pointerLockElement) document.exitPointerLock();
     siren.scripted = true;
@@ -891,6 +923,7 @@
     startDeathSound();
     A.playMusic(null, 0.5);
   }
+  const _dieMat = new THREE.Matrix4(), _dieQuat = new THREE.Quaternion(), _dieUp = new THREE.Vector3(0, 1, 0);
   function updateDying(dt) {
     dieT = deathClock(dt);
     const P = deathP || LO.TVFX.profile(S.fastDeath);
@@ -909,9 +942,9 @@
     const hp = siren.headWorldPos();
     const cam = camera;
     cam.position.set(player.pos.x + (Math.random() - 0.5) * 0.15, 1.4 + Math.min(1, dieT) * 0.6, player.pos.z + (Math.random() - 0.5) * 0.15);
-    const m = new THREE.Matrix4().lookAt(cam.position, hp, new THREE.Vector3(0, 1, 0));
-    const q = new THREE.Quaternion().setFromRotationMatrix(m);
-    cam.quaternion.slerp(q, Math.min(1, dt * 6));
+    _dieMat.lookAt(cam.position, hp, _dieUp);
+    _dieQuat.setFromRotationMatrix(_dieMat);
+    cam.quaternion.slerp(_dieQuat, Math.min(1, dt * 6));
     if (dieT > P.end && state === 'dying') finishDeath();
   }
   function finishDeath() {
@@ -922,6 +955,7 @@
       A.setSilentOne(0); A.setExposure(0); A.setMothFlutter(0); A.setTenant(0);
       A.setProximityAmbient && A.setProximityAmbient(0);
       A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
+      A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
       A.setEnvHum && A.setEnvHum(0);
       A.setStillness(false); document.body.classList.remove('still');
       $('silent-one').style.opacity = 0;
@@ -969,6 +1003,7 @@
     const ver = V();
     if (!ver.wind) {
       A.setWind(0, 0, 1.2);
+      A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.2);
       A.setStillness(false);
       document.body.classList.remove('still');
       world.updateWind(dt, 0.35, camera.position, gameTime);
@@ -982,6 +1017,7 @@
     gustT += dt;
     const gust = Math.max(0, Math.min(1, 0.45 + Math.sin(gustT * 0.31) * 0.3 + Math.sin(gustT * 0.83 + 1.7) * 0.25));
     A.setWind(still ? 0 : 0.26 * windStrength, gust, still ? 0.01 : 1.2);
+    A.setForestWindRustle && A.setForestWindRustle(still ? 0 : windStrength, gust, world.forestProximity ? world.forestProximity(player.pos) : 0, still ? 0.01 : 0.75);
     // when the wind dies, everything else dies with it: sounds, voices, text
     A.setStillness(still);
     document.body.classList.toggle('still', still);
@@ -996,28 +1032,78 @@
     angry: 'HE\'S ANGRY — GO SILENT!', hidden: 'HIDDEN — YOU MAKE NO SOUND',
   };
   let lastStatus = '', lastRootFilter = '', lastHideType = '';
+  const _hud = {};
+  const _hc = {
+    hasMap: null, mapOpen: null, noiseW: '', markLeft: '', stamW: '',
+    stamTired: null, stamCrit: null, stamLow: null, batW: '', batLow: null,
+    prompt: null, crossDisp: '', hpW: '', hpNum: '', hpLow: null,
+    vfOpen: null, vfLocked: null, vfInfo: '', vfFilm: '', subMode: ''
+  };
+  function hudEl(key, getter) { return _hud[key] || (_hud[key] = getter()); }
+  function resetHudCache() {
+    for (const k in _hc) _hc[k] = null;
+    _hc.noiseW = _hc.markLeft = _hc.stamW = _hc.batW = _hc.crossDisp = _hc.hpW = _hc.hpNum = _hc.vfInfo = _hc.vfFilm = _hc.subMode = '';
+    lastStatus = ''; lastHideType = '';
+  }
   function updateHUD(dt) {
-    const noisePct = Math.min(100, player.noiseRadius / 50 * 100);
-    $('noise-fill').style.width = noisePct + '%';
+    const verNow = V();
+    const hasMap = !!(player.hasMap && verNow.townMap);
+    const mapOpen = !!(player.mapOpen && hasMap);
+    if (_hc.hasMap !== hasMap) {
+      _hc.hasMap = hasMap;
+      document.body.classList.toggle('has-map', hasMap);
+      const badge = hudEl('badge', () => $('map-hud-badge'));
+      if (badge) badge.classList.toggle('show', hasMap);
+    }
+    if (_hc.mapOpen !== mapOpen) {
+      _hc.mapOpen = mapOpen;
+      document.body.classList.toggle('map-open', mapOpen);
+      const badge = hudEl('badge', () => $('map-hud-badge'));
+      if (badge) badge.classList.toggle('open', mapOpen);
+      show('map-overlay', mapOpen);
+    }
+    if (mapOpen && LO.Map) {
+      LO.Map.draw({ world, player, hintTarget, evidenceCount, evidenceNeeded: EVIDENCE_NEEDED, forestRing: !!verNow.forestRing });
+    }
+
+    const noiseW = Math.min(100, player.noiseRadius / 50 * 100).toFixed(1) + '%';
+    if (noiseW !== _hc.noiseW) { _hc.noiseW = noiseW; hudEl('noiseFill', () => $('noise-fill')).style.width = noiseW; }
+
     const d = siren.distToPlayer || 999;
-    $('bars').querySelector('.bar-mark').style.left = Math.min(99, d / 50 * 100) + '%';
-    $('stamina-fill').style.width = player.stamina + '%';
-    const stamBar = $('stamina-fill').parentNode;
+    const markLeft = Math.min(99, d / 50 * 100).toFixed(1) + '%';
+    if (markLeft !== _hc.markLeft) { _hc.markLeft = markLeft; hudEl('barMark', () => $('bars').querySelector('.bar-mark')).style.left = markLeft; }
+
+    const stamW = player.stamina.toFixed(1) + '%';
+    const stamBar = hudEl('stamBar', () => $('stamina-fill').parentNode);
+    if (stamW !== _hc.stamW) { _hc.stamW = stamW; hudEl('stamFill', () => $('stamina-fill')).style.width = stamW; }
     const isTired = !!(player.exhausted || player.windedTimer > 0);
-    stamBar.classList.toggle('tired', isTired);
-    stamBar.classList.toggle('critical', !isTired && player.stamina <= 25);
-    stamBar.classList.toggle('low', !isTired && player.stamina > 25 && player.stamina <= 55);
-    $('battery-fill').style.width = player.battery + '%';
-    $('battery-fill').parentNode.classList.toggle('low', player.battery < 15);
+    const isCrit = !isTired && player.stamina <= 25;
+    const isStamLow = !isTired && player.stamina > 25 && player.stamina <= 55;
+    if (isTired !== _hc.stamTired) { _hc.stamTired = isTired; stamBar.classList.toggle('tired', isTired); }
+    if (isCrit !== _hc.stamCrit) { _hc.stamCrit = isCrit; stamBar.classList.toggle('critical', isCrit); }
+    if (isStamLow !== _hc.stamLow) { _hc.stamLow = isStamLow; stamBar.classList.toggle('low', isStamLow); }
+
+    const batW = player.battery.toFixed(1) + '%';
+    if (batW !== _hc.batW) { _hc.batW = batW; hudEl('batFill', () => $('battery-fill')).style.width = batW; }
+    const batLow = player.battery < 15;
+    if (batLow !== _hc.batLow) { _hc.batLow = batLow; hudEl('batBar', () => $('battery-fill').parentNode).classList.toggle('low', batLow); }
+
     const st = siren.status(player);
     if (st !== lastStatus) {
       lastStatus = st;
-      $('sh-status').className = st;
-      $('sh-text').textContent = STATUS_TEXT[st];
+      hudEl('shStatus', () => $('sh-status')).className = st;
+      hudEl('shText', () => $('sh-text')).textContent = STATUS_TEXT[st];
     }
-    $('prompt').innerHTML = player.prompt;
-    $('crosshair').style.display = player.cameraUp ? 'none' : 'block';
-    const hideEl = $('hide-overlay');
+    if (player.prompt !== _hc.prompt) {
+      _hc.prompt = player.prompt;
+      hudEl('prompt', () => $('prompt')).innerHTML = player.prompt;
+    }
+    const crossDisp = (player.cameraUp || mapOpen) ? 'none' : 'block';
+    if (crossDisp !== _hc.crossDisp) {
+      _hc.crossDisp = crossDisp;
+      hudEl('crosshair', () => $('crosshair')).style.display = crossDisp;
+    }
+    const hideEl = hudEl('hideEl', () => $('hide-overlay'));
     show('hide-overlay', !!player.hideView);
     const hideType = player.hideView ? (player.hideSpotType || 'locker') : '';
     if (hideType !== lastHideType) {
@@ -1031,11 +1117,11 @@
     if (player.hidden) {
       // a red eye opens in the dark and keeps coming closer until it reaches you
       tenantEye = Math.max(0, (tf - 0.25) / 0.75);
-      const ex = $('tenant-eye');
+      const ex = hudEl('tenantEye', () => $('tenant-eye'));
       ex.style.opacity = tenantEye > 0 ? Math.min(1, 0.35 + tenantEye) : 0;
       ex.style.transform = `translate(-50%, -50%) scale(${(0.18 + Math.pow(tenantEye, 1.6) * 3.6).toFixed(3)})`;
-      $('tenant-red').style.opacity = (Math.pow(tenantEye, 1.3) * 0.95).toFixed(3);
-      $('hide-text').textContent = tenantEye > 0 ? 'Get out of there' : 'HIDING — press E to leave';
+      hudEl('tenantRed', () => $('tenant-red')).style.opacity = (Math.pow(tenantEye, 1.3) * 0.95).toFixed(3);
+      hudEl('hideText', () => $('hide-text')).textContent = tenantEye > 0 ? 'Get out of there' : 'HIDING — press E to leave';
       hideEl.classList.toggle('restless', tenantEye > 0.6);
       A.setTenant(Math.max(0, (tf - 0.3) / 0.7));
     } else {
@@ -1043,7 +1129,7 @@
     }
 
     // the Exposure, seen only through the viewfinder
-    const ex = $('exposure');
+    const ex = hudEl('exposure', () => $('exposure'));
     const ek = Math.max(0, Math.min(1, (player.exposure - LO.EXPO.SHOW) / (LO.EXPO.LUNGE - LO.EXPO.SHOW)));
     if (player.zoom > 0.5 && player.exposure >= LO.EXPO.SHOW - 0.5) {
       ex.style.opacity = 0.25 + ek * 0.75;
@@ -1052,35 +1138,42 @@
       ex.classList.toggle('twitch', ek > 0.6);
       A.setExposure(0.2 + ek * 0.8);
     } else {
-      ex.style.opacity = 0; ex.classList.remove('twitch');
+      if (ex.style.opacity !== '0') ex.style.opacity = 0;
+      ex.classList.remove('twitch');
       A.setExposure(0);
     }
 
     // health
-    $('health-fill').style.width = player.health + '%';
-    $('health-num').textContent = Math.ceil(player.health);
-    $('health-fill').parentNode.classList.toggle('low', player.health <= 30);
+    const hpW = player.health.toFixed(1) + '%';
+    const hpNum = String(Math.ceil(player.health));
+    const hpLow = player.health <= 30;
+    if (hpW !== _hc.hpW) { _hc.hpW = hpW; hudEl('hpFill', () => $('health-fill')).style.width = hpW; }
+    if (hpNum !== _hc.hpNum) { _hc.hpNum = hpNum; hudEl('hpNum', () => $('health-num')).textContent = hpNum; }
+    if (hpLow !== _hc.hpLow) { _hc.hpLow = hpLow; hudEl('hpBar', () => $('health-fill').parentNode).classList.toggle('low', hpLow); }
 
     // the Silent One: warnings from 20s of silence, attack from 30s
     const st2 = player.silentTime, W2 = LO.SILENT.WARN, AT = LO.SILENT.ATTACK;
-    const so = $('silent-one');
+    const so = hudEl('silentOne', () => $('silent-one'));
     if (st2 >= W2) {
       const k = Math.min(1, (st2 - W2) / (AT - W2));
       const attacking = st2 >= AT;
       so.style.opacity = attacking ? 1 : 0.25 + k * 0.6;
       so.classList.toggle('attack', attacking);
       so.style.setProperty('--k', k);
-      $('so-text').textContent = attacking ? 'MAKE A SOUND' : k < 0.5 ? 'it\'s too quiet...' : 'something is standing very close to you...';
+      hudEl('soText', () => $('so-text')).textContent = attacking ? 'MAKE A SOUND' : k < 0.5 ? 'it\'s too quiet...' : 'something is standing very close to you...';
       A.setSilentOne(attacking ? 1 : 0.2 + k * 0.6);
     } else {
-      so.style.opacity = 0; so.classList.remove('attack');
+      if (so.style.opacity !== '0') so.style.opacity = 0;
+      so.classList.remove('attack');
       A.setSilentOne(0);
     }
-    show('viewfinder', player.zoom > 0.5);
+    const vfOpen = player.zoom > 0.5;
+    if (vfOpen !== _hc.vfOpen) { _hc.vfOpen = vfOpen; show('viewfinder', vfOpen); }
     // the Sneaky One makes your camera glitch too, and Siren Head smashes cause dizziness blur
-    const glitch = sneaky && sneaky.attacking && player.zoom > 0.5;
-    $('viewfinder').style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
-    const rootEl = document.getElementById('game-root');
+    const glitch = !!(sneaky && sneaky.attacking && vfOpen);
+    const vfEl = hudEl('viewfinder', () => $('viewfinder'));
+    vfEl.style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
+    const rootEl = hudEl('gameRoot', () => document.getElementById('game-root'));
     const nextFilter = (glitch && Math.random() < 0.3)
       ? 'brightness(0.15) contrast(1.6)'
       : (player.dizzy > 0.04 ? `blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)` : '');
@@ -1088,11 +1181,14 @@
       lastRootFilter = nextFilter;
       rootEl.style.filter = nextFilter;
     }
-    if (player.zoom > 0.5) {
+    if (vfOpen) {
       const vf = player.vfTarget;
-      $('viewfinder').classList.toggle('locked', !!(vf && vf.ok));
-      $('vf-info').textContent = !vf ? 'NO SUBJECT' : vf.ok ? 'EVIDENCE: ' + vf.ev.name.toUpperCase() : 'MOVE CLOSER';
-      $('vf-film').textContent = `EVIDENCE ${evidenceCount}/${EVIDENCE_NEEDED}`;
+      const locked = !!(vf && vf.ok);
+      const vfInfo = !vf ? 'NO SUBJECT' : vf.ok ? 'EVIDENCE: ' + vf.ev.name.toUpperCase() : 'MOVE CLOSER';
+      const vfFilm = `EVIDENCE ${evidenceCount}/${EVIDENCE_NEEDED}`;
+      if (locked !== _hc.vfLocked) { _hc.vfLocked = locked; vfEl.classList.toggle('locked', locked); }
+      if (vfInfo !== _hc.vfInfo) { _hc.vfInfo = vfInfo; hudEl('vfInfo', () => $('vf-info')).textContent = vfInfo; }
+      if (vfFilm !== _hc.vfFilm) { _hc.vfFilm = vfFilm; hudEl('vfFilm', () => $('vf-film')).textContent = vfFilm; }
     }
     // dynamic subtitle placement + intense readability mode
     if (A.setSubMode) {
@@ -1101,12 +1197,13 @@
         (sneaky && sneaky.attacking) ||
         st2 >= W2 ||
         tenantEye > 0.05 ||
-        (player.zoom > 0.5 && player.exposure >= LO.EXPO.SHOW);
+        (vfOpen && player.exposure >= LO.EXPO.SHOW);
       let mode = '';
-      if (player.zoom > 0.5) mode += 'mode-viewfinder ';
+      if (vfOpen) mode += 'mode-viewfinder ';
       if (player.hideView) mode += 'mode-hiding ';
       if (intense) mode += 'mode-intense';
-      A.setSubMode(mode.trim());
+      const trimmed = mode.trim();
+      if (trimmed !== _hc.subMode) { _hc.subMode = trimmed; A.setSubMode(trimmed); }
     }
   }
 
@@ -1151,11 +1248,16 @@
         if (state === 'play' && fastone.update(simDt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
         const verNow = V();
         const birdDisturbed = !!(player.sprinting || player.noiseRadius >= 28 || player.spike >= 12);
+        const threats = [];
+        if (siren && siren.pos) threats.push({ pos: siren.pos, radius: 24 });
+        if (fastone && fastone.state !== 'idle' && fastone.pos) threats.push({ pos: fastone.pos, radius: 20 });
         world.update(simDt, gameTime, {
           pos: player.pos,
           disturbed: birdDisturbed && !!verNow.birdFade,
           still: A.still,
           enabled: !!verNow.forestBirds,
+          threats: verNow.forestRing ? threats : null,
+          onScatter: verNow.forestRing ? (p => A.birdScatter && A.birdScatter(p)) : null,
         });
         if (state === 'play') {
           updateHUD(simDt);
@@ -1266,6 +1368,10 @@
       }
     });
     $('hint-btn').addEventListener('click', e => { e.stopPropagation(); useHint(); });
+    const mapBadge = $('map-hud-badge');
+    if (mapBadge) mapBadge.addEventListener('click', e => { e.stopPropagation(); if (player) player.toggleMap(); });
+    const mapClose = $('map-close-btn');
+    if (mapClose) mapClose.addEventListener('click', e => { e.stopPropagation(); if (player) player.toggleMap(false); });
     window.addEventListener('resize', applyDisplay);
     LO.events.addEventListener('settings', () => applyDisplay());
   }

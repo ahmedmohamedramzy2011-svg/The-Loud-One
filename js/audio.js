@@ -177,9 +177,9 @@
     const t = ctx.currentTime;
     if (on) {
       heartAmt = 0;
-      [buzz && buzz.g, wind && wind.g, wind && wind.wg, tenant && tenant.g, tenant && tenant.og,
-       silent && silent.og, silent && silent.sg, moth && moth.g, expo && expo.g1, expo && expo.g2,
-       proxAmb && proxAmb.out, envHum && envHum.g, birdBus, worldBus]
+      [buzz && buzz.g, wind && wind.g, wind && wind.wg, forestWind && forestWind.g1, forestWind && forestWind.g2,
+       tenant && tenant.g, tenant && tenant.og, silent && silent.og, silent && silent.sg,
+       moth && moth.g, expo && expo.g1, expo && expo.g2, proxAmb && proxAmb.out, envHum && envHum.g, birdBus, worldBus]
         .forEach(g => { if (g && g.gain) { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0, t); } });
     } else if (worldBus && !A.still) {
       worldBus.gain.cancelScheduledValues(t); worldBus.gain.setTargetAtTime(1, t, 0.3);
@@ -264,10 +264,30 @@
   A.setPannerPos = (p, pos) => ctx && setPannerPos(p, pos);
 
   // ---------- player SFX ----------
-  A.footstep = function (kind, indoor) {
+  A.footstep = function (kind, indoor, forest) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const vol = kind === 'run' ? 0.5 : kind === 'crouch' ? 0.09 : 0.23;
+    // crisp dry pine-needle & twig crunch overlay when walking on forest ground
+    if (forest && !indoor) {
+      const nC = noiseSrc(false, false);
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+      bp.frequency.value = (kind === 'run' ? 3200 : 2500) + Math.random() * 900; bp.Q.value = 1.25;
+      const gC = ctx.createGain();
+      env(gC, t, 0.003, vol * (kind === 'run' ? 0.95 : kind === 'crouch' ? 0.55 : 0.78), 0.095, 0.0001);
+      nC.connect(bp); bp.connect(gC); gC.connect(sfxBus);
+      nC.start(t); nC.stop(t + 0.14);
+      const hits = kind === 'crouch' ? 1 : 2;
+      for (let i = 0; i < hits; i++) {
+        const dt = i === 0 ? 0.008 : 0.032 + Math.random() * 0.025;
+        const tw = noiseSrc(false, false);
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3400;
+        const gt = ctx.createGain();
+        env(gt, t + dt, 0.001, vol * (i === 0 ? 0.72 : 0.48), 0.028, 0.0001);
+        tw.connect(hp); hp.connect(gt); gt.connect(sfxBus);
+        tw.start(t + dt); tw.stop(t + dt + 0.05);
+      }
+    }
     const stepBufs = [samples.step1, samples.step2, samples.step3, samples.step4, samples.step5].filter(Boolean);
     if (stepBufs.length) {
       const s = ctx.createBufferSource();
@@ -443,6 +463,51 @@
     wind.wf.frequency.setTargetAtTime(700 + gust * 700, t, 0.6);
   };
 
+  // dynamic pine-needle canopy rustle & creaking boughs driven by game wind setting & forest proximity
+  let forestWind = null;
+  A.setForestWindRustle = function (windVol, gustAmt, forestProx, tc) {
+    if (!ctx) return;
+    if (A.worldMuted || A.still) {
+      if (forestWind) {
+        const t = ctx.currentTime;
+        forestWind.g1.gain.setTargetAtTime(0, t, 0.15);
+        forestWind.g2.gain.setTargetAtTime(0, t, 0.15);
+      }
+      return;
+    }
+    const w = Math.max(0, Math.min(1, windVol || 0));
+    const p = Math.max(0, Math.min(1, forestProx || 0));
+    const gust = gustAmt === undefined ? 0.5 : Math.max(0, Math.min(1, gustAmt));
+    if (!forestWind) {
+      if (w <= 0.005 || p <= 0.01) return;
+      // pine needle canopy rustle
+      const n1 = noiseSrc(false, true);
+      const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 1650; f1.Q.value = 1.1;
+      const lfo1 = ctx.createOscillator(); lfo1.frequency.value = 0.22;
+      const lg1 = ctx.createGain(); lg1.gain.value = 520;
+      lfo1.connect(lg1); lg1.connect(f1.frequency);
+      const g1 = ctx.createGain(); g1.gain.value = 0;
+      n1.connect(f1); f1.connect(g1); g1.connect(worldBus);
+      n1.start(); lfo1.start();
+      // heavy tree-branch sway rustle
+      const n2 = noiseSrc(true, true);
+      const f2 = ctx.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 340; f2.Q.value = 1.7;
+      const lfo2 = ctx.createOscillator(); lfo2.frequency.value = 0.14;
+      const lg2 = ctx.createGain(); lg2.gain.value = 110;
+      lfo2.connect(lg2); lg2.connect(f2.frequency);
+      const g2 = ctx.createGain(); g2.gain.value = 0;
+      n2.connect(f2); f2.connect(g2); g2.connect(worldBus);
+      n2.start(); lfo2.start();
+      forestWind = { g1, g2, f1, f2 };
+    }
+    const t = ctx.currentTime, smoothT = tc || 0.75;
+    const envLevel = w * (0.25 + gust * 0.85) * (0.08 + p * 0.92);
+    forestWind.g1.gain.setTargetAtTime(envLevel * 0.055, t, smoothT);
+    forestWind.g2.gain.setTargetAtTime(envLevel * 0.095, t, smoothT);
+    forestWind.f1.frequency.setTargetAtTime(1350 + gust * 1150, t, 0.5);
+    forestWind.f2.frequency.setTargetAtTime(280 + gust * 180, t, 0.5);
+  };
+
   // procedural rustling forest foliage + eerie wind chimes driven by entity proximity (0..1)
   let proxAmb = null, proxLevel = 0, nextChimeAt = 0;
   const CHIME_NOTES = [523.25, 587.33, 622.25, 783.99, 932.33, 1046.5];
@@ -603,6 +668,35 @@
       nt += dur + (species === 1 ? 0.06 + Math.random() * 0.05 : 0.16 + Math.random() * 0.22);
     }
   }
+
+  // startled wing-flaps & alarm chirps when a forest flock scatters overhead
+  A.birdScatter = function (pos) {
+    if (!ctx || A.still || A.worldMuted || !pos) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 18, 0.55);
+    p.connect(worldBus);
+    for (let i = 0; i < 5; i++) {
+      const ft = t + i * (0.042 + Math.random() * 0.028);
+      const n = noiseSrc(false, false);
+      const hp = ctx.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 1550 + i * 160; hp.Q.value = 1.2;
+      const g = ctx.createGain();
+      env(g, ft, 0.004, 0.14 - i * 0.015, 0.065, 0.0001);
+      n.connect(hp); hp.connect(g); g.connect(p);
+      n.start(ft); n.stop(ft + 0.1);
+    }
+    for (let c = 0; c < 3; c++) {
+      const ct = t + 0.02 + c * (0.08 + Math.random() * 0.06);
+      const o = ctx.createOscillator(); o.type = 'sine';
+      const f0 = 2100 + Math.random() * 700;
+      o.frequency.setValueAtTime(f0, ct);
+      o.frequency.exponentialRampToValueAtTime(f0 * 1.32, ct + 0.045);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.92, ct + 0.09);
+      const g = ctx.createGain();
+      env(g, ct, 0.005, 0.06, 0.09, 0.0001);
+      o.connect(g); g.connect(p);
+      o.start(ct); o.stop(ct + 0.12);
+    }
+  };
 
   // subtle low mechanical hum when standing/moving near large noisy machinery (HVAC, transformers, water tanks)
   let envHum = null;

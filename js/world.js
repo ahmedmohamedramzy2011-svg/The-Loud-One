@@ -53,6 +53,8 @@
       fenceDebrisGroup: new THREE.Group(),
       barricades: [],
       noisyObjects: [],
+      trails: [],
+      lookout: null,
       _gridVersion: 0,
     };
     W.root.add(W.debrisGroup);
@@ -162,6 +164,7 @@
       amberBeacon: new THREE.MeshBasicMaterial({ color: 0xff9b28 }),
       water: mat({ map: T('metal', { color: '#5a6066' }), roughness: 0.5, metalness: 0.5 }),
       footprint: new THREE.MeshLambertMaterial({ map: T('footprint', { size: 256 }), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+      trail: mat({ map: T('trail') }),
     };
     M.carPaints = [0x5b1d1a, 0x1f2f4a, 0x3d3d3a, 0x7b6a45, 0x2e3d2c, 0x8a8a86].map(c => mat({ color: c, roughness: 0.5, metalness: 0.3 }));
     W.mat = mat; W.M = M;
@@ -184,6 +187,45 @@
       if (curB) curB.colliders.push(c);
       return c;
     }
+    const COL_CELL = 16;
+    const _colGrid = new Map();
+    let _indexedCols = 0;
+    let _colQSeq = 0;
+    const _colQOut = [];
+    function indexCollider(c) {
+      const gx0 = Math.floor(c.minX / COL_CELL), gx1 = Math.floor(c.maxX / COL_CELL);
+      const gz0 = Math.floor(c.minZ / COL_CELL), gz1 = Math.floor(c.maxZ / COL_CELL);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          const k = ((gx + 256) << 12) | (gz + 256);
+          let bucket = _colGrid.get(k);
+          if (!bucket) { bucket = []; _colGrid.set(k, bucket); }
+          bucket.push(c);
+        }
+      }
+    }
+    W.queryColliders = function (x, z, r) {
+      while (_indexedCols < W.colliders.length) indexCollider(W.colliders[_indexedCols++]);
+      _colQOut.length = 0;
+      _colQSeq++;
+      const rad = r || 0;
+      const gx0 = Math.floor((x - rad) / COL_CELL), gx1 = Math.floor((x + rad) / COL_CELL);
+      const gz0 = Math.floor((z - rad) / COL_CELL), gz1 = Math.floor((z + rad) / COL_CELL);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          const bucket = _colGrid.get(((gx + 256) << 12) | (gz + 256));
+          if (!bucket) continue;
+          for (let i = 0; i < bucket.length; i++) {
+            const c = bucket[i];
+            if (c._qSeq !== _colQSeq) {
+              c._qSeq = _colQSeq;
+              _colQOut.push(c);
+            }
+          }
+        }
+      }
+      return _colQOut;
+    };
     function walkSurface(surf) {
       surf.disabled = false;
       W.walkSurfaces.push(surf);
@@ -444,6 +486,7 @@
         light.position.copy(wp); W.root.add(light);
         const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex('rgba(255,210,150,0.6)'), depthWrite: false, transparent: true }));
         glow.scale.set(3, 3, 1); glow.position.copy(wp); W.root.add(glow);
+        head.userData.keepDynamic = true; light.userData.keepDynamic = true; glow.userData.keepDynamic = true;
         W.flickers.push({ light, head, glow, base: 1.4, mode: state, t: rand() * 10, on: true });
       }
     }
@@ -452,6 +495,7 @@
     function dumpster(x, z, ry, baseY) {
       baseY = baseY || 0;
       const g = new THREE.Group();
+      g.userData.keepDynamic = true;
       const b = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.18, 1.3), M.dumpster); b.position.y = 0.79; g.add(b);
       const rim = new THREE.Mesh(new THREE.BoxGeometry(2.28, 0.08, 1.38), M.dumpster); rim.position.y = 1.4; g.add(rim);
       // ribs and side bars
@@ -486,6 +530,7 @@
     function locker(x, z, ry, baseY) {
       baseY = baseY !== undefined ? baseY : 0.14;
       const g = new THREE.Group();
+      g.userData.keepDynamic = true;
       const W2 = 0.9, H2 = 2.0, D2 = 0.68, t = 0.03;
       const part = (w, h, d, px, py, pz, m) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m || M.locker); o.position.set(px, py, pz); g.add(o); return o; };
       const back = part(W2, H2, t, 0, H2 / 2, -D2 / 2 + t / 2);
@@ -534,6 +579,7 @@
     const batteryMat = new THREE.MeshBasicMaterial({ color: 0xffe066 });
     function battery(x, y, z) {
       const g = new THREE.Group();
+      g.userData.keepDynamic = true;
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.26, 6), mat({ color: 0x222222 }));
       const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.072, 0.08, 6), batteryMat);
       cap.position.y = 0.09; g.add(body, cap);
@@ -742,12 +788,27 @@
       [-tw * 0.42, tw * 0.42].forEach(lx => [-0.32, 0.32].forEach(ly => {
         M2(0.08, 0.08, 0.65, M.wood, lx, 0.42 + ly, -0.30, 0.18, 0, 0);
       }));
-      // overturned chairs stacked/wedged against the table
+      // overturned chairs stacked/wedged against the table (complete with 4 legs)
       const chMat = pick(FABRICS);
-      M2(0.46, 0.06, 0.46, chMat, -tw * 0.28, 0.78, 0.18, 0.85, 0.4, 0.55);
-      M2(0.46, 0.52, 0.06, chMat, -tw * 0.28, 1.02, 0.05, 0.85, 0.4, 0.55);
-      M2(0.44, 0.06, 0.44, M.wood, tw * 0.26, 0.42, -0.25, -0.65, -0.5, 0.4);
-      M2(0.44, 0.48, 0.06, M.wood, tw * 0.26, 0.68, -0.18, -0.65, -0.5, 0.4);
+      const addTippedChair = (seatMat, w, backH, px, py, pz, rx, ry, rz) => {
+        const cg = new THREE.Group();
+        const addP = (pw, ph, pd, matC, lx, ly, lz) => {
+          const o = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, pd), matC);
+          o.position.set(lx, ly, lz);
+          cg.add(o);
+        };
+        addP(w, 0.06, w, seatMat, 0, 0, 0);
+        addP(w, backH, 0.06, seatMat, 0, backH * 0.5, -w * 0.5 + 0.03);
+        const legOff = w * 0.40;
+        [[-legOff, -legOff], [legOff, -legOff], [-legOff, legOff], [legOff, legOff]].forEach(([lx, lz]) => {
+          addP(0.046, 0.40, 0.046, M.wood, lx, -0.21, lz);
+        });
+        cg.position.set(px, py, pz);
+        cg.rotation.set(rx, ry, rz);
+        g.add(cg);
+      };
+      addTippedChair(chMat, 0.46, 0.52, -tw * 0.28, 0.78, 0.18, 0.85, 0.4, 0.55);
+      addTippedChair(M.wood, 0.44, 0.48, tw * 0.26, 0.42, -0.25, -0.65, -0.5, 0.4);
       // wooden crate & fallen shelf plank wedged at an angle
       M2(0.58, 0.52, 0.55, M.wood, tw * 0.22, 0.26, 0.16, 0, 0.28, 0);
       M2(0.18, 1.35, 0.42, M.wood, -tw * 0.36, 0.70, -0.08, 0.12, -0.3, 0.48);
@@ -1603,12 +1664,15 @@
             });
             const chMat = pick(FABRICS);
             [-0.45, 0.45].forEach(ox => {
-              decoBox(chMat, 0.42, 0.06, 0.42, p.x + ox, baseY + 0.44, p.z - 0.72);
-              decoBox(chMat, 0.42, 0.46, 0.06, p.x + ox, baseY + 0.68, p.z - 0.90);
-              decoBox(chMat, 0.42, 0.06, 0.42, p.x + ox, baseY + 0.44, p.z + 0.72);
-              decoBox(chMat, 0.42, 0.46, 0.06, p.x + ox, baseY + 0.68, p.z + 0.90);
+              [[-0.72, -0.90], [0.72, 0.90]].forEach(([seatZ, backZ]) => {
+                decoBox(chMat, 0.42, 0.06, 0.42, p.x + ox, baseY + 0.44, p.z + seatZ);
+                decoBox(chMat, 0.42, 0.46, 0.06, p.x + ox, baseY + 0.68, p.z + backZ);
+                [-0.16, 0.16].forEach(lx => [-0.16, 0.16].forEach(lz => {
+                  decoBox(M.wood, 0.048, 0.41, 0.048, p.x + ox + lx, baseY + 0.205, p.z + seatZ + lz);
+                }));
+              });
             });
-            collider(p.x - 0.9, p.x + 0.9, p.z - 0.9, p.z + 0.9, baseY + 0.8, baseY);
+            collider(p.x - 0.9, p.x + 0.9, p.z - 1.0, p.z + 1.0, baseY + 0.8, baseY);
           },
           placeCrates(a, bPos, baseY) {
             const p = F.point(a, bPos);
@@ -1770,13 +1834,14 @@
       curB = null;
     }
 
-    function buildClosed(cx, cz, L, D, H, axis, sign) {
+    function buildClosed(cx, cz, L, D, H, axis, sign, opts) {
+      opts = opts || {};
       const F = frame(cx, cz, axis, sign, L, D);
       const facade = pick(M.walls);
       const [x0, x1, z0, z1] = F.rect(-L / 2, L / 2, -D / 2, D / 2);
       const w = x1 - x0, d = z1 - z0;
       const b = {
-        id: W.buildings.length, type: 'closed', sheriff: false,
+        id: W.buildings.length, type: 'closed', sheriff: false, outskirt: !!opts.outskirt,
         cx, cz, minX: x0, maxX: x1, minZ: z0, maxZ: z1, L, D, H,
         group: new THREE.Group(), deco: new Map(), colliders: [], occluders: [], hideSpots: [],
         interior: null, debrisGroup: null, debrisColliders: [], debrisOccluders: [],
@@ -1797,7 +1862,7 @@
       const doorA = R(-L / 4, L / 4);
       const dp = F.point(doorA, D / 2 + 0.05);
       const bp = F.point(doorA, D / 2 + 0.11);
-      W.closedFronts.push({ F, L, D, H, doorA, axis, building: b });
+      if (!opts.outskirt) W.closedFronts.push({ F, L, D, H, doorA, axis, building: b });
       decorate(x0, x1, z0, z1, H, F, { awning: rand() < 0.25, doorA, awningMat: pick([mat({ color: 0x5a1f1a }), mat({ color: 0x2c4a2a }), mat({ color: 0x4a3f1f })]) });
       const door = box(axis === 'z' ? 1.6 : 0.1, 2.6, axis === 'z' ? 0.1 : 1.6, M.wood, dp.x, 1.3, dp.z);
       for (let i = 0; i < 3; i++) {
@@ -2284,7 +2349,8 @@
     // key: "blockI,blockJ,lotX,lotZ" (lotX/lotZ = -1 | 1)
     const SPECIAL = {
       '0,2,1,-1': { type: 'enter', kind: 'house' },
-      '1,0,-1,1': { type: 'enter', kind: 'shop' },          // near spawn
+      '1,0,-1,1': { type: 'enter', kind: 'shop' },          // near spawn (right)
+      '2,0,-1,-1': { type: 'enter', kind: 'shop' },         // near spawn (left — Town Map v2.7.2+)
       '2,1,-1,-1': { type: 'enter', kind: 'office' },
       '3,1,1,1': { type: 'enter', kind: 'house' },
       '0,0,1,1': { type: 'enter', kind: 'office' },
@@ -2307,6 +2373,7 @@
     }
 
     let enterCount = 0;
+    W.spawnLeftBuilding = null;
     for (let bi = 0; bi < NB; bi++) for (let bj = 0; bj < NB; bj++) {
       const bx = BLOCK_C[bi], bz = BLOCK_C[bj];
       for (const lx of [-1, 1]) for (const lz of [-1, 1]) {
@@ -2331,6 +2398,7 @@
         if (type === 'enter') {
           enterCount++;
           buildEnterable(cx, cz, L, D, Math.max(H, 6), axis, sign, (sp && sp.kind) || pick(['house', 'shop', 'office', 'house']), sp);
+          if (key === '2,0,-1,-1') W.spawnLeftBuilding = W.enterables[W.enterables.length - 1];
         } else if (type === 'closed') {
           buildClosed(cx, cz, L, D, H, axis, sign);
         } else if (type === 'ruin') {
@@ -2357,6 +2425,32 @@
         const dz = bz + (ry ? R(-11, 11) : R(-1.2, 1.2));
         if (tryPlaceDumpster(dx, dz, ry + (rand() < 0.5 ? Math.PI : 0), 0.35)) break;
       }
+    }
+    // Assign deterministic human-readable POI labels to every enterable building
+    {
+      let hIdx = 0, sIdx = 0, oIdx = 0;
+      W.enterables.forEach(ent => {
+        if (ent.sheriff) {
+          ent.poiLabel = 'Sheriff HQ';
+          ent.poiShort = 'SHERIFF HQ';
+        } else if (ent.kind === 'shop') {
+          sIdx++;
+          ent.poiLabel = `Shop ${sIdx}`;
+          ent.poiShort = `SHOP ${sIdx}`;
+        } else if (ent.kind === 'office') {
+          oIdx++;
+          ent.poiLabel = `Office ${oIdx}`;
+          ent.poiShort = `OFFICE ${oIdx}`;
+        } else {
+          hIdx++;
+          ent.poiLabel = `House ${hIdx}`;
+          ent.poiShort = `HOUSE ${hIdx}`;
+        }
+        if (ent.building) {
+          ent.building.poiLabel = ent.poiLabel;
+          ent.building.poiShort = ent.poiShort;
+        }
+      });
     }
 
     // =========================================================
@@ -2496,6 +2590,7 @@
         const s = pick(STREETS), a = R(-HALF + 10, HALF - 10), off = R(-4.5, 4.5);
         const v = rand() < 0.5;
         const m = new THREE.Mesh(rg, rm);
+        m.userData.keepDynamic = true;
         m.position.set(v ? s + off : a, 0.12, v ? a : s + off);
         m.rotation.set(R(0, 3), R(0, 3), 0);
         W.root.add(m);
@@ -2529,10 +2624,26 @@
     // =========================================================
     //  TOWN EDGE, ENTRANCE, FOREST
     // =========================================================
-    // invisible perimeter
+    // playable perimeter (v2.7+ opens a ~39m Woodland Perimeter Ring outside town fences)
+    const forestRing = !LO.ver || !!LO.ver().forestRing;
     const E = HALF + 3;
-    collider(-E - 5, -E, -E - 5, E + 5); collider(E, E + 5, -E - 5, E + 5);
-    collider(-E, E, E, E + 5); collider(-E, E, -E - 5, -E);
+    const OUTER_E = forestRing ? HALF + 42 : E;
+    W.E = E;
+    W.OUTER_E = OUTER_E;
+    W.isForest = function (p) {
+      if (!forestRing || !p) return false;
+      const ax = Math.abs(p.x), az = Math.abs(p.z);
+      return (ax > E || az > E) && ax <= OUTER_E + 2 && az <= OUTER_E + 2;
+    };
+    W.forestProximity = function (p) {
+      if (!forestRing || !p) return 0;
+      const d = Math.max(Math.abs(p.x), Math.abs(p.z));
+      return Math.max(0, Math.min(1, (d - (HALF - 18)) / 36));
+    };
+    collider(-OUTER_E - 5, -OUTER_E, -OUTER_E - 5, OUTER_E + 5);
+    collider(OUTER_E, OUTER_E + 5, -OUTER_E - 5, OUTER_E + 5);
+    collider(-OUTER_E, OUTER_E, OUTER_E, OUTER_E + 5);
+    collider(-OUTER_E, OUTER_E, -OUTER_E - 5, -OUTER_E);
     // break-ready weathered timber perimeter fence (posts, rails, spaced slats with open gaps, grounded at y = 0)
     W.fences = [];
     const fenceMat = mat({ map: T('wood'), color: 0x7a6e5f, vertexColors: true, roughness: 0.95, metalness: 0.02 });
@@ -2596,17 +2707,95 @@
       merged.computeBoundingSphere();
       return merged;
     })();
+    // Static perimeter wing panels bridging [-112.5..-110.0] (2.5m corner gap) and [+112.0..+112.5] (0.5m end seam)
+    const makeWingFenceGeo = (width, slatXs) => {
+      const list = [];
+      const addPart = (w, h, d, x, y, z, cr, cg, cb, verticalGrain) => {
+        const g = new THREE.BoxGeometry(w, h, d);
+        const uvs = g.attributes.uv;
+        for (let i = 0; i < uvs.count; i++) {
+          const u = uvs.getX(i), v = uvs.getY(i);
+          if (verticalGrain) uvs.setXY(i, v * 0.85, u * 0.45);
+          else uvs.setXY(i, u * 1.4, v * 0.35);
+        }
+        g.translate(x, y, z);
+        const nonIdx = g.index ? g.toNonIndexed() : g;
+        if (g.index) g.dispose();
+        const cnt = nonIdx.attributes.position.count;
+        const col = new Float32Array(cnt * 3);
+        for (let i = 0; i < cnt; i++) { col[i * 3] = cr; col[i * 3 + 1] = cg; col[i * 3 + 2] = cb; }
+        nonIdx.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        list.push(nonIdx);
+      };
+      addPart(width, 0.10, 0.06, 0, 0.44, -0.04, 0.56, 0.51, 0.45, false);
+      addPart(width, 0.10, 0.06, 0, 1.92, -0.04, 0.56, 0.51, 0.45, false);
+      addPart(width, 0.035, 0.035, 0, 2.28, 0, 0.24, 0.25, 0.27, false);
+      slatXs.forEach((sx, idx) => {
+        const shade = 0.62 + ((idx * 29) % 5) * 0.045;
+        addPart(0.22, 2.04, 0.045, sx, 0.12 + 1.02, 0.03, shade, shade * 0.94, shade * 0.85, true);
+      });
+      let n = 0; list.forEach(g => { n += g.attributes.position.count; });
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2), col = new Float32Array(n * 3);
+      let o = 0;
+      list.forEach(g => {
+        pos.set(g.attributes.position.array, o * 3);
+        nor.set(g.attributes.normal.array, o * 3);
+        uv.set(g.attributes.uv.array, o * 2);
+        col.set(g.attributes.color.array, o * 3);
+        o += g.attributes.position.count;
+        g.dispose();
+      });
+      const merged = new THREE.BufferGeometry();
+      merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      merged.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      merged.computeBoundingSphere();
+      return merged;
+    };
+    const wingFenceGeo25 = makeWingFenceGeo(2.54, [-0.90, -0.45, 0.0, 0.45, 0.90]);
+    const wingFenceGeo06 = makeWingFenceGeo(0.62, [0.0]);
     [[0, E - 0.5, 0], [0, -E + 0.5, 0], [E - 0.5, 0, Math.PI / 2], [-E + 0.5, 0, Math.PI / 2]].forEach(([x, z, r]) => {
+      // Seal negative (-112.5..-110.0) and positive (+112.0..+112.5) corner seams on all 4 sides
+      [[-111.25, 1.32, wingFenceGeo25], [112.25, 0.38, wingFenceGeo06]].forEach(([off, halfSpan, wGeo]) => {
+        const wx = r ? x : off, wz = r ? off : z;
+        const wm = new THREE.Mesh(wGeo, fenceMat);
+        wm.position.set(wx, 0, wz); wm.rotation.y = r;
+        add(wm, { cast: false });
+        if (r) collider(wx - 0.22, wx + 0.22, wz - halfSpan, wz + halfSpan, 2.4);
+        else collider(wx - halfSpan, wx + halfSpan, wz - 0.22, wz + 0.22, 2.4);
+      });
       for (let k = -HALF; k < HALF; k += 6) {
         if (z < 0 && r === 0 && Math.abs(k + 3) < 7) continue; // entrance gap
-        const p = new THREE.Mesh(fenceGeo, fenceMat);
         const px = r ? x : k + 3, pz = r ? k + 3 : z;
+        // 3 permanent broken woodland trail gates (East -> Lookout, North -> Ranger Evidence, West -> Forest Loop)
+        const isPermGate = forestRing && (
+          (r !== 0 && x > 0 && Math.abs(pz - 27) < 3.1) ||
+          (r === 0 && z > 0 && Math.abs(px + 27) < 3.1) ||
+          (r !== 0 && x < 0 && Math.abs(pz + 27) < 3.1)
+        );
+        const p = new THREE.Mesh(fenceGeo, fenceMat);
+        p.userData.keepDynamic = true;
         p.position.set(px, 0, pz);
         p.rotation.y = r;
         add(p, { cast: false });
         const col = r
           ? collider(px - 0.18, px + 0.18, pz - 3.0, pz + 3.0, 2.4)
           : collider(px - 3.0, px + 3.0, pz - 0.18, pz + 0.18, 2.4);
+        if (isPermGate) {
+          p.visible = false;
+          col.disabled = true;
+          // permanent weathered gate posts & fallen gate slats framing the woodland trail entry
+          const alongX = r === 0;
+          [-2.91, 2.91].forEach(off => {
+            const gx = px + (alongX ? off : 0), gz = pz + (alongX ? 0 : off);
+            decoBox(M.trim, 0.22, 2.42, 0.22, gx, 1.21, gz);
+            decoBox(M.trim, 0.28, 0.09, 0.28, gx, 2.46, gz);
+            collider(gx - 0.16, gx + 0.16, gz - 0.16, gz + 0.16, 2.4);
+          });
+          decoBox(M.wood, 0.20, 0.05, 1.85, px + (alongX ? -0.9 : 1.2), 0.04, pz + (alongX ? 1.1 : -0.8), 0, 0.42, 0);
+          decoBox(M.wood, 0.18, 0.05, 1.55, px + (alongX ? 1.1 : -1.1), 0.04, pz + (alongX ? -0.9 : 0.9), 0, -0.55, 0);
+        }
         W.fences.push({
           mesh: p,
           pos: new THREE.Vector3(px, 1.1, pz),
@@ -2614,7 +2803,8 @@
           baseRot: p.rotation.clone(),
           axis: r ? 'z' : 'x',
           collider: col,
-          broken: false,
+          broken: isPermGate,
+          permanentGate: isPermGate,
         });
       }
     });
@@ -2627,6 +2817,7 @@
     // remodeled Type-III municipal / police roadblock barricades at entrance road (z = -E - 1)
     {
       const barRoot = new THREE.Group();
+      barRoot.userData.keepDynamic = true;
       W.root.add(barRoot);
       const rammedDebris = new THREE.Group();
       barRoot.add(rammedDebris);
@@ -2731,8 +2922,22 @@
         intactExtras.visible = false;
       };
       W.setBarricadesRammed();
+      // Static left shoulder Type-III barricade wing sealing x = -8.0..-5.7 between fence post and main roadblock
+      const sg = new THREE.Group();
+      [-0.96, 0.96].forEach(lx => {
+        const sk = new THREE.Mesh(skidGeo, M.iron); sk.position.set(lx, 0.03, 0); sg.add(sk);
+        const up = new THREE.Mesh(postGeo, M.iron); up.position.set(lx, 0.64, -0.03); sg.add(up);
+        const st = new THREE.Mesh(strutGeo, M.iron); st.position.set(lx, 0.44, 0.26); st.rotation.x = -0.48; sg.add(st);
+        const stB = new THREE.Mesh(strutGeo, M.iron); stB.position.set(lx, 0.44, -0.26); stB.rotation.x = 0.48; sg.add(stB);
+      });
+      const sBr = new THREE.Mesh(braceGeo, M.iron); sBr.position.set(0, 0.22, -0.03); sg.add(sBr);
+      const sTop = new THREE.Mesh(plankGeo, M.barricade); sTop.position.set(0, 1.06, 0.02); sg.add(sTop);
+      const sLow = new THREE.Mesh(plankGeo, M.barricade); sLow.position.set(0, 0.62, 0.02); sg.add(sLow);
+      sg.position.set(-6.85, 0, -E - 0.15); sg.rotation.y = 0.08;
+      if (shadows) sg.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      barRoot.add(sg);
     }
-    collider(-6, 6, -E - 2, -E);
+    collider(-8.2, 6.2, -E - 2.2, -E + 0.6, 2.6);
     // welcome sign beside the south road (2:1 reflective highway signboard on twin steel posts)
     {
       const g = new THREE.Group();
@@ -2754,10 +2959,188 @@
       g.position.set(-8, 0, -150); g.rotation.y = 0.15; add(g);
       W.sign = g;
     }
-    // forest outside town (remodeled multi-tier pine InstancedMesh: 2 draw calls total, visible in cutscene & in-game)
+    // Playable Woodland Perimeter Ring (v2.7+): weaving dirt trails, town-styled outskirt buildings, Fire Lookout Tower, and navigable forest pines
     const treelinePerches = [];
+    const ringPerches = [];
+    if (forestRing) {
+      // Reserve gate aprons, landmark clearings, south highway & hero pine corridor
+      reserveBox(107, 121, 21, 33, 'trail');
+      reserveBox(-33, -21, 107, 121, 'trail');
+      reserveBox(-121, -107, -33, -21, 'trail');
+      reserveBox(129.5, 146.5, 20.5, 33.5, 'landmark'); // Fire Lookout Tower clearing
+      reserveBox(-34.5, -19.5, 130.5, 145.5, 'landmark'); // Wrecked Ranger Truck clearing
+      reserveBox(-14, 14, -520, -HALF, 'road');
+      reserveBox(10, 25, -176, -162, 'hero');
+
+      // Outskirt buildings beyond the wooden fence: full town-styled models spaced with weaving paths between them
+      const outskirtBoxes = [];
+      for (const side of [0, 1, 2, 3]) {
+        for (let k = -HALF - 10; k <= HALF + 10; ) {
+          const step = R(25, 31);
+          if (side === 1 && Math.abs(k) < 20) { k += step; continue; }
+          const L = Math.round(R(10, 13)), D = Math.round(R(10, 12));
+          const H = rand() < 0.65 ? R(7, 11) : R(12, 16);
+          const axis = (side === 0 || side === 1) ? 'z' : 'x';
+          const sign = (side === 0 || side === 2) ? -1 : 1;
+          const d = HALF + R(16.5, 20.5);
+          const cx = (side === 0 || side === 1) ? k : (side === 2 ? d : -d);
+          const cz = (side === 0 || side === 1) ? (side === 0 ? d : -d) : k;
+          const hw = (axis === 'z' ? L : D) * 0.5;
+          const hd = (axis === 'z' ? D : L) * 0.5;
+          if (canPlaceBox(cx - hw, cx + hw, cz - hd, cz + hd, 3.2)) {
+            buildClosed(cx, cz, L, D, H, axis, sign, { outskirt: true });
+            outskirtBoxes.push({ x0: cx - hw, x1: cx + hw, z0: cz - hd, z1: cz + hd, cx, cz });
+          }
+          k += step;
+        }
+      }
+
+      // Steer any trail point clear of outskirt buildings & landmarks so paths wind smoothly between structures
+      const steerClear = (px, pz) => {
+        let x = px, z = pz;
+        const pad = 3.2;
+        for (let pass = 0; pass < 3; pass++) {
+          for (let bi = 0; bi < outskirtBoxes.length; bi++) {
+            const b = outskirtBoxes[bi];
+            if (x > b.x0 - pad && x < b.x1 + pad && z > b.z0 - pad && z < b.z1 + pad) {
+              const dl = Math.abs(x - (b.x0 - pad)), dr = Math.abs((b.x1 + pad) - x);
+              const dt = Math.abs(z - (b.z0 - pad)), db = Math.abs((b.z1 + pad) - z);
+              const m = Math.min(dl, dr, dt, db);
+              if (m === dl) x = b.x0 - pad;
+              else if (m === dr) x = b.x1 + pad;
+              else if (m === dt) z = b.z0 - pad;
+              else z = b.z1 + pad;
+            }
+          }
+          x = Math.max(-(OUTER_E - 4.5), Math.min(OUTER_E - 4.5, x));
+          z = Math.max(-(OUTER_E - 4.5), Math.min(OUTER_E - 4.5, z));
+        }
+        return [x, z];
+      };
+
+      const addTrailPath = (pts, width) => {
+        const w = width || 4.0;
+        const sampled = [];
+        for (let i = 0; i < pts.length - 1; i++) {
+          const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+          const segLen = Math.hypot(bx - ax, bz - az);
+          const steps = Math.max(1, Math.ceil(segLen / 5.5));
+          for (let s = (i === 0 ? 0 : 1); s <= steps; s++) {
+            const t = s / steps;
+            const wave = Math.sin(t * Math.PI) * (s % 2 === 0 ? 1.1 : -1.1);
+            const nx = segLen > 0.1 ? -(bz - az) / segLen : 0;
+            const nz = segLen > 0.1 ? (bx - ax) / segLen : 0;
+            const rawX = ax + (bx - ax) * t + nx * wave * (steps > 1 ? 1 : 0);
+            const rawZ = az + (bz - az) * t + nz * wave * (steps > 1 ? 1 : 0);
+            sampled.push(steerClear(rawX, rawZ));
+          }
+        }
+        for (let i = 0; i < sampled.length - 1; i++) {
+          const [ax, az] = sampled[i], [bx, bz] = sampled[i + 1];
+          const dx = bx - ax, dz = bz - az;
+          const segLen = Math.hypot(dx, dz);
+          if (segLen < 0.25) continue;
+          const mx = (ax + bx) * 0.5, mz = (az + bz) * 0.5;
+          const ang = Math.atan2(dx, dz);
+          const len = segLen + w * 0.36;
+          box(w, 0.028, len, M.trail, mx, 0.015, mz, { ry: ang, collide: false, cast: false, tile: 4 });
+          const [rx0, rx1, rz0, rz1] = rotBoxExtents(mx, mz, w + 0.8, len + 0.4, ang);
+          reserveBox(rx0, rx1, rz0, rz1, 'trail');
+        }
+        W.trails.push({ pts: sampled, width: w });
+      };
+
+      // Weaving & winding dirt trails leading from the town gates, curving between outskirt buildings into the woods
+      addTrailPath([[109, 27], [116, 28.5], [123, 25.2], [129, 27.4], [133.5, 27.0]], 4.0); // East gate -> Fire Lookout
+      addTrailPath([[123, 25.2], [121, 46], [142, 66], [120, 88], [142, 110], [134, 136], [104, 121], [72, 143], [38, 121], [4, 142], [-27, 138]], 4.2); // NE woodland loop
+      addTrailPath([[123, 25.2], [120, 2], [142, -24], [120, -52], [142, -82], [134, -118], [96, -142], [60, -120], [22, -138]], 4.2); // SE woodland loop
+      addTrailPath([[-27, 109], [-24.5, 117], [-29.2, 125], [-27, 138]], 4.0); // North gate -> Ranger Evidence
+      addTrailPath([[-27, 138], [-58, 121], [-94, 143], [-134, 134], [-142, 98], [-120, 62], [-142, 24], [-121, -8], [-135, -24]], 4.2); // NW woodland loop
+      addTrailPath([[-109, -27], [-116.5, -24.5], [-125.5, -29.2], [-135, -24]], 4.0); // West gate -> West loop
+      addTrailPath([[-135, -24], [-142, -56], [-120, -88], [-136, -126], [-102, -142], [-66, -120], [-22, -138]], 4.2); // SW woodland loop
+
+      // Abandoned Fire Lookout Tower at (140, 0, 27): walkable timber stairs up to 4.6m observation deck + battery/rock stash
+      {
+        const lx = 140, lz = 27, deckY = 4.60, roofY = 7.05;
+        W.lookout = { x: lx, z: lz };
+        // 4 heavy corner stilts grounded cleanly at y = 0
+        [[-2.25, -2.25], [2.25, -2.25], [-2.25, 2.25], [2.25, 2.25]].forEach(([ox, oz]) => {
+          box(0.28, roofY, 0.28, M.wood, lx + ox, roofY * 0.5, lz + oz, { collide: true });
+        });
+        // diagonal cross-bracing between stilts
+        [[-2.25, 2.25]].forEach(([a, b]) => {
+          decoStrut(M.wood, lx + a, 0.3, lz + a, lx + b, deckY - 0.3, lz + a, 0.12, 0.12);
+          decoStrut(M.wood, lx + b, 0.3, lz + a, lx + a, deckY - 0.3, lz + a, 0.12, 0.12);
+          decoStrut(M.wood, lx + a, 0.3, lz + b, lx + b, deckY - 0.3, lz + b, 0.12, 0.12);
+          decoStrut(M.wood, lx + b, 0.3, lz + b, lx + a, deckY - 0.3, lz + b, 0.12, 0.12);
+        });
+        // elevated timber observation deck + walkSurface
+        boxAt(137.5, 142.5, deckY - 0.18, deckY, 24.5, 29.5, M.wood, { collide: false, occlude: true, tile: 3 });
+        walkSurface({ type: 'flat', minX: 137.5, maxX: 142.5, minZ: 24.5, maxZ: 29.5, y: deckY });
+        // perimeter deck guardrails (open stair entry on west side z in [26.2, 27.8])
+        boxAt(137.5, 142.5, deckY + 0.96, deckY + 1.04, 24.46, 24.62, M.wood, { collide: true, minY: deckY });
+        boxAt(137.5, 142.5, deckY + 0.48, deckY + 0.54, 24.48, 24.60, M.wood, { collide: false });
+        boxAt(137.5, 142.5, deckY + 0.96, deckY + 1.04, 29.38, 29.54, M.wood, { collide: true, minY: deckY });
+        boxAt(137.5, 142.5, deckY + 0.48, deckY + 0.54, 29.40, 29.52, M.wood, { collide: false });
+        boxAt(142.38, 142.54, deckY + 0.96, deckY + 1.04, 24.5, 29.5, M.wood, { collide: true, minY: deckY });
+        boxAt(142.40, 142.52, deckY + 0.48, deckY + 0.54, 24.5, 29.5, M.wood, { collide: false });
+        boxAt(137.46, 137.62, deckY + 0.96, deckY + 1.04, 24.5, 26.2, M.wood, { collide: true, minY: deckY });
+        boxAt(137.46, 137.62, deckY + 0.96, deckY + 1.04, 27.8, 29.5, M.wood, { collide: true, minY: deckY });
+        // corrugated lookout cabin roof & trim fascia
+        boxAt(137.1, 142.9, roofY, roofY + 0.22, 24.1, 29.9, M.roof, { collide: false, occlude: true, tile: 4 });
+        boxAt(138.0, 142.0, roofY + 0.22, roofY + 0.48, 25.0, 29.0, M.roof, { collide: false, tile: 4 });
+        // walkable timber stair ramp from trail (x=132.0) to deck (x=137.6) along z=27
+        const sx0 = 132.0, sx1 = 137.6;
+        walkSurface({ type: 'ramp', axis: 'x', minX: 131.6, maxX: 137.7, minZ: 26.2, maxZ: 27.8, u0: sx0, u1: sx1, y0: 0, y1: deckY });
+        for (let si = 0; si < 14; si++) {
+          const k = (si + 0.5) / 14;
+          const tx = sx0 + (sx1 - sx0) * k;
+          const ty = deckY * k;
+          box(0.44, 0.08, 1.56, M.wood, tx, ty - 0.04, lz, { collide: false, tile: 2 });
+        }
+        [26.15, 27.85].forEach(sz => {
+          decoStrut(M.wood, sx0, -0.05, sz, sx1, deckY - 0.05, sz, 0.14, 0.18);
+          decoStrut(M.wood, sx0, 0.95, sz, sx1, deckY + 0.95, sz, 0.07, 0.07);
+          decoBox(M.wood, 0.10, 1.05, 0.10, sx0 + 0.1, 0.52, sz);
+          decoBox(M.wood, 0.10, deckY * 0.5 + 1.0, 0.10, (sx0 + sx1) * 0.5, (deckY * 0.5 + 1.0) * 0.5, sz);
+        });
+        collider(sx0, sx1, 25.98, 26.20, deckY + 1.4, 0);
+        collider(sx0, sx1, 27.80, 28.02, deckY + 1.4, 0);
+        // ranger supply desk & guaranteed battery + rock stash on the deck
+        box(0.85, 0.78, 1.55, M.wood, 141.55, deckY + 0.39, lz, { collide: true, minY: deckY });
+        battery(141.55, deckY + 1.04, 26.45);
+        battery(141.55, deckY + 1.04, 27.55);
+        const rockGeo = new THREE.DodecahedronGeometry(0.14);
+        const rockMat = mat({ color: 0x77736c });
+        [[138.7, 25.3], [139.2, 28.6], [140.4, 25.4]].forEach(([rx, rz]) => {
+          const rm = new THREE.Mesh(rockGeo, rockMat);
+          rm.userData.keepDynamic = true;
+          rm.position.set(rx, deckY + 0.12, rz);
+          rm.rotation.set(R(0, 3), R(0, 3), 0);
+          W.root.add(rm);
+          W.pickups.push({ type: 'rock', mesh: rm, pos: rm.position, baseY: deckY + 0.12, taken: false, still: true });
+        });
+      }
+    } else {
+      // legacy v1.0–v2.6.3 outskirts: backdrop ring beyond the fence
+      for (const side of [0, 1, 2, 3]) {
+        for (let k = -HALF - 20; k < HALF + 20; k += R(13, 17)) {
+          if (side === 1 && Math.abs(k) < 16) continue;
+          const d = HALF + R(12, 24), h = R(6, 20), w = R(9, 13), dd = R(9, 13);
+          const x = side === 0 ? k : side === 1 ? k : side === 2 ? d : -d;
+          const z = side === 0 ? d : side === 1 ? -d : k;
+          const g = worldUV(new THREE.BoxGeometry(w, h, dd), w, h, dd, 12);
+          const f = pick(M.facades);
+          const m = new THREE.Mesh(g, [f, f, M.roof, M.roof, f, f]);
+          m.position.set(x, h / 2, z); add(m);
+          decoBox(M.rubble, w + 0.3, 0.6, dd + 0.3, x, h + 0.3, z); decoBox(M.trim, w + 0.5, 0.2, dd + 0.5, x, h - 0.2, z);
+        }
+      }
+    }
+
+    // forest outside town (remodeled multi-tier pine InstancedMesh: 2 draw calls total, visible in cutscene & in-game)
     {
-      const n = S.quality === 'low' ? 320 : S.viewDistance === 'near' ? 420 : 720;
+      const n = S.quality === 'low' ? 540 : S.viewDistance === 'near' ? 820 : 1320;
       const trunk = new THREE.InstancedMesh(pineTrunkGeo, M.pineBark, n);
       const top = new THREE.InstancedMesh(pineCrownGeo, M.pineLeaves, n);
       const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
@@ -2780,9 +3163,34 @@
         top.setMatrixAt(i, m4);
         treelinePerches.push({ x: hx, y: 9.65 * hs * 1.05, z: hz });
       }
+      // Populate navigable pines inside the playable Woodland Perimeter Ring first so cover is evenly distributed
+      const ringTarget = forestRing ? Math.min(n - i, S.quality === 'low' ? 175 : S.viewDistance === 'near' ? 230 : 310) : 0;
+      let ringPlaced = 0, ringAttempts = 0;
+      while (ringPlaced < ringTarget && ringAttempts < 4800 && i < n) {
+        ringAttempts++;
+        const x = R(-OUTER_E + 2, OUTER_E - 2), z = R(-OUTER_E + 2, OUTER_E - 2);
+        if (Math.abs(x) < E + 1.8 && Math.abs(z) < E + 1.8) continue;
+        if (Math.abs(x) < 12 && z < -HALF) continue;
+        if (!canPlaceBox(x - 1.35, x + 1.35, z - 1.35, z + 1.35, 0.35)) continue;
+        const s = R(0.88, 1.38);
+        const hs = s * R(0.95, 1.20);
+        q.setFromAxisAngle(yAxis, R(0, 6.28));
+        m4.compose(p.set(x, 0, z), q, sc.set(s, hs, s));
+        trunk.setMatrixAt(i, m4);
+        top.setMatrixAt(i, m4);
+        collider(x - 0.36 * s, x + 0.36 * s, z - 0.36 * s, z + 0.36 * s, 7);
+        reserveBox(x - 1.1, x + 1.1, z - 1.1, z + 1.1, 'tree');
+        if (ringPerches.length < 28) ringPerches.push({ x, y: 9.65 * hs, z });
+        ringPlaced++;
+        i++;
+      }
+      // Concentrate ~45% of exterior treeline in the visible near perimeter buffer, rest across distant woods
+      const nearBeltEnd = i + Math.floor((n - i) * 0.45);
       while (i < n) {
-        const x = R(-420, 420), z = R(-560, 420);
-        if (Math.abs(x) < HALF + 32 && Math.abs(z) < HALF + 32) continue;
+        const nearBelt = i < nearBeltEnd;
+        const span = nearBelt ? (OUTER_E + 90) : 420;
+        const x = R(-span, span), z = R(nearBelt ? -span : -560, span);
+        if (Math.abs(x) < OUTER_E + 2.5 && Math.abs(z) < OUTER_E + 2.5) continue;
         if (Math.abs(x) < 12 && z < -HALF) continue; // keep the road clear
         if (Math.abs(x + 8) < 6 && Math.abs(z + 150) < 6) continue;
         if (x > 9.5 && x < 24.5 && z > -176 && z < -162) continue; // keep hero ambush corridor unblocked
@@ -2792,7 +3200,7 @@
         m4.compose(p.set(x, 0, z), q, sc.set(s, hs, s));
         trunk.setMatrixAt(i, m4);
         top.setMatrixAt(i, m4);
-        if (treelinePerches.length < 28 && Math.abs(x) < HALF + 68 && Math.abs(z) < HALF + 68) {
+        if (treelinePerches.length < 28 && Math.abs(x) < OUTER_E + 42 && Math.abs(z) < OUTER_E + 42) {
           treelinePerches.push({ x, y: 9.65 * hs, z });
         }
         i++;
@@ -2800,20 +3208,7 @@
       trunk.instanceMatrix.needsUpdate = true;
       top.instanceMatrix.needsUpdate = true;
       W.root.add(trunk, top);
-    }
-    // outskirts: a ring of dark buildings beyond the fence
-    for (const side of [0, 1, 2, 3]) {
-      for (let k = -HALF - 20; k < HALF + 20; k += R(13, 17)) {
-        if (side === 1 && Math.abs(k) < 16) continue;            // the south road
-        const d = HALF + R(12, 24), h = R(6, 20), w = R(9, 13), dd = R(9, 13);
-        const x = side === 0 ? k : side === 1 ? k : side === 2 ? d : -d;
-        const z = side === 0 ? d : side === 1 ? -d : k;
-        const g = worldUV(new THREE.BoxGeometry(w, h, dd), w, h, dd, 12);
-        const f = pick(M.facades);
-        const m = new THREE.Mesh(g, [f, f, M.roof, M.roof, f, f]);
-        m.position.set(x, h / 2, z); add(m);
-        decoBox(M.rubble, w + 0.3, 0.6, dd + 0.3, x, h + 0.3, z); decoBox(M.trim, w + 0.5, 0.2, dd + 0.5, x, h - 0.2, z);
-      }
+      W.baseOccluders.push(trunk); // pine trunks naturally occlude Moths / LOS checks
     }
     // distant hills silhouette (low-poly 4-sided cones)
     for (let i = 0; i < 14; i++) {
@@ -2822,10 +3217,12 @@
       h.position.set(Math.cos(a) * 640, 0, Math.sin(a) * 640); W.root.add(h);
     }
 
-    // subtle 3D forest birds (perching on perimeter fence posts / pine crowns & circling treeline sky)
+    // subtle 3D forest birds (flock clusters perching on perimeter fences / pine crowns & circling treeline sky)
     W.birdsGroup = new THREE.Group();
+    W.birdsGroup.userData.keepDynamic = true;
     W.root.add(W.birdsGroup);
     W.birds = [];
+    W.birdClusters = [];
     {
       const birdBodyGeo = new THREE.BoxGeometry(0.11, 0.10, 0.28);
       const birdHeadGeo = new THREE.BoxGeometry(0.08, 0.08, 0.10);
@@ -2859,51 +3256,66 @@
       };
 
       const totalFly = S.quality === 'low' ? 6 : 11;
-      const totalPerch = S.quality === 'low' ? 8 : 14;
-      const fenceSpots = [];
+      const flockSize = S.quality === 'low' ? 2 : 3;
+      const clusterAnchors = [];
       if (W.fences && W.fences.length) {
-        const stride = Math.max(1, Math.floor(W.fences.length / 7));
-        for (let fi = 2; fi < W.fences.length && fenceSpots.length < 6; fi += stride) {
-          const f = W.fences[fi];
-          const off = (fi % 2 === 0) ? 0 : -2.91;
-          fenceSpots.push({
-            x: f.pos.x + (f.axis === 'x' ? off : 0),
-            y: 2.46,
-            z: f.pos.z + (f.axis === 'z' ? off : 0),
-            fence: f,
-          });
+        const intact = W.fences.filter(f => !f.permanentGate);
+        const stride = Math.max(1, Math.floor(intact.length / 4));
+        for (let fi = 2; fi < intact.length && clusterAnchors.length < 3; fi += stride) {
+          const f = intact[fi];
+          clusterAnchors.push({ x: f.pos.x, y: 2.46, z: f.pos.z, fence: f });
         }
       }
-      const perchPool = fenceSpots.concat(treelinePerches.map(tp => ({ x: tp.x, y: tp.y + 0.04, z: tp.z, fence: null })));
-      for (let pi = 0; pi < totalPerch && pi < perchPool.length; pi++) {
-        const sp = perchPool[pi];
-        const parts = makeBirdMesh(R(0.9, 1.25));
-        const yaw = R(0, Math.PI * 2);
-        parts.g.position.set(sp.x, sp.y, sp.z);
-        parts.g.rotation.y = yaw;
-        const outLen = Math.hypot(sp.x, sp.z) || 1;
-        W.birds.push({
-          mode: 'perch',
-          parts,
-          homeX: sp.x, homeY: sp.y, homeZ: sp.z,
-          homeYaw: yaw,
-          fence: sp.fence,
-          outX: sp.x / outLen, outZ: sp.z / outLen,
-          state: 'perched', // perched | flee | return
-          fleeT: 0,
-          calmTimer: 0,
-          lookTimer: R(0.6, 2.8),
-          targetHeadYaw: 0,
-          targetHeadPitch: 0,
-          ruffleT: R(2, 7),
-          phase: R(0, 6.28),
-          flapSpeed: R(11, 14),
-        });
+      const treePool = ringPerches.length ? ringPerches : treelinePerches;
+      for (let ti = 0; ti < treePool.length && clusterAnchors.length < 7; ti += Math.max(1, Math.floor(treePool.length / 4))) {
+        const tp = treePool[ti];
+        clusterAnchors.push({ x: tp.x, y: tp.y + 0.05, z: tp.z, fence: null });
       }
+      clusterAnchors.forEach((anc, ci) => {
+        const cl = { id: ci, x: anc.x, y: anc.y, z: anc.z, fence: anc.fence, scared: false, cooldown: 0 };
+        W.birdClusters.push(cl);
+        for (let bi = 0; bi < flockSize; bi++) {
+          const ox = anc.fence ? ((anc.fence.axis === 'x' ? (bi - 1) * 1.15 : 0)) : R(-1.3, 1.3);
+          const oz = anc.fence ? ((anc.fence.axis === 'z' ? (bi - 1) * 1.15 : 0)) : R(-1.3, 1.3);
+          const oy = anc.fence ? 0 : R(-0.4, 0.35);
+          const px = anc.x + ox, py = anc.y + oy, pz = anc.z + oz;
+          const parts = makeBirdMesh(R(0.9, 1.25));
+          const yaw = R(0, Math.PI * 2);
+          parts.g.position.set(px, py, pz);
+          parts.g.rotation.y = yaw;
+          const outLen = Math.hypot(px, pz) || 1;
+          const randAng = R(0, Math.PI * 2);
+          const dirX = Math.cos(randAng) * 0.65 + (px / outLen) * 0.55;
+          const dirZ = Math.sin(randAng) * 0.65 + (pz / outLen) * 0.55;
+          const dLen = Math.hypot(dirX, dirZ) || 1;
+          W.birds.push({
+            mode: 'perch',
+            cluster: cl,
+            parts,
+            homeX: px, homeY: py, homeZ: pz,
+            homeYaw: yaw,
+            fence: anc.fence,
+            outX: dirX / dLen,
+            outZ: dirZ / dLen,
+            climbSpeed: R(4.2, 6.8),
+            horizSpeed: R(6.5, 10.5),
+            swirlAmp: R(2.2, 4.8),
+            state: 'perched', // perched | flee | return
+            fleeT: 0,
+            calmTimer: 0,
+            lookTimer: R(0.6, 2.8),
+            targetHeadYaw: 0,
+            targetHeadPitch: 0,
+            ruffleT: R(2, 7),
+            phase: R(0, 6.28),
+            flapSpeed: R(11, 14),
+          });
+        }
+      });
       for (let fi = 0; fi < totalFly; fi++) {
         const parts = makeBirdMesh(R(0.95, 1.35));
         const ang = (fi / totalFly) * Math.PI * 2 + R(-0.2, 0.2);
-        const rad = R(HALF + 16, HALF + 56);
+        const rad = R(HALF + 16, OUTER_E + 24);
         const alt = R(10.5, 18.5);
         W.birds.push({
           mode: 'fly',
@@ -3050,14 +3462,16 @@
       pad = pad === undefined ? 1.3 : pad;
       for (let i = 0; i < W.buildings.length; i++) {
         const b = W.buildings[i];
-        if (!b.hasEvidence && !b.smashed && x > b.minX - pad && x < b.maxX + pad && z > b.minZ - pad && z < b.maxZ + pad) return b;
+        const guardMap = !!(b.hasMap && W.wallMap && !W.wallMap.taken);
+        if (!b.hasEvidence && !guardMap && !b.smashed && !b.outskirt && x > b.minX - pad && x < b.maxX + pad && z > b.minZ - pad && z < b.maxZ + pad) return b;
       }
       return null;
     };
 
     const _debrisGeo = new THREE.BoxGeometry(1, 1, 1);
     W.smashBuilding = function (b, impactPos, dir) {
-      if (!b || b.smashed || b.hasEvidence) return false;
+      const guardMap = !!(b && b.hasMap && W.wallMap && !W.wallMap.taken);
+      if (!b || b.smashed || b.hasEvidence || guardMap) return false;
       b.smashed = true;
       W._gridVersion++;
       b.group.visible = false;
@@ -3257,6 +3671,7 @@
     W.repairFences = function () {
       if (W.fences) {
         W.fences.forEach(f => {
+          if (f.permanentGate) return;
           f.broken = false;
           f.mesh.visible = true;
           f.mesh.position.copy(f.basePos);
@@ -3328,11 +3743,44 @@
       const pPos = opts.pos || null;
       const disturbed = !!opts.disturbed;
       const still = !!opts.still;
+      const threats = opts.threats || null;
       const t = time || 0;
 
+      // Evaluate cluster-level flock scattering from player proximity, loud noise, broken fences, or stalking entities
+      if (W.birdClusters) {
+        for (let ci = 0; ci < W.birdClusters.length; ci++) {
+          const cl = W.birdClusters[ci];
+          let trig = false;
+          if (cl.fence && cl.fence.broken) trig = true;
+          if (!still && pPos) {
+            const pd = Math.hypot(pPos.x - cl.x, pPos.z - cl.z);
+            if (pd < 14 || (disturbed && pd < 34)) trig = true;
+          }
+          if (!still && threats) {
+            for (let ti = 0; ti < threats.length; ti++) {
+              const th = threats[ti];
+              if (!th || !th.pos) continue;
+              const td = Math.hypot(th.pos.x - cl.x, th.pos.z - cl.z);
+              if (td < (th.radius || 22)) { trig = true; break; }
+            }
+          }
+          if (trig) {
+            if (!cl.scared && opts.onScatter && cl.cooldown <= t) {
+              cl.cooldown = t + 8.0;
+              opts.onScatter({ x: cl.x, y: cl.y + 4, z: cl.z });
+            }
+            cl.scared = true;
+          } else {
+            cl.scared = false;
+          }
+        }
+      }
+
+      const lowCull = !!(pPos && (S.quality === 'low' || S.viewDistance === 'near'));
       for (let i = 0; i < W.birds.length; i++) {
         const b = W.birds[i];
-        const { g, head, tail, lw, rw } = b.parts;
+        const parts = b.parts;
+        const g = parts.g, head = parts.head, tail = parts.tail, lw = parts.lw, rw = parts.rw;
         if (b.mode === 'fly') {
           if (disturbed) b.scareBoost = Math.min(1, b.scareBoost + dt * 2.5);
           else b.scareBoost = Math.max(0, b.scareBoost - dt * 0.22);
@@ -3346,7 +3794,6 @@
           g.position.set(nx, ny, nz);
           g.rotation.y = Math.atan2(tx, tz);
           g.rotation.z = (b.speed >= 0 ? -0.18 : 0.18);
-          // natural flap bursts alternating with calm glides
           const cycle = (t * 0.42 + b.phase) % 3.2;
           const flapping = !still && (cycle < 1.55 || b.scareBoost > 0.2);
           const wAng = flapping
@@ -3357,20 +3804,24 @@
           tail.rotation.x = 0.08 + Math.sin(t * 2 + b.phase) * 0.05;
           head.rotation.set(0.06, 0, 0);
         } else {
-          // perched birds react to nearby player approach, broken fences, running, or loud noises
-          let nearLoud = false;
-          if (pPos && !still) {
-            const d = Math.hypot(pPos.x - b.homeX, pPos.z - b.homeZ);
-            if ((disturbed && d < 95) || (b.fence && d < 16)) nearLoud = true;
-          }
-          if (b.fence && b.fence.broken) nearLoud = true;
+          const nearLoud = !!(b.cluster && b.cluster.scared) || !!(b.fence && b.fence.broken);
 
           if (b.state === 'perched') {
             if (nearLoud) {
+              if (!g.visible) g.visible = true;
               b.state = 'flee';
               b.fleeT = 0;
-              b.calmTimer = 11 + (i % 5) * 1.4;
+              b.calmTimer = 10 + (i % 5) * 1.4;
             } else {
+              if (lowCull) {
+                const dx = pPos.x - b.homeX, dz = pPos.z - b.homeZ;
+                const d2 = dx * dx + dz * dz;
+                if (d2 > 75 * 75) {
+                  if (g.visible) g.visible = false;
+                  continue;
+                }
+                if (!g.visible) g.visible = true;
+              }
               b.lookTimer -= dt;
               if (b.lookTimer <= 0) {
                 b.lookTimer = 0.9 + ((i * 17 + Math.floor(t * 3)) % 20) * 0.12;
@@ -3379,7 +3830,6 @@
               }
               head.rotation.y += (b.targetHeadYaw - head.rotation.y) * Math.min(1, dt * 9);
               head.rotation.x += (b.targetHeadPitch - head.rotation.x) * Math.min(1, dt * 9);
-              // occasional wing tuck/ruffle
               b.ruffleT -= dt;
               let ruffle = 0;
               if (b.ruffleT <= 0 && !still) {
@@ -3394,16 +3844,17 @@
             }
           } else if (b.state === 'flee') {
             b.fleeT += dt;
-            if (nearLoud) b.calmTimer = Math.max(b.calmTimer, 11);
-            const k = Math.min(1, b.fleeT / 3.8);
-            const arc = b.fleeT * 6.2;
-            const fx = b.homeX + b.outX * arc + Math.sin(b.fleeT * 1.8 + b.phase) * 3.5;
-            const fz = b.homeZ + b.outZ * arc + Math.cos(b.fleeT * 1.6 + b.phase) * 3.5;
-            const fy = b.homeY + Math.min(16, b.fleeT * 3.2) + Math.sin(b.fleeT * 3 + b.phase) * 0.35;
+            if (nearLoud) b.calmTimer = Math.max(b.calmTimer, 10);
+            const k = Math.min(1, b.fleeT / 3.4);
+            const arc = b.fleeT * (b.horizSpeed || 8.0);
+            const swirl = b.swirlAmp || 3.5;
+            const fx = b.homeX + b.outX * arc + Math.sin(b.fleeT * 1.9 + b.phase) * swirl;
+            const fz = b.homeZ + b.outZ * arc + Math.cos(b.fleeT * 1.7 + b.phase) * swirl;
+            const fy = b.homeY + Math.min(20, b.fleeT * (b.climbSpeed || 5.2)) + Math.sin(b.fleeT * 3.2 + b.phase) * 0.45;
             g.position.set(fx, fy, fz);
-            g.rotation.y = Math.atan2(b.outX, b.outZ) + Math.sin(b.fleeT * 1.4 + b.phase) * 0.35;
-            g.rotation.z = Math.sin(b.fleeT * 2 + b.phase) * 0.14;
-            const flap = Math.sin(t * 17 + b.phase) * 0.78 + 0.1;
+            g.rotation.y = Math.atan2(b.outX, b.outZ) + Math.sin(b.fleeT * 1.5 + b.phase) * 0.4;
+            g.rotation.z = Math.sin(b.fleeT * 2.4 + b.phase) * 0.22;
+            const flap = Math.sin(t * (b.flapSpeed * 1.45) + b.phase) * 0.82 + 0.1;
             lw.rotation.z = -flap;
             rw.rotation.z = flap;
             tail.rotation.x = 0.08;
@@ -3416,19 +3867,17 @@
               }
             }
             if (k >= 1 && b.state === 'flee') {
-              // circle discreetly above the outer trees until calm
-              const cx = b.homeX + b.outX * 26 + Math.cos(t * 0.45 + b.phase) * 8;
-              const cz = b.homeZ + b.outZ * 26 + Math.sin(t * 0.45 + b.phase) * 8;
-              g.position.set(cx, b.homeY + 13.5 + Math.sin(t + b.phase) * 0.7, cz);
-              g.rotation.y = Math.atan2(-Math.sin(t * 0.45 + b.phase), Math.cos(t * 0.45 + b.phase));
+              const cx = b.homeX + b.outX * 26 + Math.cos(t * 0.48 + b.phase) * 9;
+              const cz = b.homeZ + b.outZ * 26 + Math.sin(t * 0.48 + b.phase) * 9;
+              g.position.set(cx, b.homeY + 15.5 + Math.sin(t + b.phase) * 0.8, cz);
+              g.rotation.y = Math.atan2(-Math.sin(t * 0.48 + b.phase), Math.cos(t * 0.48 + b.phase));
             }
           } else {
-            // glide gently back down to perch
             b.fleeT += dt;
-            if (nearLoud) { b.state = 'flee'; b.fleeT = 0; b.calmTimer = 11; continue; }
+            if (nearLoud) { b.state = 'flee'; b.fleeT = 0; b.calmTimer = 10; continue; }
             const r = Math.min(1, b.fleeT / 2.6);
             const ease = r * r * (3 - 2 * r);
-            const sx = b.homeX + b.outX * 22, sz = b.homeZ + b.outZ * 22, sy = b.homeY + 12;
+            const sx = b.homeX + b.outX * 22, sz = b.homeZ + b.outZ * 22, sy = b.homeY + 14;
             g.position.set(sx + (b.homeX - sx) * ease, sy + (b.homeY - sy) * ease, sz + (b.homeZ - sz) * ease);
             g.rotation.y = Math.atan2(-b.outX, -b.outZ) * (1 - ease) + b.homeYaw * ease;
             g.rotation.z = 0;
@@ -3525,6 +3974,131 @@
       return new THREE.CanvasTexture(c);
     })();
     const decalMat = map => new THREE.MeshLambertMaterial({ map, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+    const wallMapTex = (() => {
+      const c = document.createElement('canvas'); c.width = 512; c.height = 384;
+      const g = c.getContext('2d');
+      const bg = g.createLinearGradient(0, 0, 512, 384);
+      bg.addColorStop(0, '#dfd2b2'); bg.addColorStop(0.5, '#d4c39b'); bg.addColorStop(1, '#c3b083');
+      g.fillStyle = bg; g.fillRect(0, 0, 512, 384);
+      // woodland border tint
+      g.fillStyle = 'rgba(46, 68, 42, 0.16)';
+      g.fillRect(24, 24, 464, 336);
+      g.fillStyle = '#ddd0b0';
+      g.fillRect(82, 54, 348, 276);
+      // folded paper crease grid
+      g.strokeStyle = 'rgba(84, 62, 34, 0.22)'; g.lineWidth = 2;
+      [170, 342].forEach(vx => { g.beginPath(); g.moveTo(vx, 0); g.lineTo(vx, 384); g.stroke(); });
+      [128, 256].forEach(hy => { g.beginPath(); g.moveTo(0, hy); g.lineTo(512, hy); g.stroke(); });
+      // double ink border
+      g.strokeStyle = '#33281d'; g.lineWidth = 3; g.strokeRect(20, 20, 472, 344);
+      g.lineWidth = 1; g.strokeRect(26, 26, 460, 332);
+      // town street grid
+      g.strokeStyle = 'rgba(54, 46, 38, 0.65)'; g.lineWidth = 7;
+      for (let i = 0; i < 5; i++) {
+        const p = 104 + i * 76;
+        g.beginPath(); g.moveTo(p, 58); g.lineTo(p, 326); g.stroke();
+      }
+      for (let j = 0; j < 5; j++) {
+        const p = 72 + j * 60;
+        g.beginPath(); g.moveTo(88, p); g.lineTo(424, p); g.stroke();
+      }
+      // south road
+      g.beginPath(); g.moveTo(256, 326); g.lineTo(256, 368); g.stroke();
+      // block buildings
+      g.fillStyle = 'rgba(68, 52, 38, 0.68)';
+      for (let bx = 0; bx < 4; bx++) for (let bz = 0; bz < 4; bz++) {
+        const x0 = 116 + bx * 76, y0 = 80 + bz * 60;
+        g.fillRect(x0, y0, 22, 18);
+        g.fillRect(x0 + 30, y0 + 24, 22, 18);
+      }
+      // header & compass
+      g.fillStyle = '#231a12'; g.font = 'bold 20px Georgia, serif'; g.textAlign = 'center';
+      g.fillText('HOLLOW CREEK TOWN MAP', 256, 46);
+      g.strokeStyle = '#99221d'; g.lineWidth = 2.5;
+      g.beginPath(); g.arc(444, 74, 15, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#99221d'; g.font = 'bold 14px Georgia, serif'; g.fillText('N', 444, 79);
+      return new THREE.CanvasTexture(c);
+    })();
+    {
+      const mg = new THREE.Group();
+      mg.userData.keepDynamic = true;
+      const paperMat = mat({ map: wallMapTex, roughness: 0.88, metalness: 0.0 });
+      const paperBack = mat({ color: 0xbfb291, roughness: 0.92 });
+      const sheet = new THREE.Mesh(
+        new THREE.BoxGeometry(1.44, 1.08, 0.016),
+        [paperBack, paperBack, paperBack, paperBack, paperMat, paperBack]
+      );
+      mg.add(sheet);
+      const batten = new THREE.Mesh(new THREE.BoxGeometry(1.50, 0.05, 0.028), M.wood);
+      batten.position.set(0, 0.545, 0.004);
+      mg.add(batten);
+      const pinMat = mat({ color: 0xb82420, roughness: 0.45, metalness: 0.25 });
+      const pinGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.024, 8);
+      pinGeo.rotateX(Math.PI / 2);
+      [[-0.66, 0.48], [0.66, 0.48], [-0.66, -0.48], [0.66, -0.48]].forEach(([px, py]) => {
+        const pin = new THREE.Mesh(pinGeo, pinMat);
+        pin.position.set(px, py, 0.014);
+        mg.add(pin);
+      });
+      mg.visible = false;
+      W.root.add(mg);
+      W.wallMap = {
+        mesh: mg,
+        pos: new THREE.Vector3(),
+        yaw: 0,
+        baseY: 0.14,
+        taken: false,
+        disabled: false,
+        building: null,
+      };
+    }
+
+    W.debrisGroup.userData.keepDynamic = true;
+    W.fenceDebrisGroup.userData.keepDynamic = true;
+    W.evGroup.userData.keepDynamic = true;
+
+    W.placeWallMap = function (preferEnterable) {
+      const wm = W.wallMap;
+      if (!wm) return null;
+      W.buildings.forEach(b => { b.hasMap = false; });
+      if (LO.ver && !LO.ver().townMap) {
+        wm.disabled = true;
+        wm.taken = true;
+        wm.building = null;
+        wm.mesh.visible = false;
+        return null;
+      }
+      const hasGroundWall = b => b && b.building && b.building.safeWallSpots && b.building.safeWallSpots.some(s => (s.y === undefined || s.y <= 0.25));
+      let candidates = [];
+      if (preferEnterable && hasGroundWall(preferEnterable)) {
+        candidates = [preferEnterable];
+      } else {
+        candidates = W.enterables.filter(b => !b.sheriff && !(b.building && b.building.hasEvidence) && hasGroundWall(b));
+        if (!candidates.length) candidates = W.enterables.filter(b => !(b.building && b.building.hasEvidence) && hasGroundWall(b));
+        if (!candidates.length) candidates = W.enterables.filter(hasGroundWall);
+      }
+      if (!candidates.length) {
+        wm.disabled = true;
+        wm.mesh.visible = false;
+        return null;
+      }
+      const chosen = candidates[(Math.random() * candidates.length) | 0];
+      const groundSpots = chosen.building.safeWallSpots.filter(s => s.y === undefined || s.y <= 0.25);
+      const spot = groundSpots[(Math.random() * groundSpots.length) | 0] || chosen.building.safeWallSpots[0];
+      const baseY = spot.y !== undefined ? spot.y : 0.14;
+      const nx = Math.sin(spot.yaw), nz = Math.cos(spot.yaw);
+      wm.pos.set(spot.p.x + nx * 0.035, baseY + 1.54, spot.p.z + nz * 0.035);
+      wm.yaw = spot.yaw;
+      wm.baseY = baseY;
+      wm.taken = false;
+      wm.disabled = false;
+      wm.building = chosen.building;
+      if (chosen.building) chosen.building.hasMap = true;
+      wm.mesh.position.copy(wm.pos);
+      wm.mesh.rotation.set(0, wm.yaw, 0.015);
+      wm.mesh.visible = true;
+      return wm;
+    };
 
     W.placeEvidence = function () {
       W.evGroup.clear();
@@ -3535,11 +4109,17 @@
       W.buildings.forEach(b => {
         if (b.smashed && b.restore) b.restore();
         b.hasEvidence = b.sheriff;
+        b.hasMap = false;
       });
       W.repairFences();
       const r = Math.random, pk = a => a[(r() * a.length) | 0];
+      const leftB = (!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null;
       const used = new Set();
-      const takeEnter = () => { const c = W.enterables.filter(b => !b.sheriff && !used.has(b)); const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b; };
+      const takeEnter = () => {
+        let c = W.enterables.filter(b => !b.sheriff && b !== leftB && !used.has(b));
+        if (!c.length) c = W.enterables.filter(b => !b.sheriff && !used.has(b));
+        const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b;
+      };
       const takeFront = () => { const c = W.closedFronts.filter(b => !used.has(b) && b.H >= 7); const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b; };
       const evCol = (x0, x1, z0, z1, maxY, minY) => W.evColliders.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1, maxY, minY: minY || 0 });
       const isClear = (cx, cz, pad) => !W.colliders.some(c =>
@@ -3726,13 +4306,39 @@
         const lp = new THREE.Vector3(0, 15, 3.9).applyEuler(tg.rotation).add(tg.position);
         W.evidence.push({ id: 'tower', name: 'Handprint on the water tower', pos: lp, maxDist: 34, found: false, margin: 2 });
       }
-      // 7. the sheriff's tape — always in the sheriff's station
+      // 7. optional forest evidence — wrecked ranger truck & claw-scarred pole in the North Woodland Ring
+      if (!LO.ver || LO.ver().forestRing) {
+        const rx = -27, rz = 138;
+        car(rx, rz, 0.42, { crushed: true, paint: mat({ color: 0x2c4732, roughness: 0.5, metalness: 0.3 }), parent: W.evGroup, noCollide: true });
+        evCol(rx - 2.2, rx + 2.2, rz - 2.2, rz + 2.2, 1.3);
+        rubblePile(rx, rz, 3.2, 4, W.evGroup);
+        box(0.24, 3.2, 0.24, M.wood, rx + 2.4, 1.45, rz - 1.6, { ry: 0.35, rz: 0.42, parent: W.evGroup, cast: false });
+        const gouge = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 2.2), decalMat(clawTex));
+        gouge.position.set(rx + 2.32, 1.5, rz - 1.45);
+        gouge.rotation.y = Math.PI;
+        W.evGroup.add(gouge);
+        W.evidence.push({ id: 'ranger', name: 'Wrecked forest ranger truck', pos: new THREE.Vector3(rx, 0.9, rz), maxDist: 16, found: false, margin: 3 });
+      }
+      // 8. the sheriff's tape — always in the sheriff's station
       W.fixedEvidence.forEach(e => { e.found = false; W.evidence.push(e); });
+      W.placeWallMap((!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null);
       if (shadows) W.evGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       W.syncOccluders();
     };
     flushDeco(DECO, W.root);
     W.placeEvidence();
+
+    // Freeze static world matrices once after assembly to eliminate redundant per-frame matrixWorld walks on low-end CPUs
+    W.root.updateMatrixWorld(true);
+    (function freezeStatic(obj) {
+      if (!obj || (obj.userData && obj.userData.keepDynamic)) return;
+      const ch = obj.children;
+      for (let i = 0; i < ch.length; i++) freezeStatic(ch[i]);
+      if (obj !== W.root && obj !== W.sky && obj !== W.stars && (!W.dust || obj !== W.dust.pts)) {
+        obj.matrixAutoUpdate = false;
+        obj.updateMatrix();
+      }
+    })(W.root);
 
     W.spawn = new THREE.Vector3(1.2, 0, -HALF + 6);
     W.playerCarPos = new THREE.Vector3(-3, 0, -HALF + 5);

@@ -635,6 +635,9 @@
     this.exitFence = null;
     this.exitBreached = false;
     this.exitAfterT = 0;
+    this.forestT = 0;
+    this.stareTime = 0;
+    this.retreatDir = null;
     this.gait = 0;
     this.lastStepHalf = 0;
     this.trail = [];
@@ -649,6 +652,7 @@
     this.clearHighlight();
     if (this.world && this.world.fences) {
       this.world.fences.forEach(f => {
+        if (f.permanentGate) return;
         f.broken = false;
         f.mesh.visible = true;
         f.mesh.position.copy(f.basePos);
@@ -709,6 +713,83 @@
     }
   };
 
+  // ---------------- forest stalk spawn (no town breach, no locker highlight) ----------------
+  const _fFwd = new V3(), _fTo = new V3(), _fTarget = new V3();
+  FastOne.prototype.isForestSpotFree = function (x, z) {
+    const W = this.world;
+    const lim = (W.OUTER_E || 152) - 3;
+    if (Math.abs(x) > lim || Math.abs(z) > lim) return false;
+    if (W.isForest && !W.isForest({ x, z })) return false;
+    const cols = W.colliders || [];
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
+      if (c.disabled || c.minY > 1.5 || c.maxY < 0.5) continue;
+      if (x + 0.65 > c.minX && x - 0.65 < c.maxX && z + 0.65 > c.minZ && z - 0.65 < c.maxZ) return false;
+    }
+    return true;
+  };
+
+  FastOne.prototype.slideForest = function (nx, nz) {
+    const cols = (this.world && this.world.colliders) || [];
+    const r = 0.45;
+    let x = nx, z = nz;
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
+      if (c.disabled || c.maxY < 0.4 || c.minY > 1.5) continue;
+      const cx = Math.max(c.minX, Math.min(x, c.maxX));
+      const cz = Math.max(c.minZ, Math.min(z, c.maxZ));
+      const dx = x - cx, dz = z - cz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= r * r) continue;
+      if (d2 > 1e-8) {
+        const d = Math.sqrt(d2), push = r - d;
+        x += (dx / d) * push; z += (dz / d) * push;
+      }
+    }
+    this.pos.x = x; this.pos.z = z;
+  };
+
+  FastOne.prototype.startForestStalk = function (player) {
+    const W = this.world;
+    const E = W.E || ((W.HALF || 110) + 3);
+    const OUTER = W.OUTER_E || (E + 39);
+    let sx = player.pos.x, sz = player.pos.z;
+    let found = false;
+    const baseAng = Math.atan2(-player.pos.z, -player.pos.x) + Math.PI;
+    for (let t = 0; t < 24; t++) {
+      const ang = baseAng + (Math.random() - 0.5) * Math.PI * 1.4;
+      const dist = 22 + Math.random() * 6;
+      const cx = Math.max(-(OUTER - 3), Math.min(OUTER - 3, player.pos.x + Math.cos(ang) * dist));
+      const cz = Math.max(-(OUTER - 3), Math.min(OUTER - 3, player.pos.z + Math.sin(ang) * dist));
+      if (this.isForestSpotFree(cx, cz)) { sx = cx; sz = cz; found = true; break; }
+    }
+    if (!found) {
+      // Fallback: place along the nearest outer forest flank on the player's side
+      const ax = Math.abs(player.pos.x), az = Math.abs(player.pos.z);
+      if (ax >= az) {
+        sx = Math.sign(player.pos.x || 1) * Math.min(OUTER - 4, Math.max(E + 14, ax));
+        sz = player.pos.z + (player.pos.z > 0 ? -24 : 24);
+      } else {
+        sz = Math.sign(player.pos.z || 1) * Math.min(OUTER - 4, Math.max(E + 14, az));
+        sx = player.pos.x + (player.pos.x > 0 ? -24 : 24);
+      }
+    }
+    this.clearHighlight();
+    this.pos.set(sx, 0, sz);
+    const dx = player.pos.x - sx, dz = player.pos.z - sz;
+    this.root.rotation.y = Math.atan2(dx, dz);
+    this.root.visible = true;
+    this.state = 'forest_stalk';
+    this.forestT = 0;
+    this.stareTime = 0;
+    this.gait = 0;
+    this.trail = [];
+    this.trailTimer = 0;
+    this.trailFade = 0.65;
+    LO.ambush.active = 'fastone';
+    LO.audio.fastHowl(this.pos);
+  };
+
   // ---------------- breach telegraph & gallop animation helpers ----------------
   FastOne.prototype.animateTelegraph = function (dt, player) {
     const t = this.telegraphT;
@@ -763,7 +844,9 @@
     if (LO.ambush) { LO.ambush.active = null; LO.ambush.gapUntil = 0; }
     this.cooldown = 0;
     this.timer = 0;
-    this.spawnBreach(player, time || 0);
+    const inForest = (!LO.ver || LO.ver().forestRing) && this.world.isForest && this.world.isForest(player.pos);
+    if (inForest) this.startForestStalk(player, time || 0);
+    else this.spawnBreach(player, time || 0);
     return true;
   };
 
@@ -779,7 +862,11 @@
       if (this.state !== 'idle') {
         this.clearHighlight();
         if (this.state === 'chase' || this.state === 'telegraph') this.startExit(player);
-        else if (this.state === 'slam' || this.state === 'exit') { /* finish cleanly */ }
+        else if (this.state === 'forest_stalk') {
+          this.state = 'forest_retreat';
+          this.forestT = 0;
+          this.retreatDir = new V3(this.pos.x - player.pos.x, 0, this.pos.z - player.pos.z).normalize();
+        }
       }
       if (this.state === 'idle') { this.updateAfterimages(dt, false); return; }
     }
@@ -801,7 +888,93 @@
         this.timer = 0;
         return;
       }
-      this.spawnBreach(player, time);
+      const inForest = (!LO.ver || LO.ver().forestRing) && this.world.isForest && this.world.isForest(player.pos);
+      if (inForest) this.startForestStalk(player, time);
+      else this.spawnBreach(player, time);
+      return;
+    }
+
+    if (this.state === 'forest_stalk') {
+      this.forestT += dt;
+      this.clearHighlight();
+      if (this.world.isForest && !this.world.isForest(player.pos)) {
+        this.state = 'forest_retreat';
+        this.forestT = 0;
+        this.retreatDir = new V3(this.pos.x - player.pos.x, 0, this.pos.z - player.pos.z).normalize();
+        return;
+      }
+      const dx = player.pos.x - this.pos.x;
+      const dz = player.pos.z - this.pos.z;
+      const dist = Math.hypot(dx, dz) || 0.001;
+      const speed = 5.8 + Math.min(2.2, this.forestT * 0.25);
+
+      const wantYaw = Math.atan2(dx, dz);
+      let diff = wantYaw - this.root.rotation.y;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.root.rotation.y += Math.max(-8 * dt, Math.min(8 * dt, diff));
+
+      const step = Math.min(dist, speed * dt);
+      this.slideForest(this.pos.x + (dx / dist) * step, this.pos.z + (dz / dist) * step);
+      this.pos.y = 0;
+
+      if (dist < 24) {
+        player.shake = Math.max(player.shake, Math.pow(1 - dist / 24, 1.5) * 0.26);
+      }
+
+      this.animateRun(dt, speed, time);
+      this.updateAfterimages(dt, true);
+
+      // Look directly at The Fast One when it gets close (<= 18m) to drive it back into the trees
+      if (dist <= 18 && camera) {
+        camera.getWorldDirection(_fFwd);
+        _fTarget.set(this.pos.x, 0.85, this.pos.z);
+        _fTo.copy(_fTarget).sub(camera.position);
+        const camDist = _fTo.length() || 0.001;
+        _fTo.divideScalar(camDist);
+        let clearLOS = _fTo.dot(_fFwd) > 0.76;
+        if (clearLOS && this.world.occluders && this.world.occluders.length) {
+          this._losRay = this._losRay || new THREE.Raycaster();
+          this._losRay.set(camera.position, _fTo);
+          this._losRay.far = camDist;
+          const hits = this._losRay.intersectObjects(this.world.occluders, false);
+          if (hits.length && hits[0].distance < camDist - 0.9) clearLOS = false;
+        }
+        if (clearLOS) {
+          this.stareTime += dt * (player.flashOn ? 1.55 : 1.0);
+          player.shake = Math.max(player.shake, 0.14);
+          if (this.stareTime >= 0.42) {
+            LO.audio.fastHowl(this.pos);
+            player.shake = Math.max(player.shake, 0.35);
+            this.state = 'forest_retreat';
+            this.forestT = 0;
+            this.retreatDir = new V3(this.pos.x - player.pos.x, 0, this.pos.z - player.pos.z).normalize();
+            return;
+          }
+        } else {
+          this.stareTime = Math.max(0, this.stareTime - dt * 0.8);
+        }
+      } else {
+        this.stareTime = Math.max(0, this.stareTime - dt * 0.8);
+      }
+
+      if (dist < 2.05 || this.forestT >= 11.0) {
+        this.finishEncounter();
+        return 'kill';
+      }
+      return;
+    }
+
+    if (this.state === 'forest_retreat') {
+      this.forestT += dt;
+      const d = this.retreatDir || new V3(1, 0, 0);
+      const exitSpeed = 30;
+      this.pos.x += d.x * exitSpeed * dt;
+      this.pos.z += d.z * exitSpeed * dt;
+      this.root.rotation.y = Math.atan2(d.x, d.z);
+      this.animateRun(dt, exitSpeed, time);
+      this.updateAfterimages(dt, true);
+      if (this.forestT >= 0.95) this.finishEncounter();
       return;
     }
 

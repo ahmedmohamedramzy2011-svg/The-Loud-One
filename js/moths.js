@@ -58,14 +58,22 @@
 
   // ---------- shared look: furry pale body, patterned wings, glossy compound eyes ----------
   function wingTexture(hind) {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+    const lowT = !!(LO.settings && LO.settings.textures === 'low');
+    const c = document.createElement('canvas'); c.width = lowT ? 128 : 256; c.height = lowT ? 128 : 256;
     const g = c.getContext('2d');
+    if (lowT) g.scale(0.5, 0.5);
     // base: dusty grey-brown, darker toward the body
     const gr = g.createLinearGradient(0, 0, 256, 0);
     gr.addColorStop(0, hind ? '#6d6253' : '#5a5045'); gr.addColorStop(1, hind ? '#a8998a' : '#9a8b78');
     g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
-    // mottled dust
-    for (let i = 0; i < 2200; i++) { const v = Math.random() < 0.5 ? 255 : 0; g.fillStyle = `rgba(${v},${v},${v},${Math.random() * 0.08})`; g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2); }
+    // mottled dust (quantized alpha buckets avoid repeated fillStyle strings)
+    const dustN = lowT ? 650 : 2200;
+    for (let i = 0; i < dustN; i++) {
+      const v = (i & 1) ? 255 : 0;
+      const a = (((i * 13) % 4) + 1) * 0.02;
+      g.fillStyle = `rgba(${v},${v},${v},${a})`;
+      g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+    }
     // wavy bands
     g.strokeStyle = 'rgba(40,30,22,0.55)'; g.lineWidth = 5;
     [90, 150, 205].forEach(x => { g.beginPath(); for (let y = 0; y <= 256; y += 16) g.lineTo(x + Math.sin(y * 0.06) * 10, y); g.stroke(); });
@@ -83,11 +91,15 @@
     return t;
   }
   function furTexture() {
-    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const lowT = !!(LO.settings && LO.settings.textures === 'low');
+    const c = document.createElement('canvas'); c.width = c.height = lowT ? 64 : 128;
     const g = c.getContext('2d');
+    if (lowT) g.scale(0.5, 0.5);
     g.fillStyle = '#cfc6b4'; g.fillRect(0, 0, 128, 128);
-    for (let i = 0; i < 1400; i++) {
-      const v = 150 + Math.random() * 90; g.strokeStyle = `rgba(${v},${v - 8},${v - 20},0.6)`; g.lineWidth = 1;
+    const hairN = lowT ? 450 : 1400;
+    const shades = ['rgba(165,157,145,0.6)', 'rgba(190,182,170,0.6)', 'rgba(215,207,195,0.6)', 'rgba(232,224,212,0.6)'];
+    for (let i = 0; i < hairN; i++) {
+      g.strokeStyle = shades[i & 3]; g.lineWidth = 1;
       const x = Math.random() * 128, y = Math.random() * 128; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 3, y + 4 + Math.random() * 5); g.stroke();
     }
     const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 3); t.encoding = THREE.sRGBEncoding;
@@ -105,6 +117,7 @@
 
   Moths.prototype.kit = function () {
     if (this._kit) return this._kit;
+    const lowQ = !!(LO.settings && LO.settings.quality === 'low');
     const fur = new THREE.MeshLambertMaterial({ map: furTexture(), color: 0xe6dccb });
     const skin = new THREE.MeshLambertMaterial({ color: 0xb8ae9c });
     const eye = new THREE.MeshStandardMaterial({ color: 0x120808, roughness: 0.12, metalness: 0.2 });
@@ -119,16 +132,16 @@
     ]));
     this._kit = {
       fur, skin, eye, fore, hind,
-      thorax: lathe(0.75, [[0.05, 0], [0.2, 0.08], [0.24, 0.35], [0.2, 0.75], [0.12, 1]], 10),
-      abdomen: lathe(0.55, [[0.12, 0], [0.16, 0.3], [0.13, 0.75], [0.05, 1]], 10),
-      leg: lathe(1.0, [[0.06, 0], [0.055, 0.45], [0.035, 0.55], [0.03, 0.95], [0.02, 1]], 6),
-      arm: lathe(0.62, [[0.04, 0], [0.03, 0.9], [0.022, 1]], 6),
+      thorax: lathe(0.75, [[0.05, 0], [0.2, 0.08], [0.24, 0.35], [0.2, 0.75], [0.12, 1]], lowQ ? 6 : 10),
+      abdomen: lathe(0.55, [[0.12, 0], [0.16, 0.3], [0.13, 0.75], [0.05, 1]], lowQ ? 6 : 10),
+      leg: lathe(1.0, [[0.06, 0], [0.055, 0.45], [0.035, 0.55], [0.03, 0.95], [0.02, 1]], lowQ ? 4 : 6),
+      arm: lathe(0.62, [[0.04, 0], [0.03, 0.9], [0.022, 1]], lowQ ? 4 : 6),
       finger: lathe(0.2, [[0.012, 0], [0.004, 1]], 4),
-      head: new THREE.SphereGeometry(0.13, 12, 10),
-      eyeG: new THREE.SphereGeometry(0.075, 12, 10),
+      head: new THREE.SphereGeometry(0.13, lowQ ? 8 : 12, lowQ ? 6 : 10),
+      eyeG: new THREE.SphereGeometry(0.075, lowQ ? 8 : 12, lowQ ? 6 : 10),
       collar: new THREE.ConeGeometry(0.03, 0.14, 4),
-      rings: [0, 1, 2].map(i => new THREE.TorusGeometry(0.135 - i * 0.012, 0.012, 4, 14)),
-      antTubes: antCurves.map(c => new THREE.TubeGeometry(c, 10, 0.008, 4)),
+      rings: [0, 1, 2].map(i => new THREE.TorusGeometry(0.135 - i * 0.012, 0.012, 4, lowQ ? 8 : 14)),
+      antTubes: antCurves.map(c => new THREE.TubeGeometry(c, lowQ ? 6 : 10, 0.008, 4)),
       antBarbs: antCurves.map((c, idx) => {
         const sd = idx === 0 ? -1 : 1, pts = [];
         for (let b = 1; b < 9; b++) { const p = c.getPoint(b / 9); pts.push({ x: p.x, y: p.y + 0.02, z: p.z, rz: sd * 0.6 }); }

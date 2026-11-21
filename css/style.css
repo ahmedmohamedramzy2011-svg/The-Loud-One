@@ -473,6 +473,7 @@ body.touch #subtitles { bottom: 30vh; }
 #hint-label { font-size: 14px; color: #ffd34d; letter-spacing: 1px; margin-top: 4px; }
 body.touch #hint-btn { display: none; }
 body.touch #t-hint { grid-column: span 2; }
+body.touch.has-map #t-hint { grid-column: span 1; }
 
 /* ---------- the Tenant ---------- */
 #tenant-eyes { position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); opacity: 0; display: flex; gap: 46px; transition: opacity 0.4s; }
@@ -715,4 +716,76 @@ body.touch #admin-footer-btn { touch-action: manipulation; }
   .adm-head { padding: 12px 14px 8px; flex-wrap: wrap; }
   .adm-telemetry, .adm-tabs, .adm-body { padding-left: 14px; padding-right: 14px; }
   .adm-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- Town Survey Map (v2.7.1) ---------- */
+#map-hud-badge {
+  display: none; position: absolute; right: 24px; bottom: 24px;
+  pointer-events: auto; cursor: pointer;
+  font-family: var(--font-title); letter-spacing: 2px; font-size: 14px;
+  padding: 6px 13px; color: #e2d4ad; background: rgba(20, 17, 12, 0.78);
+  border: 1px solid rgba(212, 195, 155, 0.45);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.65);
+  transition: color 0.15s, border-color 0.15s, background 0.15s, opacity 0.4s;
+}
+#map-hud-badge.show { display: block; }
+#map-hud-badge.open { color: #fff4d8; border-color: var(--red); background: rgba(120, 20, 18, 0.75); }
+#map-hud-badge:hover { border-color: #fff2cc; color: #fff; }
+body.touch #map-hud-badge { display: none !important; }
+body.still #map-hud-badge { opacity: 0 !important; pointer-events: none; }
+
+#map-overlay {
+  z-index: 14; pointer-events: none;
+  background: rgba(0, 0, 0, 0.56);
+}
+#map-overlay.active { display: flex; align-items: center; justify-content: center; padding: 16px; }
+.map-card {
+  width: min(86vh, 88vw, 620px);
+  background: linear-gradient(155deg, #272017 0%, #19140e 100%);
+  border: 1px solid rgba(214, 195, 152, 0.45);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.92), 0 0 0 1px rgba(0, 0, 0, 0.8);
+  padding: 12px 14px 10px;
+  color: #efe3c2;
+}
+.map-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 8px; padding-bottom: 6px;
+  border-bottom: 1px solid rgba(214, 195, 152, 0.24);
+}
+.map-title {
+  font-family: var(--font-title); letter-spacing: 3px; font-size: clamp(16px, 2.2vw, 22px);
+  color: #f3e6c4; line-height: 1.05;
+}
+.map-zone { font-size: 11px; letter-spacing: 1.5px; color: #c7b588; margin-top: 2px; }
+#map-close-btn {
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(214, 195, 152, 0.35);
+  color: #e6d8b3; width: 32px; height: 32px; cursor: pointer;
+  font-family: sans-serif; font-size: 17px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+#map-close-btn:hover { border-color: var(--red); color: var(--red); background: rgba(209, 26, 26, 0.14); }
+#map-canvas {
+  display: block; width: 100%; height: auto; aspect-ratio: 1 / 1;
+  border: 1px solid #3c2f1f;
+  box-shadow: inset 0 0 24px rgba(35, 24, 12, 0.35);
+}
+.map-legend {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 14px;
+  margin-top: 8px; font-size: 11px; letter-spacing: 0.7px; color: #d5c7a3;
+}
+.map-leg-item { display: inline-flex; align-items: center; gap: 5px; }
+.ml-dot { display: inline-block; width: 10px; height: 10px; border: 1px solid rgba(255,255,255,0.45); }
+.ml-you { background: #d11a1a; clip-path: polygon(50% 0%, 100% 100%, 50% 72%, 0% 100%); border: none; width: 11px; height: 11px; }
+.ml-enter { background: #c59d5f; }
+.ml-hq { background: #4f6484; }
+.ml-ev { background: #247539; border-radius: 50%; }
+.ml-breach { background: #c42b23; border-radius: 2px; }
+.map-foot-hint {
+  margin-top: 5px; text-align: center; font-size: 10px; letter-spacing: 1.5px; color: #9c8f70;
+}
+@media (max-width: 640px) {
+  .map-card { width: min(94vw, 82vh); padding: 10px; }
+  .map-legend { font-size: 10px; gap: 6px 10px; }
 }

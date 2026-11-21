@@ -115,6 +115,8 @@
     this.windedTimer = 0;
     this.dizzy = 0;
     this.dizzyT = 0;
+    this.hasMap = false;
+    this.mapOpen = false;
   };
 
   Player.prototype.triggerAdrenaline = function (duration) {
@@ -146,9 +148,13 @@
       if (!self.enabled) return;
       if (e.code === 'KeyF') self.toggleFlash();
       if (e.code === 'KeyE') self.interact();
-      if (e.code === 'KeyQ') self.cameraUp = !self.cameraUp;
+      if (e.code === 'KeyQ' && !self.mapOpen) self.cameraUp = !self.cameraUp;
       if (e.code === 'KeyG') self.throwRock();
-      if (e.code === 'Space' || e.code === 'Tab') e.preventDefault();
+      if (e.code === 'KeyM' || e.code === 'Tab') {
+        e.preventDefault();
+        if (!e.repeat && (!LO.ver || LO.ver().townMap)) self.toggleMap();
+      }
+      if (e.code === 'Space') e.preventDefault();
     });
     window.addEventListener('keyup', e => { self.keys[e.code] = false; });
     document.addEventListener('mousemove', e => {
@@ -160,8 +166,9 @@
     });
     document.addEventListener('mousedown', e => {
       if (!self.enabled || document.pointerLockElement == null) return;
-      if (e.button === 2) self.cameraUp = true;
+      if (e.button === 2 && !self.mapOpen) self.cameraUp = true;
       if (e.button === 0) {
+        if (self.mapOpen) { self.toggleMap(false); return; }
         if (self.cameraUp) self.takePhoto();
         else self.hint && self.hint('Raise your camera first — hold RIGHT MOUSE or press Q' + (LO.isTouch ? ' (tap CAMERA)' : ''));
       }
@@ -217,6 +224,8 @@
     let moving = false, sprinting = false;
     const indoor = W.isIndoor(this.pos);
     this.indoor = indoor;
+    const inForest = !!(W.isForest && W.isForest(this.pos) && !indoor && this.pos.y < 0.8);
+    this.inForest = inForest;
 
     // mid-way into or out of a hiding spot: no control until the door shuts
     if (this.hideAnim) {
@@ -381,7 +390,7 @@
         this.stepPhase += dt * hspeed * (sprinting ? 0.42 : 0.55);
         if (Math.floor(this.stepPhase) !== this.lastStep) {
           this.lastStep = Math.floor(this.stepPhase);
-          LO.audio.footstep(sprinting ? 'run' : this.crouch > 0.5 ? 'crouch' : 'walk', indoor);
+          LO.audio.footstep(sprinting ? 'run' : this.crouch > 0.5 ? 'crouch' : 'walk', indoor, inForest);
         }
       }
       this.bob = this.onGround ? Math.sin(this.stepPhase * Math.PI) * Math.min(1, hspeed / 4) : 0;
@@ -406,9 +415,13 @@
 
     // ---------- noise ----------
     // every source STACKS: walking with the light on is louder than either alone
+    const Vn = LO.ver ? LO.ver() : { forestRing: true };
     let n = 0;
     if (this.flashOn) n += NOISE.flashlight;
-    if (this.moving && !this.hidden) n += this.sprinting ? NOISE.sprint : this.crouch > 0.5 ? NOISE.crouch : NOISE.walk;
+    if (this.moving && !this.hidden) {
+      n += this.sprinting ? NOISE.sprint : this.crouch > 0.5 ? NOISE.crouch : NOISE.walk;
+      if (Vn.forestRing && inForest) n += this.sprinting ? 8 : this.crouch > 0.5 ? 2.5 : 5;
+    }
     n += this.spike;
     if (indoor) n *= 0.6;
     if (this.hidden) n = this.spike > 0 ? this.spike * 0.5 : 0;
@@ -461,9 +474,11 @@
     // ---------- interaction prompt ----------
     this.prompt = '';
     if (this.hidden) this.prompt = '<kbd>E</kbd>Leave hiding spot';
-    else {
+    else if (!this.mapOpen) {
+      const wm = this.nearestWallMap();
       const sp = this.nearestHideSpot();
-      if (sp) this.prompt = sp.lockedUntil > performance.now() / 1000 ? 'Something is moving inside...' : `<kbd>E</kbd>Hide in ${sp.type}`;
+      if (wm) this.prompt = '<kbd>E</kbd>Take Town Map';
+      else if (sp) this.prompt = sp.lockedUntil > performance.now() / 1000 ? 'Something is moving inside...' : `<kbd>E</kbd>Hide in ${sp.type}`;
     }
 
     // ---------- camera zoom & viewfinder ----------
@@ -630,7 +645,8 @@
 
   Player.prototype.collide = function () {
     const p = this.pos;
-    collideList(p, this.world.colliders);
+    const list = this.world.queryColliders ? this.world.queryColliders(p.x, p.z, 1.0) : this.world.colliders;
+    collideList(p, list);
     if (this.world.evColliders.length) collideList(p, this.world.evColliders);
   };
 
@@ -687,7 +703,8 @@
       r.vel.y -= 13 * dt;
       const nx = p.x + r.vel.x * dt, nz = p.z + r.vel.z * dt;
       // hit a wall: drop straight down
-      const hit = hitCollider(W.colliders, p.y, nx, nz) || (W.evColliders.length && hitCollider(W.evColliders, p.y, nx, nz));
+      const cols = W.queryColliders ? W.queryColliders(nx, nz, 0.5) : W.colliders;
+      const hit = hitCollider(cols, p.y, nx, nz) || (W.evColliders.length && hitCollider(W.evColliders, p.y, nx, nz));
       if (hit) { r.vel.x *= -0.15; r.vel.z *= -0.15; } else { p.x = nx; p.z = nz; }
       p.y += r.vel.y * dt;
       r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt;
@@ -713,19 +730,49 @@
     if (this.health <= 0) this.onDeath && this.onDeath(cause);
   };
 
+  const _fwdTmp = new V3();
   Player.prototype.nearestHideSpot = function () {
     let best = null, bd = 1.7;
-    const fwd = new V3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    this.world.hideSpots.forEach(s => {
-      if (s.disabled) return;
-      if (Math.abs((s.baseY || 0) - this.pos.y) > 1.5) return;
+    _fwdTmp.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    const list = this.world.hideSpots;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      if (s.disabled) continue;
+      if (Math.abs((s.baseY || 0) - this.pos.y) > 1.5) continue;
       const dx = s.interact.x - this.pos.x, dz = s.interact.z - this.pos.z;
       const d = Math.hypot(dx, dz);
+      if (d >= bd) continue;
       const tx = s.pos.x - this.pos.x, tz = s.pos.z - this.pos.z;
-      const facing = (tx * fwd.x + tz * fwd.z) / (Math.hypot(tx, tz) || 1);
-      if (d < bd && facing > 0.3) { bd = d; best = s; }
-    });
+      const facing = (tx * _fwdTmp.x + tz * _fwdTmp.z) / (Math.hypot(tx, tz) || 1);
+      if (facing > 0.3) { bd = d; best = s; }
+    }
     return best;
+  };
+
+  Player.prototype.nearestWallMap = function () {
+    if (LO.ver && !LO.ver().townMap) return null;
+    const wm = this.world && this.world.wallMap;
+    if (!wm || wm.disabled || wm.taken || this.hidden) return null;
+    if (Math.abs((wm.baseY !== undefined ? wm.baseY : 0.14) - this.pos.y) > 1.7) return null;
+    const dx = wm.pos.x - this.pos.x, dz = wm.pos.z - this.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 3.1) return null;
+    _fwdTmp.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    const facing = (dx * _fwdTmp.x + dz * _fwdTmp.z) / (d || 1);
+    return facing > 0.35 ? wm : null;
+  };
+
+  Player.prototype.toggleMap = function (force) {
+    if (LO.ver && !LO.ver().townMap) return;
+    if (!this.hasMap) {
+      if (force !== false) this.hint && this.hint('Find the town map on a building wall first.');
+      return;
+    }
+    const next = force !== undefined ? !!force : !this.mapOpen;
+    if (next === this.mapOpen) return;
+    this.mapOpen = next;
+    if (this.mapOpen) this.cameraUp = false;
+    LO.audio.click(this.mapOpen);
   };
 
   // ---------- climbing in and out: the door/lid swings open, you move, it closes ----------
@@ -777,10 +824,27 @@
 
   Player.prototype.interact = function () {
     if (this.hideAnim) return;
+    if (this.mapOpen) {
+      this.mapOpen = false;
+      LO.audio.click(false);
+      return;
+    }
     if (this.hidden) {
       const s = this.hidden;
       this.hidden = null;
       this.startHideAnim(s, 'out');
+      return;
+    }
+    const wm = this.nearestWallMap();
+    if (wm) {
+      wm.taken = true;
+      if (wm.mesh) wm.mesh.visible = false;
+      if (wm.building) wm.building.hasMap = false;
+      this.hasMap = true;
+      this.cameraUp = false;
+      this.mapOpen = true;
+      LO.audio.pickup();
+      this.hint && this.hint(`Town Map collected! Press ${LO.isTouch ? 'MAP' : 'M or Tab'} anytime to view.`, 5500);
       return;
     }
     const s = this.nearestHideSpot();

@@ -15,10 +15,17 @@
     return [c, c.getContext('2d')];
   }
   function speckle(g, size, r, count, alpha, light) {
-    for (let i = 0; i < count; i++) {
-      const v = light ? 255 : 0;
-      g.fillStyle = `rgba(${v},${v},${v},${alpha * r()})`;
-      const s = 1 + r() * size / 128;
+    const v = light ? 255 : 0;
+    const cap = LO.settings && LO.settings.textures === 'low' ? Math.min(count, size * 10) : count;
+    const step = Math.max(1, size / 128);
+    let lastBucket = -1;
+    for (let i = 0; i < cap; i++) {
+      const b = (r() * 8) | 0;
+      if (b !== lastBucket) {
+        lastBucket = b;
+        g.fillStyle = `rgba(${v},${v},${v},${((alpha * (b + 0.5)) / 8).toFixed(3)})`;
+      }
+      const s = 1 + r() * step;
       g.fillRect(r() * size, r() * size, s, s);
     }
   }
@@ -70,6 +77,30 @@
         g.fillRect(r() * size, r() * size, 1, 2 + r() * 3);
       }
       grime(g, size, r, 12);
+      return c;
+    },
+    trail(size, r) {
+      const [c, g] = canvas(size);
+      g.fillStyle = '#2a2219'; g.fillRect(0, 0, size, size);
+      // worn center dirt & subtle damp wheel/boot tracks
+      g.fillStyle = 'rgba(20,15,10,0.28)';
+      g.fillRect(size * 0.16, 0, size * 0.22, size);
+      g.fillRect(size * 0.62, 0, size * 0.22, size);
+      speckle(g, size, r, size * 18, 0.22, true);
+      speckle(g, size, r, size * 24, 0.35, false);
+      // scattered dry pine needles & small stones
+      for (let i = 0; i < size * 4; i++) {
+        g.strokeStyle = r() < 0.5 ? 'rgba(90,64,34,0.55)' : 'rgba(54,42,26,0.6)';
+        g.lineWidth = Math.max(1, size / 256);
+        const x = r() * size, y = r() * size, a = r() * Math.PI * 2, len = 3 + r() * (size / 42);
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len); g.stroke();
+      }
+      for (let i = 0; i < size * 0.6; i++) {
+        g.fillStyle = `rgba(${85 + r() * 45},${78 + r() * 40},${68 + r() * 35},0.55)`;
+        const ps = 1.5 + r() * (size / 90);
+        g.fillRect(r() * size, r() * size, ps, ps * 0.8);
+      }
+      grime(g, size, r, 10);
       return c;
     },
     brick(size, r, opt) {
@@ -497,7 +528,9 @@
   LO.tex.canvas = function (name, opt) {
     opt = opt || {};
     const lowQ = LO.settings.textures === 'low';
-    const size = opt.size || (lowQ ? 128 : 512);
+    const size = lowQ
+      ? (opt.size ? Math.max(64, Math.min(256, opt.size >> 1)) : 128)
+      : (opt.size || 512);
     return MAKERS[name](size, rnd(opt.seed || name.length * 7919 + 13), opt);
   };
 

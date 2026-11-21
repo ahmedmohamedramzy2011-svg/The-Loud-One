@@ -87,6 +87,7 @@
         case 'camera': p.cameraUp = !p.cameraUp; break;
         case 'shutter': if (p.cameraUp) p.takePhoto(); break;
         case 'use': p.interact(); break;
+        case 'map': p.toggleMap && p.toggleMap(); break;
         case 'hint': LO.useHint && LO.useHint(); break;
         case 'throw': p.throwRock(); break;
       }
@@ -115,8 +116,14 @@
     $('t-light').classList.toggle('on', p.flashOn);
     $('t-camera').classList.toggle('on', p.cameraUp);
     $('t-crouch').classList.toggle('on', crouchOn);
-    $('t-use').classList.toggle('on', !!p.prompt);
-    $('t-use').textContent = p.hidden ? 'LEAVE' : 'HIDE';
+    $('t-use').classList.toggle('on', !!p.prompt || !!p.mapOpen);
+    $('t-use').textContent = p.mapOpen ? 'CLOSE' : p.hidden ? 'LEAVE' : (p.nearestWallMap && p.nearestWallMap() ? 'MAP' : 'HIDE');
+    const tMap = $('t-map');
+    if (tMap) {
+      const mapAllowed = !LO.ver || LO.ver().townMap;
+      tMap.style.display = (p.hasMap && mapAllowed) ? '' : 'none';
+      tMap.classList.toggle('on', !!p.mapOpen);
+    }
     document.body.classList.toggle('cam-up', p.cameraUp);
   }
   sync();
