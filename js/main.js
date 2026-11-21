@@ -354,6 +354,28 @@
     }
   }
 
+  let settingsTab = 'all';
+  function setSettingsTab(tab) {
+    settingsTab = tab || 'all';
+    document.querySelectorAll('#settings-tabs button[data-stab]').forEach(b => {
+      b.classList.toggle('active', b.dataset.stab === settingsTab);
+    });
+    document.querySelectorAll('#settings .settings-group').forEach(g => {
+      const cat = g.dataset.scat;
+      g.classList.toggle('hidden', settingsTab !== 'all' && cat !== settingsTab);
+    });
+  }
+  function renderUnifiedSettings() {
+    renderOptions('graphics-list', LO.Settings.GRAPHICS_OPTIONS);
+    const aOpts = LO.Settings.AUDIO_OPTIONS || [];
+    const ctrlIdx = aOpts.findIndex(o => o.section === 'GAMEPLAY' || o.section === 'CONTROLS');
+    const audioOnly = ctrlIdx >= 0 ? aOpts.slice(0, ctrlIdx) : aOpts;
+    const ctrlOnly = ctrlIdx >= 0 ? aOpts.slice(ctrlIdx) : [];
+    renderOptions('audio-list', audioOnly);
+    renderOptions('controls-list', ctrlOnly);
+    setSettingsTab(settingsTab);
+  }
+
   const REBUILD_KEYS = ['textures', 'lighting', 'shadows', 'quality'];
   function changeSetting(key, value) {
     const before = { antialias: S.antialias, shadows: S.shadows, textures: S.textures, lighting: S.lighting };
@@ -421,8 +443,12 @@
   function openPanel(id, from) {
     menuReturn = from;
     hideAllScreens();
-    if (id === 'graphics') renderOptions('graphics-list', LO.Settings.GRAPHICS_OPTIONS);
-    if (id === 'audio') renderOptions('audio-list', LO.Settings.AUDIO_OPTIONS);
+    if (id === 'settings' || id === 'graphics' || id === 'audio') {
+      if (id === 'graphics') settingsTab = 'graphics';
+      else if (id === 'audio') settingsTab = 'audio';
+      id = 'settings';
+      renderUnifiedSettings();
+    }
     if (id === 'versions') renderVersions();
     if (id === 'updates') syncVersionUI();
     show(id);
@@ -1036,7 +1062,7 @@
   const _hc = {
     hasMap: null, mapOpen: null, noiseW: '', markLeft: '', stamW: '',
     stamTired: null, stamCrit: null, stamLow: null, batW: '', batLow: null,
-    prompt: null, crossDisp: '', hpW: '', hpNum: '', hpLow: null,
+    prompt: null, crossDisp: '', hpW: '', hpNum: '', hpLow: null, hpBeat: null,
     vfOpen: null, vfLocked: null, vfInfo: '', vfFilm: '', subMode: ''
   };
   function hudEl(key, getter) { return _hud[key] || (_hud[key] = getter()); }
@@ -1044,6 +1070,11 @@
     for (const k in _hc) _hc[k] = null;
     _hc.noiseW = _hc.markLeft = _hc.stamW = _hc.batW = _hc.crossDisp = _hc.hpW = _hc.hpNum = _hc.vfInfo = _hc.vfFilm = _hc.subMode = '';
     lastStatus = ''; lastHideType = '';
+    const hpBar = $('health-fill') && $('health-fill').parentNode;
+    if (hpBar) {
+      hpBar.classList.remove('low');
+      if (hpBar.parentNode) hpBar.parentNode.classList.remove('health-crit');
+    }
   }
   function updateHUD(dt) {
     const verNow = V();
@@ -1143,13 +1174,37 @@
       A.setExposure(0);
     }
 
-    // health
-    const hpW = player.health.toFixed(1) + '%';
-    const hpNum = String(Math.ceil(player.health));
-    const hpLow = player.health <= 30;
+    // health + accelerating heartbeat pulse below 30%
+    const hpVal = Math.max(0, Math.min(100, player.health));
+    const hpW = hpVal.toFixed(1) + '%';
+    const hpCeil = Math.ceil(hpVal);
+    const hpNum = String(hpCeil);
+    const hpLow = hpVal > 0 && hpVal < 30;
+    const hpBar = hudEl('hpBar', () => $('health-fill').parentNode);
+    const hpRow = hudEl('hpRow', () => hpBar.parentNode);
     if (hpW !== _hc.hpW) { _hc.hpW = hpW; hudEl('hpFill', () => $('health-fill')).style.width = hpW; }
     if (hpNum !== _hc.hpNum) { _hc.hpNum = hpNum; hudEl('hpNum', () => $('health-num')).textContent = hpNum; }
-    if (hpLow !== _hc.hpLow) { _hc.hpLow = hpLow; hudEl('hpBar', () => $('health-fill').parentNode).classList.toggle('low', hpLow); }
+    if (hpLow !== _hc.hpLow) {
+      _hc.hpLow = hpLow;
+      hpBar.classList.toggle('low', hpLow);
+      if (hpRow) hpRow.classList.toggle('health-crit', hpLow);
+    }
+    const hbBeat = hpLow ? hpCeil : -1;
+    if (hbBeat !== _hc.hpBeat) {
+      _hc.hpBeat = hbBeat;
+      if (hpLow) {
+        const t = Math.max(0, Math.min(1, (30 - hpVal) / 29));
+        const dur = (1.05 - t * 0.63).toFixed(2) + 's';
+        const scale = (1.10 + t * 0.28).toFixed(3);
+        const glow = (6 + t * 18).toFixed(1) + 'px';
+        const bright = (1.2 + t * 0.65).toFixed(2);
+        const target = hpRow || hpBar;
+        target.style.setProperty('--hb-dur', dur);
+        target.style.setProperty('--hb-scale', scale);
+        target.style.setProperty('--hb-glow', glow);
+        target.style.setProperty('--hb-bright', bright);
+      }
+    }
 
     // the Silent One: warnings from 20s of silence, attack from 30s
     const st2 = player.silentTime, W2 = LO.SILENT.WARN, AT = LO.SILENT.ATTACK;
@@ -1336,6 +1391,8 @@
   // ============================================================
   function wireMenus() {
     document.body.addEventListener('click', e => {
+      const stab = e.target.closest('#settings-tabs button[data-stab]');
+      if (stab) { A.click(true); setSettingsTab(stab.dataset.stab); return; }
       const b = e.target.closest('button[data-action]');
       if (!b) return;
       A.click(true);
@@ -1343,9 +1400,11 @@
       const inPause = state === 'paused';
       switch (act) {
         case 'play': startGame(false); break;
+        case 'settings': settingsTab = 'all'; openPanel('settings', inPause ? 'pause' : 'title'); break;
         case 'graphics': openPanel('graphics', inPause ? 'pause' : 'title'); break;
         case 'audio': openPanel('audio', inPause ? 'pause' : 'title'); break;
         case 'updates': openPanel('updates', 'title'); break;
+        case 'credits-panel': openPanel('credits-panel', 'title'); break;
         case 'versions': openPanel('versions', 'title'); break;
         case 'admin': if (LO.isTesting && LO.admin) LO.admin.openPanel(inPause ? 'pause' : 'title'); break;
         case 'back': closePanel(); break;

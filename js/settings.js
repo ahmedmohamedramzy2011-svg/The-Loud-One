@@ -27,17 +27,18 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.7.2',
-    autoLatest: '2.7.2',
+    gameVersion: '2.7.3',
+    autoLatest: '2.7.3',
   }, PRESETS.medium);
 
   const VERSIONS = [
-    { id: '2.7.2', label: 'v2.7.2', era: 'Survey map POI labels for houses & Lookout Tower, guaranteed left-side entrance building map spawn, sealed perimeter corner & barricade gaps, denser forest & low-end optimization' },
-    { id: '2.7.1', label: 'v2.7.1', era: 'Collectible large Town & Woodland wall map inside a town building (press E to take, M / Tab to toggle)' },
-    { id: '2.7',   label: 'v2.7',   era: 'Playable Woodland Perimeter Ring, Ranger Lookout tower, forest trails & outskirt town buildings, bird flock alarm, forest Fast One & Siren Head mechanics, chair leg fixes' },
-    { id: '2.6.3', label: 'v2.6.3', era: 'Animated forest birds perching & taking flight, reactive birdsong fade-out on loud noises' },
-    { id: '2.6.2', label: 'v2.6.2', era: 'Interior layout fixes, title sign camera fix, exterior forest birdsong & heavy machinery camera shake' },
-    { id: '2.6.1', label: 'v2.6.1', era: '10 curated building presets, unique 2F + roof Sheriff HQ, stamina bar color gradient, audio & visual cleanup' },
+    { id: '2.7.3', label: 'v2.7.3', era: 'Health heartbeat pulse below 30% HP, Moth leg joint fix, unified Settings menu, Credits screen & streamlined changelog' },
+    { id: '2.7.2', label: 'v2.7.2', era: 'Map POI labels, fixed left-building map spawn, sealed perimeter seams, denser forest & low-end optimization' },
+    { id: '2.7.1', label: 'v2.7.1', era: 'Collectible Town Survey Map (E to take, M / Tab to toggle) with live tracking & breaches' },
+    { id: '2.7',   label: 'v2.7',   era: 'Woodland Perimeter Ring, Lookout Tower, forest trails, bird alarm, and forest Siren Head / Fast One AI' },
+    { id: '2.6.3', label: 'v2.6.3', era: '3D forest birds with noise-reactive ambient birdsong' },
+    { id: '2.6.2', label: 'v2.6.2', era: 'Interior layout fixes, title sign camera fix, forest birdsong & machinery shake' },
+    { id: '2.6.1', label: 'v2.6.1', era: '10 building presets, unique Sheriff HQ, stamina gradient & audio/visual cleanup' },
     { id: '2.6',   label: 'v2.6',   era: 'Multi-floor interiors, proximity forest audio, sound effects overhaul, spawn & performance fixes' },
     { id: '2.5.1', label: 'v2.5.1', era: 'Dynamic flashlight sway, color-coded subtitles, refined title screen & credits' },
     { id: '2.5',   label: 'v2.5',   era: 'Re-voiced dispatcher audio, locker slit visibility, 2x stamina, remodeled trees & optimization' },
@@ -125,7 +126,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

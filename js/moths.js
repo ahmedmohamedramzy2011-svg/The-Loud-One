@@ -134,7 +134,10 @@
       fur, skin, eye, fore, hind,
       thorax: lathe(0.75, [[0.05, 0], [0.2, 0.08], [0.24, 0.35], [0.2, 0.75], [0.12, 1]], lowQ ? 6 : 10),
       abdomen: lathe(0.55, [[0.12, 0], [0.16, 0.3], [0.13, 0.75], [0.05, 1]], lowQ ? 6 : 10),
-      leg: lathe(1.0, [[0.06, 0], [0.055, 0.45], [0.035, 0.55], [0.03, 0.95], [0.02, 1]], lowQ ? 4 : 6),
+      thigh: lathe(0.76, [[0.072, 0], [0.064, 0.25], [0.052, 0.75], [0.042, 1]], lowQ ? 5 : 7),
+      shin: lathe(0.74, [[0.044, 0], [0.038, 0.35], [0.028, 0.8], [0.024, 1]], lowQ ? 5 : 7),
+      kneeG: new THREE.SphereGeometry(0.046, lowQ ? 5 : 7, lowQ ? 4 : 6),
+      footG: new THREE.ConeGeometry(0.036, 0.14, lowQ ? 4 : 6),
       arm: lathe(0.62, [[0.04, 0], [0.03, 0.9], [0.022, 1]], lowQ ? 4 : 6),
       finger: lathe(0.2, [[0.012, 0], [0.004, 1]], 4),
       head: new THREE.SphereGeometry(0.13, lowQ ? 8 : 12, lowQ ? 6 : 10),
@@ -160,8 +163,21 @@
     const add = (geo, mat, x, y, z, rx, ry, rz, parent) => {
       const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx || 0, ry || 0, rz || 0); (parent || g).add(m); return m;
     };
-    // long, thin, slightly bent legs
-    [-1, 1].forEach(sd => { add(K.leg, K.skin, sd * 0.1, 1.28, 0, 0.06, 0, sd * 0.03); add(K.leg, K.skin, sd * 0.11, 0.55, 0.05, -0.12, 0, 0).scale.setScalar(0.62); });
+    // connected pelvis -> thigh -> knee -> shin -> foot legs (local y = 0 rests on ground)
+    [-1, 1].forEach(sd => {
+      const hip = new THREE.Group();
+      hip.position.set(sd * 0.105, 1.45, -0.01);
+      hip.rotation.set(-0.14, 0, sd * 0.03);
+      g.add(hip);
+      add(K.thigh, K.skin, 0, 0, 0, 0, 0, 0, hip);
+      const knee = new THREE.Group();
+      knee.position.set(0, -0.74, 0);
+      knee.rotation.set(0.26, 0, -sd * 0.02);
+      hip.add(knee);
+      add(K.kneeG, K.skin, 0, 0, 0, 0, 0, 0, knee);
+      add(K.shin, K.skin, 0, 0, 0, 0, 0, 0, knee);
+      add(K.footG, K.skin, 0, -0.73, 0.04, Math.PI / 2 - 0.12, 0, 0, knee).scale.set(1, 1, 0.6);
+    });
     // furry thorax and a hanging, segmented abdomen
     add(K.thorax, K.fur, 0, 2.15, 0).scale.set(1, 1, 0.75);
     const ab = add(K.abdomen, K.fur, 0, 1.42, -0.04); ab.scale.set(0.9, 1, 0.8);
