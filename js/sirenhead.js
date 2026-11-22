@@ -71,8 +71,40 @@
       const pts = prof.map(([r, t]) => new V2(r, -t * len));
       return new THREE.Mesh(new THREE.LatheGeometry(pts, seg || 10), m);
     }
-    const knob = (r, m) => new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), m);
+    const knobGeo = r => new THREE.SphereGeometry(r, 10, 8);
+    const knob = (r, m) => new THREE.Mesh(knobGeo(r), m);
     const R = this.root;
+    const _pm = new THREE.Matrix4(), _pq = new THREE.Quaternion(), _pe = new THREE.Euler(), _pp = new THREE.Vector3(), _ps = new THREE.Vector3();
+    function mergeParts(entries) {
+      const geos = [];
+      let n = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const it = entries[i];
+        const g = it.geo.index ? it.geo.toNonIndexed() : it.geo.clone();
+        _pq.setFromEuler(_pe.set(it.rx || 0, it.ry || 0, it.rz || 0));
+        _pp.set(it.x || 0, it.y || 0, it.z || 0);
+        _ps.set(it.sx !== undefined ? it.sx : 1, it.sy !== undefined ? it.sy : 1, it.sz !== undefined ? it.sz : 1);
+        g.applyMatrix4(_pm.compose(_pp, _pq, _ps));
+        n += g.attributes.position.count;
+        geos.push(g);
+      }
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+      let o = 0;
+      for (let i = 0; i < geos.length; i++) {
+        const g = geos[i], c = g.attributes.position.count;
+        pos.set(g.attributes.position.array, o * 3);
+        if (g.attributes.normal) nor.set(g.attributes.normal.array, o * 3);
+        if (g.attributes.uv) uv.set(g.attributes.uv.array, o * 2);
+        o += c;
+        g.dispose();
+      }
+      const out = new THREE.BufferGeometry();
+      out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      out.computeBoundingSphere();
+      return out;
+    }
 
     // ---------------- hips & legs ----------------
     const hip = new THREE.Group(); hip.position.y = 9.0; R.add(hip); this.hip = hip;
@@ -104,19 +136,30 @@
     const chest = new THREE.Group(); chest.position.y = 1.25; torso.add(chest); this.chest = chest;
     const cage = lathe(2.4, [[0.42, 1], [0.72, 0.75], [0.8, 0.45], [0.72, 0.15], [0.45, 0]], skin, 14);
     cage.position.y = 2.4; cage.scale.z = 0.62; chest.add(cage);
+    const chestBoneParts = [];
     for (let i = 0; i < 6; i++) {                                    // ribs pushing through the skin
       const rr = 0.66 + Math.sin(i / 5 * Math.PI) * 0.12;
-      const rib = new THREE.Mesh(new THREE.TorusGeometry(rr, 0.045, 5, 16, Math.PI * 1.1), bone);
-      rib.rotation.set(Math.PI / 2, 0, -Math.PI * 0.05); rib.scale.set(1, 0.64, 1);
-      rib.position.set(0, 0.45 + i * 0.3, 0.03); chest.add(rib);
+      const rg = new THREE.TorusGeometry(rr, 0.045, 5, 16, Math.PI * 1.1);
+      chestBoneParts.push({ geo: rg, x: 0, y: 0.45 + i * 0.3, z: 0.03, rx: Math.PI / 2, ry: 0, rz: -Math.PI * 0.05, sx: 1, sy: 0.64, sz: 1, _dispose: rg });
     }
-    const sternum = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.08), bone); sternum.position.set(0, 1.4, 0.47); chest.add(sternum);
+    const sternG = new THREE.BoxGeometry(0.1, 1.5, 0.08);
+    chestBoneParts.push({ geo: sternG, x: 0, y: 1.4, z: 0.47, _dispose: sternG });
+    const spineKnobG = knobGeo(0.09);
     for (let i = 0; i < 9; i++) {                                    // spine knuckles down the back
-      const v = knob(0.09, bone); v.position.set(0, -1.1 + i * 0.42, -0.48 + Math.abs(i - 4) * 0.02); chest.add(v);
+      chestBoneParts.push({ geo: spineKnobG, x: 0, y: -1.1 + i * 0.42, z: -0.48 + Math.abs(i - 4) * 0.02 });
     }
-    const clav = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 2.3, 6), bone);
-    clav.rotation.z = Math.PI / 2; clav.position.set(0, 2.38, 0.18); chest.add(clav);
-    [-1, 1].forEach(side => { const sb = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.08), darkSkin); sb.position.set(side * 0.4, 1.8, -0.5); sb.rotation.y = side * 0.4; chest.add(sb); });
+    const clavG = new THREE.CylinderGeometry(0.09, 0.09, 2.3, 6);
+    chestBoneParts.push({ geo: clavG, x: 0, y: 2.38, z: 0.18, rz: Math.PI / 2, _dispose: clavG });
+    chest.add(new THREE.Mesh(mergeParts(chestBoneParts), bone));
+    chestBoneParts.forEach(p => p._dispose && p._dispose.dispose());
+    spineKnobG.dispose();
+
+    const sbG = new THREE.BoxGeometry(0.55, 0.7, 0.08);
+    chest.add(new THREE.Mesh(mergeParts([
+      { geo: sbG, x: -0.4, y: 1.8, z: -0.5, ry: -0.4 },
+      { geo: sbG, x: 0.4, y: 1.8, z: -0.5, ry: 0.4 },
+    ]), darkSkin));
+    sbG.dispose();
 
     // ---------------- arms: long enough to drag past the knees ----------------
     this.arms = [-1, 1].map(side => {
@@ -147,23 +190,43 @@
     const neck = new THREE.Group(); neck.position.y = 2.45; chest.add(neck); this.neck = neck;
     const stump = lathe(1.2, [[0.2, 1], [0.32, 0.6], [0.5, 0.15], [0.62, 0]], skin, 10);
     stump.rotation.x = Math.PI; stump.position.y = 1.2; neck.add(stump);
+    const sinewG = new THREE.LatheGeometry([[0.06, 0], [0.05, 0.7], [0.01, 1]].map(([r, t]) => new V2(r, -t * 1.4)), 5);
+    const sinewParts = [];
     for (let i = 0; i < 5; i++) {                                    // sinew wrapping up the pole
-      const sinew = lathe(1.4, [[0.06, 0], [0.05, 0.7], [0.01, 1]], darkSkin, 5);
       const a = i / 5 * Math.PI * 2;
-      sinew.position.set(Math.cos(a) * 0.2, 1.9, Math.sin(a) * 0.2); sinew.rotation.set(Math.sin(a) * 0.12, 0, -Math.cos(a) * 0.12);
-      neck.add(sinew);
+      sinewParts.push({ geo: sinewG, x: Math.cos(a) * 0.2, y: 1.9, z: Math.sin(a) * 0.2, rx: Math.sin(a) * 0.12, rz: -Math.cos(a) * 0.12 });
     }
+    neck.add(new THREE.Mesh(mergeParts(sinewParts), darkSkin));
+    sinewG.dispose();
     const poleG = new THREE.CylinderGeometry(0.13, 0.18, 3.8, 10); poleG.translate(0, 1.9 + 0.7, 0);
-    neck.add(new THREE.Mesh(poleG, rust));
-    const cross = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.12, 0.12), rust); cross.position.y = 3.6; neck.add(cross);
-    [-0.6, -0.2, 0.2, 0.6].forEach(x => { const ins = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.2, 8), porcelain); ins.position.set(x, 3.76, 0); neck.add(ins); });
+    const crossG = new THREE.BoxGeometry(1.5, 0.12, 0.12);
+    neck.add(new THREE.Mesh(mergeParts([
+      { geo: poleG, x: 0, y: 0, z: 0 },
+      { geo: crossG, x: 0, y: 3.6, z: 0 },
+    ]), rust));
+    poleG.dispose(); crossG.dispose();
+    const insG = new THREE.CylinderGeometry(0.05, 0.07, 0.2, 8);
+    neck.add(new THREE.Mesh(mergeParts([-0.6, -0.2, 0.2, 0.6].map(x => ({ geo: insG, x, y: 3.76, z: 0 }))), porcelain));
+    insG.dispose();
 
     // ---------------- head: two civil-defence sirens ----------------
     const head = new THREE.Group(); head.position.y = 4.45; neck.add(head); this.head = head;
-    const bracket = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.14, 0.3), metal); head.add(bracket);
-    const mount = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.5, 10), metal); mount.position.y = -0.25; head.add(mount);
+    const brkG = new THREE.BoxGeometry(1.6, 0.14, 0.3);
+    const mntG = new THREE.CylinderGeometry(0.16, 0.16, 0.5, 10);
+    head.add(new THREE.Mesh(mergeParts([{ geo: brkG }, { geo: mntG, y: -0.25 }]), metal));
+    brkG.dispose(); mntG.dispose();
     this.mouths = [];
     const hornProfile = [[0.26, 0], [0.3, 0.25], [0.42, 0.55], [0.62, 0.78], [0.95, 0.94], [1.08, 1]];
+    const ringZ = [0.5, 1.1, 1.7], ringRadii = [0.33, 0.47, 0.78];
+    const ringGs = ringRadii.map(rr => new THREE.TorusGeometry(rr, 0.035, 5, 18));
+    const housingG = new THREE.CylinderGeometry(0.42, 0.46, 0.8, 14);
+    const capG = new THREE.SphereGeometry(0.42, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    const hornRustGeo = mergeParts([
+      ...ringZ.map((z, i) => ({ geo: ringGs[i], z })),
+      { geo: housingG, z: -0.3, rx: Math.PI / 2 },
+      { geo: capG, z: -0.7, rx: -Math.PI / 2 },
+    ]);
+    ringGs.forEach(g => g.dispose()); housingG.dispose(); capG.dispose();
     [-1, 1].forEach(side => {
       const s = new THREE.Group();
       s.position.set(side * 0.68, 0.32, 0.05);
@@ -172,25 +235,20 @@
       const hornG = new THREE.LatheGeometry(pts, 20); hornG.rotateX(Math.PI / 2);
       s.add(new THREE.Mesh(hornG, metal));
       const innerM = new THREE.Mesh(hornG.clone(), inside); innerM.scale.set(0.96, 0.96, 1); s.add(innerM);
-      [0.5, 1.1, 1.7].forEach((z, i) => {                            // stiffening rings
-        const rr = [0.33, 0.47, 0.78][i];
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(rr, 0.035, 5, 18), rust); ring.position.z = z; s.add(ring);
-      });
+      s.add(new THREE.Mesh(hornRustGeo, rust));
       const lip = new THREE.Mesh(new THREE.TorusGeometry(1.08, 0.07, 6, 24), metal); lip.position.z = 2.2; s.add(lip);
-      const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 0.8, 14), rust);
-      housing.rotation.x = Math.PI / 2; housing.position.z = -0.3; s.add(housing);
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), rust);
-      cap.rotation.x = -Math.PI / 2; cap.position.z = -0.7; s.add(cap);
       const mouth = new THREE.Mesh(new THREE.CircleGeometry(0.95, 20), new THREE.MeshBasicMaterial({ color: 0xff2200, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
       mouth.position.z = 0.7; s.add(mouth);
       this.mouths.push(mouth);
       head.add(s);
     });
     // sagging cables from the cross-arm
-    [[-0.6, -1.2], [0.6, 1.3], [-0.2, -0.5]].forEach(([x0, x1]) => {
+    const wireGeos = [[-0.6, -1.2], [0.6, 1.3], [-0.2, -0.5]].map(([x0, x1]) => {
       const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(x0, 3.8, 0), new THREE.Vector3((x0 + x1) / 2, 2.4, 0.3), new THREE.Vector3(x1, 1.3, 0.2)]);
-      neck.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 12, 0.025, 4), wireMat));
+      return { geo: new THREE.TubeGeometry(curve, 12, 0.025, 4) };
     });
+    neck.add(new THREE.Mesh(mergeParts(wireGeos), wireMat));
+    wireGeos.forEach(w => w.geo.dispose());
     this.headGlow = new THREE.PointLight(0xff2a10, 0, 30, 2);
     this.headGlow.position.set(0, 0.3, 2.2); head.add(this.headGlow);
 

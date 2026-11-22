@@ -6,7 +6,7 @@
 <title>The Loud One</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Caveat:wght@500;700&family=Special+Elite&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=64">
+<link rel="stylesheet" href="css/style.css?v=67">
 </head>
 <body>
 
@@ -43,7 +43,7 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.7.3</button>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.7.6</button>
     <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
     <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
@@ -106,7 +106,22 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.7.3"><h3>v2.7.3 <span>current</span></h3><ul>
+      <div class="upd" data-ver="2.7.6"><h3>v2.7.6 <span>current</span></h3><ul>
+        <li>Added 6 environmental hazards across Hollow Creek and the outer woods: Downed Power Lines, Bear Traps, Pressurized Steam Leaks, Broken Window Glass, Creaking Floorboards, and Loose Tin Debris</li>
+        <li>Added dedicated CRT VHS death tapes, Death Room notebook sketches, and survival tips for lethal hazards; crouch-walking bypasses noise hazards and thrown rocks disarm bear traps</li>
+        <li>Reduced render draw calls and eliminated line-of-sight frame drops via geometry batching, O(1) spatial occluder/tree grids, and pooled smash debris</li>
+        <li>Expanded the Testing Admin Panel with a dedicated Hazards tab, hazard debug beacons, and live draw-call/part telemetry</li>
+      </ul></div>
+      <div class="upd" data-ver="2.7.5"><h3>v2.7.5</h3><ul>
+        <li>Added a brief, frame-rate-synchronized white camera strobe flash overlay when snapping photos</li>
+        <li>Added 3 possible wall spawn locations for the Town Survey Map inside the left entrance building (original spot, next to locker, next to shelf)</li>
+      </ul></div>
+      <div class="upd" data-ver="2.7.4"><h3>v2.7.4</h3><ul>
+        <li>Added dynamic viewfinder lens flare reacting to the flashlight, camera flash, streetlamps, and moonlight</li>
+        <li>Restored player exhaustion panting audio using the 0–12s breathing clip</li>
+        <li>Fixed ending cutscene camera angles and added building clearance checks so Siren Head's takedown and fall stay unobstructed</li>
+      </ul></div>
+      <div class="upd" data-ver="2.7.3"><h3>v2.7.3</h3><ul>
         <li>Added an accelerating heartbeat pulse animation to the Health bar below 30% HP</li>
         <li>Fixed Moth leg joints so thighs, knees, shins, and feet connect cleanly</li>
         <li>Combined Graphics, Audio, and Controls into a unified Settings menu and added a Credits screen</li>
@@ -325,6 +340,13 @@
 
 <!-- Camera viewfinder -->
 <div id="viewfinder" class="screen">
+  <div id="vf-flare" aria-hidden="true">
+    <div class="vf-flare-bloom"></div>
+    <div class="vf-flare-streak"></div>
+    <div class="vf-flare-ghost g1"></div>
+    <div class="vf-flare-ghost g2"></div>
+    <div class="vf-flare-ghost g3"></div>
+  </div>
   <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
   <div class="vf-corner bl"></div><div class="vf-corner br"></div>
   <div class="vf-center"></div>
@@ -401,6 +423,7 @@
       <span class="map-leg-item"><i class="ml-dot ml-hq"></i>SHERIFF HQ</span>
       <span class="map-leg-item"><i class="ml-dot ml-ev"></i>FOUND</span>
       <span class="map-leg-item"><i class="ml-dot ml-breach"></i>BREACH</span>
+      <span class="map-leg-item"><i class="ml-dot ml-haz"></i>HAZARD</span>
     </div>
     <div class="map-foot-hint">Press M, Tab, E, or Left Click to put away</div>
   </div>
@@ -472,6 +495,7 @@
     <div id="adm-telemetry" class="adm-telemetry"></div>
     <div id="adm-tabs" class="adm-tabs">
       <button type="button" data-tab="entities" class="active">ENTITIES</button>
+      <button type="button" data-tab="hazards">HAZARDS</button>
       <button type="button" data-tab="player">PLAYER</button>
       <button type="button" data-tab="world">WORLD &amp; EVIDENCE</button>
       <button type="button" data-tab="debug">DEBUG &amp; SCENES</button>
@@ -484,23 +508,24 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/settings.js?v=70"></script>
+<script src="js/settings.js?v=73"></script>
 <script src="audio/sounds.js?v=27"></script>
 <script src="audio/voice.js?v=17"></script>
-<script src="js/audio.js?v=58"></script>
+<script src="js/audio.js?v=60"></script>
 <script src="js/textures.js?v=62"></script>
-<script src="js/world.js?v=68"></script>
-<script src="js/sirenhead.js?v=62"></script>
-<script src="js/player.js?v=65"></script>
-<script src="js/moths.js?v=62"></script>
-<script src="js/deathroom.js?v=58"></script>
+<script src="js/world.js?v=70"></script>
+<script src="js/sirenhead.js?v=63"></script>
+<script src="js/player.js?v=67"></script>
+<script src="js/moths.js?v=63"></script>
+<script src="js/deathroom.js?v=59"></script>
 <script src="js/sneaky.js?v=60"></script>
-<script src="js/fastone.js?v=63"></script>
-<script src="js/cutscenes.js?v=60"></script>
-<script src="js/tvfx.js?v=52"></script>
-<script src="js/admin.js?v=62"></script>
-<script src="js/map.js?v=1"></script>
-<script src="js/main.js?v=71"></script>
+<script src="js/fastone.js?v=64"></script>
+<script src="js/cutscenes.js?v=61"></script>
+<script src="js/tvfx.js?v=53"></script>
+<script src="js/admin.js?v=63"></script>
+<script src="js/map.js?v=2"></script>
+<script src="js/hazards.js?v=1"></script>
+<script src="js/main.js?v=74"></script>
 <script src="js/touch.js?v=51"></script>
 </body>
 </html>

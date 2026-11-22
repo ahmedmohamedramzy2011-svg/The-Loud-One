@@ -7,7 +7,7 @@
   const $ = id => document.getElementById(id);
   const EVIDENCE_NEEDED = 5;
 
-  let sneaky = null, fastone = null;
+  let sneaky = null, fastone = null, hazards = null;
   let renderer, scene, camera, world, siren, player, moths, deathRoom, deathShown = false, deathTimer = null, titleSpot = null;
   let state = 'gate';          // gate | title | opening | play | paused | dying | dead | ending | credits
   let cutscene = null, cutCtx = null;
@@ -21,7 +21,7 @@
   let endingQueued = false;
   let parkedCar = null;
   let skipHeld = 0;
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true, forestRing: true, echoClosePause: true, townMap: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true, forestRing: true, echoClosePause: true, townMap: true, hazards: true, perfOpt276: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180, HINT_SHOW = 15;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
@@ -132,9 +132,11 @@
     renderer.toneMappingExposure = 1.15 * S.brightness;
     if (camera) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); }
     if (scene && scene.fog && state !== 'ending') {
-      scene.fog.density = (LO.admin && LO.admin.fullbright)
-        ? 0.0035
-        : ({ near: 0.034, medium: 0.022, far: 0.014 }[S.viewDistance] || 0.022);
+      scene.fog.density = (LO.admin && LO.admin.noFog)
+        ? 0.0001
+        : (LO.admin && LO.admin.fullbright)
+          ? 0.0035
+          : ({ near: 0.034, medium: 0.022, far: 0.014 }[S.viewDistance] || 0.022);
     }
     $('grain').style.display = S.filmGrain ? 'block' : 'none';
     $('vignette').style.display = S.vignette ? 'block' : 'none';
@@ -167,6 +169,7 @@
     if (moths) moths.dispose();
     if (sneaky) scene && sneaky.root.parent && sneaky.root.parent.remove(sneaky.root);
     if (fastone) fastone.dispose();
+    if (hazards && hazards.dispose) hazards.dispose();
     LO.ambush = { active: null, gapUntil: 0, now: 0 };
     moths = new LO.Moths(scene, world);
     sneaky = new LO.Sneaky(scene, world);
@@ -178,6 +181,7 @@
       if (state !== 'play' || !V().fastoneV2) return;
       siren.investigateFence && siren.investigateFence(pos);
     };
+    hazards = LO.Hazards ? new LO.Hazards(scene, world) : null;
     titleSpot = new THREE.SpotLight(0xfff1d6, 0, 90, 0.42, 0.5, 1.2);
     scene.add(titleSpot, titleSpot.target);
     moths.onShriek = pos => {
@@ -189,7 +193,7 @@
     };
     player = new LO.Player(camera, world, scene);
     player.onTenantBlinded = () => {
-      const f = $('flash'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+      triggerFlashStrobe(0.95, 0.04, 0.28);
       A.click(true); A.staticBurst(null, 0.6, 0.45); A.setTenant(0);
     };
     player.hint = showHint;
@@ -214,6 +218,7 @@
     player.onRockLand = pos => {
       if (state !== 'play') return;
       siren.hearNoise(pos, 45);
+      if (hazards && hazards.onRockImpact) hazards.onRockImpact(pos, msg => showHint(msg, 3200));
     };
     siren.onEcho = d => {
       if (state !== 'play' || A.still) return;
@@ -583,6 +588,7 @@
 
   function goTitle() {
     clearGlitch();
+    clearFlashStrobe();
     A.silenceWorld(false);
     if (cutscene) endCutscene();
     LO.TVFX.clear();
@@ -596,6 +602,7 @@
     document.body.classList.remove('map-open', 'has-map');
     resetHudCache();
     A.setFlashlightBuzz(false); A.setHeartbeat(0); A.setTenant(0); A.setSilentOne(0);
+    A.setBreathing && A.setBreathing(0);
     A.setStillness(false); document.body.classList.remove('still'); A.setMothFlutter(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
     A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
@@ -637,6 +644,7 @@
     LO.ambush = { active: null, gapUntil: 0, now: 0 };
     sneaky.reset();
     if (fastone) fastone.reset();
+    if (hazards && hazards.reset) hazards.reset();
     gameTime = 0;
     lastEvidenceTime = 0; hintUntil = 0; hintTarget = null;
     updateEvidenceUI();
@@ -741,9 +749,11 @@
     document.body.classList.remove('map-open');
     if (sneaky && sneaky.pause) sneaky.pause();
     clearGlitch();
+    clearFlashStrobe();
     show('pause');
     if (window.speechSynthesis) try { speechSynthesis.pause(); } catch (e) {}
     A.setFlashlightBuzz(false); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
+    A.setBreathing && A.setBreathing(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
     A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
     A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
@@ -769,7 +779,8 @@
     'More proof. Good.',
   ];
   function onPhoto(ev) {
-    $('flash').classList.remove('go'); void $('flash').offsetWidth; $('flash').classList.add('go');
+    if (V().photoStrobe) triggerFlashStrobe(0.92, 0.025, 0.155);
+    else triggerFlashStrobe(0.85, 0.04, 0.36);
     pendingCapture = { ev };
     if (!ev) return;
     ev.found = true;
@@ -822,7 +833,9 @@
     document.body.classList.remove('map-open', 'has-map');
     if (document.pointerLockElement) document.exitPointerLock();
     clearGlitch();
+    clearFlashStrobe();
     A.setFlashlightBuzz(false); A.setHeartbeat(0);
+    A.setBreathing && A.setBreathing(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
     A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
     A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
@@ -890,6 +903,17 @@
       'In the forest with nowhere to hide, look directly at The Fast One when it gets close to drive it back into the trees.',
       'If safety is far away, an adrenaline surge doubles your sprint speed.',
     ] },
+    powerline: { title: 'HIGH VOLTAGE', tips: [
+      'Downed power lines cycle every few seconds. Wait for the puddle glow and sparking buzz to fade before crossing.',
+      'Getting shocked strips 42 HP and sends a loud crack echoing across Hollow Creek.',
+    ] },
+    beartrap: { title: 'CAUGHT IN THE JAWS', tips: [
+      'Bear traps sit along woodland trails and forest edges. Watch your flashlight beam before sprinting off-road.',
+      'Throw a rock ([G]) onto a bear trap to snap it shut safely from a distance.',
+    ] },
+    steam: { title: 'SCALDED', tips: [
+      'Pressurized alley pipes hiss softly before erupting with boiling steam. Hold back for 3 seconds until the vent clears.',
+    ] },
   };
   // death by damage (the Silent One / the Tenant)
   function clearGlitch() {
@@ -901,6 +925,7 @@
   }
   function dieBy(cause) {
     clearGlitch();
+    clearFlashStrobe();
     if (state === 'play') A.silenceWorld(true);
     if (sneaky && cause !== 'sneaky' && sneaky.attacking) sneaky.vanish(player, false);
     if (fastone) { fastone.clearHighlight(); if (cause !== 'fastone') fastone.reset(); }
@@ -916,6 +941,7 @@
     show('map-overlay', false);
     document.body.classList.remove('map-open');
     A.stopVoices();
+    A.setBreathing && A.setBreathing(0);
     A.setTenant(0);
     if (document.pointerLockElement) document.exitPointerLock();
     A.playMusic(null, 0.5);
@@ -924,6 +950,7 @@
   }
   function onCaught() {
     clearGlitch();
+    clearFlashStrobe();
     if (sneaky && sneaky.attacking) sneaky.vanish(player, false);
     if (fastone) fastone.reset();
     if (state === 'play' && !siren.catchDisabled) A.silenceWorld(true);
@@ -939,6 +966,7 @@
     show('map-overlay', false);
     document.body.classList.remove('map-open');
     A.stopVoices();
+    A.setBreathing && A.setBreathing(0);
     if (document.pointerLockElement) document.exitPointerLock();
     siren.scripted = true;
     siren.forceLean = 0.95;
@@ -979,6 +1007,7 @@
       state = 'dead';
       deathShown = false;
       A.setSilentOne(0); A.setExposure(0); A.setMothFlutter(0); A.setTenant(0);
+      A.setBreathing && A.setBreathing(0);
       A.setProximityAmbient && A.setProximityAmbient(0);
       A.updateBirdsong && A.updateBirdsong(0, null, true, 110, false);
       A.setForestWindRustle && A.setForestWindRustle(0, 0, 0, 0.15);
@@ -1063,13 +1092,256 @@
     hasMap: null, mapOpen: null, noiseW: '', markLeft: '', stamW: '',
     stamTired: null, stamCrit: null, stamLow: null, batW: '', batLow: null,
     prompt: null, crossDisp: '', hpW: '', hpNum: '', hpLow: null, hpBeat: null,
-    vfOpen: null, vfLocked: null, vfInfo: '', vfFilm: '', subMode: ''
+    vfOpen: null, vfLocked: null, vfInfo: '', vfFilm: '', vfFlareVis: null, subMode: ''
   };
+  const _flPos = new THREE.Vector3(), _flDir = new THREE.Vector3(), _flCamDir = new THREE.Vector3();
+  const _flProj = new THREE.Vector3(), _flBounceHit = new THREE.Vector3();
+  const _flRay = new THREE.Raycaster();
+  const _flState = {
+    int: 0, x: 0, y: 0, r: 255, g: 224, b: 178, s: 1,
+    occT: 0, bounceT: 0, lampClear: false, moonClear: false,
+    lastLamp: null, bounceValid: false, bounceDist: 99,
+  };
+  const _strobe = { active: false, justTriggered: false, elapsed: 0, peak: 0.92, hold: 0.025, fade: 0.155 };
+  function triggerFlashStrobe(peak, hold, fade) {
+    _strobe.active = true;
+    _strobe.justTriggered = true;
+    _strobe.elapsed = 0;
+    _strobe.peak = peak !== undefined ? peak : 0.92;
+    _strobe.hold = hold !== undefined ? hold : 0.025;
+    _strobe.fade = fade !== undefined ? fade : 0.155;
+  }
+  function clearFlashStrobe() {
+    _strobe.active = false;
+    _strobe.justTriggered = false;
+    _strobe.elapsed = 0;
+    const f = hudEl('flash', () => $('flash'));
+    if (f) f.style.opacity = '0';
+  }
+  function updateFlashStrobe(dt) {
+    if (!_strobe.active) return;
+    const f = hudEl('flash', () => $('flash'));
+    if (!f) { _strobe.active = false; return; }
+    if (_strobe.justTriggered) {
+      _strobe.justTriggered = false;
+      f.style.opacity = _strobe.peak.toFixed(3);
+      return;
+    }
+    _strobe.elapsed += dt;
+    if (_strobe.elapsed <= _strobe.hold) {
+      f.style.opacity = _strobe.peak.toFixed(3);
+      return;
+    }
+    const u = Math.min(1, (_strobe.elapsed - _strobe.hold) / Math.max(0.01, _strobe.fade));
+    if (u >= 1) {
+      _strobe.active = false;
+      f.style.opacity = '0';
+      return;
+    }
+    const op = _strobe.peak * Math.pow(1 - u, 2.4);
+    f.style.opacity = op.toFixed(3);
+  }
+  function resetFlareState() {
+    _flState.int = 0; _flState.x = 0; _flState.y = 0; _flState.s = 1;
+    _flState.occT = 0; _flState.bounceT = 0; _flState.lastLamp = null;
+    _flState.lampClear = false; _flState.moonClear = false; _flState.bounceValid = false;
+    const fl = hudEl('vfFlare', () => $('vf-flare'));
+    if (fl) fl.style.opacity = '0';
+  }
+  function updateViewfinderFlare(dt, active) {
+    const fl = hudEl('vfFlare', () => $('vf-flare'));
+    if (!fl) return;
+    if (!active) {
+      if (_hc.vfFlareVis !== false) {
+        _hc.vfFlareVis = false;
+        _flState.int = 0;
+        fl.style.opacity = '0';
+      }
+      return;
+    }
+    camera.getWorldDirection(_flCamDir);
+    let bestInt = 0, bestX = 0, bestY = 0, bestR = 255, bestG = 224, bestB = 178, bestS = 1;
+
+    // 1. Camera shutter flash burst
+    const burst = player.burst ? player.burst.intensity : 0;
+    if (burst > 0.15) {
+      const bi = Math.min(1, burst / 10) * 0.94;
+      bestInt = bi; bestX = 0; bestY = 0; bestR = 236; bestG = 245; bestB = 255; bestS = 1.45;
+    }
+
+    // 2. Flashlight bounce glare & lens scatter
+    if (player.flashOn && !player.hidden && player.flash && player.flash.intensity > 0.05) {
+      const fNorm = Math.min(1.15, player.flash.intensity / (LO.settings.lighting === 'simple' ? 3 : 8));
+      // Subtle ambient lens scatter from handheld beam
+      const baseInt = fNorm * 0.16;
+      const gx = 0.18 + (player.swayX || 0) * 0.05;
+      const gy = -0.14 + (player.swayY || 0) * 0.04;
+      if (baseInt > bestInt) {
+        bestInt = baseInt; bestX = gx; bestY = gy; bestR = 255; bestG = 236; bestB = 198; bestS = 0.72;
+      }
+      // Wall / prop specular bounce check (throttled ~20 Hz)
+      _flState.bounceT -= dt;
+      if (_flState.bounceT <= 0 && world && world.occluders && world.occluders.length) {
+        _flState.bounceT = 0.05;
+        player.flash.getWorldPosition(_flPos);
+        player.flashTarget.getWorldPosition(_flDir);
+        _flDir.sub(_flPos).normalize();
+        _flRay.set(_flPos, _flDir);
+        _flRay.far = 12.0;
+        const bx = _flPos.x + _flDir.x * 12.0, bz = _flPos.z + _flDir.z * 12.0;
+        const occl = world.queryOccluders ? world.queryOccluders(_flPos.x, _flPos.z, bx, bz) : world.occluders;
+        const hits = occl.length ? _flRay.intersectObjects(occl, false) : [];
+        if (hits.length && hits[0].distance < 11.5) {
+          _flState.bounceValid = true;
+          _flState.bounceDist = hits[0].distance;
+          _flBounceHit.copy(hits[0].point);
+        } else {
+          _flState.bounceValid = false;
+        }
+      }
+      if (_flState.bounceValid) {
+        _flProj.copy(_flBounceHit).project(camera);
+        if (_flProj.z < 1 && Math.abs(_flProj.x) <= 1.15 && Math.abs(_flProj.y) <= 1.15) {
+          const prox = Math.pow(Math.max(0, 1 - _flState.bounceDist / 11.5), 1.35);
+          const edge = Math.max(0.2, 1 - Math.hypot(_flProj.x, _flProj.y) * 0.45);
+          const bInt = Math.min(0.86, prox * edge * fNorm * 0.85);
+          if (bInt > bestInt) {
+            bestInt = bInt; bestX = _flProj.x; bestY = _flProj.y;
+            bestR = 255; bestG = 232; bestB = 186; bestS = 0.95 + prox * 0.55;
+          }
+        }
+      }
+    } else {
+      _flState.bounceValid = false;
+    }
+
+    // 3. External light sources: lit/flickering streetlamps & moonlight
+    _flState.occT -= dt;
+    const doOcc = _flState.occT <= 0;
+    if (doOcc) _flState.occT = 0.06;
+
+    if (world && world.flickers && world.flickers.length) {
+      let cand = null, candScore = 0, candNx = 0, candNy = 0, candDist = 999;
+      for (let i = 0; i < world.flickers.length; i++) {
+        const f = world.flickers[i];
+        if (!f.light || f.light.intensity <= 0.08) continue;
+        _flPos.copy(f.light.position).sub(camera.position);
+        const dist = _flPos.length();
+        if (dist < 0.8 || dist > 68) continue;
+        _flDir.copy(_flPos).divideScalar(dist);
+        const dot = _flDir.dot(_flCamDir);
+        if (dot <= 0.35) continue;
+        _flProj.copy(f.light.position).project(camera);
+        if (_flProj.z >= 1 || Math.abs(_flProj.x) > 1.2 || Math.abs(_flProj.y) > 1.2) continue;
+        const centerW = Math.max(0, 1 - Math.hypot(_flProj.x, _flProj.y) * 0.55);
+        const distW = Math.pow(1 - dist / 68, 1.15);
+        const lInt = Math.min(1, f.light.intensity / 1.4);
+        const sc = distW * (0.35 + centerW * 0.65) * lInt;
+        if (sc > candScore) {
+          candScore = sc; cand = f; candNx = _flProj.x; candNy = _flProj.y; candDist = dist;
+        }
+      }
+      if (cand) {
+        if (cand !== _flState.lastLamp || doOcc) {
+          _flState.lastLamp = cand;
+          const lp = cand.light.position;
+          if (world.segmentHitsTree && world.segmentHitsTree(camera.position.x, camera.position.z, lp.x, lp.z)) {
+            _flState.lampClear = false;
+          } else {
+            _flPos.copy(lp).sub(camera.position).normalize();
+            _flRay.set(camera.position, _flPos);
+            _flRay.far = Math.max(0.5, candDist - 1.4);
+            const occl = world.queryOccluders
+              ? world.queryOccluders(camera.position.x, camera.position.z, lp.x, lp.z)
+              : world.occluders;
+            const hits = (occl && occl.length) ? _flRay.intersectObjects(occl, false) : [];
+            _flState.lampClear = hits.length === 0;
+          }
+        }
+        if (_flState.lampClear) {
+          const lInt = Math.min(0.88, candScore * 0.92);
+          if (lInt > bestInt) {
+            bestInt = lInt; bestX = candNx; bestY = candNy;
+            bestR = 255; bestG = 204; bestB = 132; bestS = 0.9 + candScore * 0.5;
+          }
+        }
+      } else {
+        _flState.lastLamp = null;
+        _flState.lampClear = false;
+      }
+    }
+
+    if (world && world.moon && world.moon.visible) {
+      _flPos.copy(world.moon.position).sub(camera.position).normalize();
+      const mDot = _flPos.dot(_flCamDir);
+      if (mDot > 0.42) {
+        _flProj.copy(world.moon.position).project(camera);
+        if (_flProj.z < 1 && Math.abs(_flProj.x) <= 1.15 && Math.abs(_flProj.y) <= 1.15) {
+          if (doOcc) {
+            const mx = camera.position.x + _flPos.x * 160, mz = camera.position.z + _flPos.z * 160;
+            if (world.segmentHitsTree && world.segmentHitsTree(camera.position.x, camera.position.z, mx, mz)) {
+              _flState.moonClear = false;
+            } else {
+              _flRay.set(camera.position, _flPos);
+              _flRay.far = 160;
+              const occl = world.queryOccluders
+                ? world.queryOccluders(camera.position.x, camera.position.z, mx, mz)
+                : world.occluders;
+              const hits = (occl && occl.length) ? _flRay.intersectObjects(occl, false) : [];
+              _flState.moonClear = hits.length === 0;
+            }
+          }
+          if (_flState.moonClear) {
+            const cW = Math.max(0, 1 - Math.hypot(_flProj.x, _flProj.y) * 0.5);
+            const mInt = 0.24 + cW * 0.34;
+            if (mInt > bestInt) {
+              bestInt = mInt; bestX = _flProj.x; bestY = _flProj.y;
+              bestR = 194; bestG = 216; bestB = 255; bestS = 0.95 + cW * 0.35;
+            }
+          }
+        }
+      }
+    }
+
+    const rate = bestInt > _flState.int ? 22 : 12;
+    const k = Math.min(1, (dt || 0.016) * rate);
+    _flState.int += (bestInt - _flState.int) * k;
+    const pk = Math.min(1, (dt || 0.016) * 18);
+    _flState.x += (bestX - _flState.x) * pk;
+    _flState.y += (bestY - _flState.y) * pk;
+    _flState.r += (bestR - _flState.r) * pk;
+    _flState.g += (bestG - _flState.g) * pk;
+    _flState.b += (bestB - _flState.b) * pk;
+    _flState.s += (bestS - _flState.s) * pk;
+
+    if (_flState.int < 0.015) {
+      if (_hc.vfFlareVis !== false) { _hc.vfFlareVis = false; fl.style.opacity = '0'; }
+      return;
+    }
+    _hc.vfFlareVis = true;
+    const hw = window.innerWidth * 0.5, hh = window.innerHeight * 0.5;
+    const px = _flState.x * hw;
+    const py = -_flState.y * hh;
+    fl.style.opacity = Math.min(0.95, _flState.int).toFixed(3);
+    fl.style.setProperty('--fx', px.toFixed(1) + 'px');
+    fl.style.setProperty('--fy', py.toFixed(1) + 'px');
+    fl.style.setProperty('--gx1', (-px * 0.42).toFixed(1) + 'px');
+    fl.style.setProperty('--gy1', (-py * 0.42).toFixed(1) + 'px');
+    fl.style.setProperty('--gx2', (-px * 0.88).toFixed(1) + 'px');
+    fl.style.setProperty('--gy2', (-py * 0.88).toFixed(1) + 'px');
+    fl.style.setProperty('--gx3', (px * 0.34).toFixed(1) + 'px');
+    fl.style.setProperty('--gy3', (py * 0.34).toFixed(1) + 'px');
+    fl.style.setProperty('--flare-rgb', `${Math.round(_flState.r)}, ${Math.round(_flState.g)}, ${Math.round(_flState.b)}`);
+    fl.style.setProperty('--bloom-s', _flState.s.toFixed(2));
+    fl.style.setProperty('--streak-s', (0.75 + _flState.int * 0.7).toFixed(2));
+  }
   function hudEl(key, getter) { return _hud[key] || (_hud[key] = getter()); }
   function resetHudCache() {
     for (const k in _hc) _hc[k] = null;
     _hc.noiseW = _hc.markLeft = _hc.stamW = _hc.batW = _hc.crossDisp = _hc.hpW = _hc.hpNum = _hc.vfInfo = _hc.vfFilm = _hc.subMode = '';
     lastStatus = ''; lastHideType = '';
+    resetFlareState();
+    clearFlashStrobe();
     const hpBar = $('health-fill') && $('health-fill').parentNode;
     if (hpBar) {
       hpBar.classList.remove('low');
@@ -1094,7 +1366,15 @@
       show('map-overlay', mapOpen);
     }
     if (mapOpen && LO.Map) {
-      LO.Map.draw({ world, player, hintTarget, evidenceCount, evidenceNeeded: EVIDENCE_NEEDED, forestRing: !!verNow.forestRing });
+      LO.Map.draw({
+        world,
+        player,
+        hintTarget,
+        evidenceCount,
+        evidenceNeeded: EVIDENCE_NEEDED,
+        forestRing: !!verNow.forestRing,
+        hazards: (hazards && verNow.hazards && !(LO.admin && LO.admin.noHazards)) ? hazards.list : null,
+      });
     }
 
     const noiseW = Math.min(100, player.noiseRadius / 50 * 100).toFixed(1) + '%';
@@ -1245,6 +1525,7 @@
       if (vfInfo !== _hc.vfInfo) { _hc.vfInfo = vfInfo; hudEl('vfInfo', () => $('vf-info')).textContent = vfInfo; }
       if (vfFilm !== _hc.vfFilm) { _hc.vfFilm = vfFilm; hudEl('vfFilm', () => $('vf-film')).textContent = vfFilm; }
     }
+    updateViewfinderFlare(dt, !!(vfOpen && verNow.viewfinderFlare));
     // dynamic subtitle placement + intense readability mode
     if (A.setSubMode) {
       const intense = siren.state === 'hunt' || d < 42 ||
@@ -1282,6 +1563,11 @@
   // ============================================================
   let fpsAcc = 0, fpsFrames = 0;
   const fwd = new THREE.Vector3(), upv = new THREE.Vector3();
+  const _threatSiren = { pos: null, radius: 24 };
+  const _threatFast = { pos: null, radius: 20 };
+  const _threatsList = [];
+  const _onBirdScatter = p => { A.birdScatter && A.birdScatter(p); };
+  const _worldUpdateOpts = { pos: null, disturbed: false, still: false, enabled: true, threats: null, onScatter: _onBirdScatter };
   function loop() {
     requestAnimationFrame(loop);
     const dt = Math.min(0.05, clock.getDelta());
@@ -1301,19 +1587,19 @@
         if (state === 'play') moths.update(simDt, player, camera, gameTime);
         if (state === 'play' && sneaky.update(simDt, player, camera, siren) === 'kill') dieBy('sneaky');
         if (state === 'play' && fastone.update(simDt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
+        if (state === 'play' && hazards) hazards.update(simDt, player, siren, gameTime);
         const verNow = V();
         const birdDisturbed = !!(player.sprinting || player.noiseRadius >= 28 || player.spike >= 12);
-        const threats = [];
-        if (siren && siren.pos) threats.push({ pos: siren.pos, radius: 24 });
-        if (fastone && fastone.state !== 'idle' && fastone.pos) threats.push({ pos: fastone.pos, radius: 20 });
-        world.update(simDt, gameTime, {
-          pos: player.pos,
-          disturbed: birdDisturbed && !!verNow.birdFade,
-          still: A.still,
-          enabled: !!verNow.forestBirds,
-          threats: verNow.forestRing ? threats : null,
-          onScatter: verNow.forestRing ? (p => A.birdScatter && A.birdScatter(p)) : null,
-        });
+        _threatsList.length = 0;
+        if (siren && siren.pos) { _threatSiren.pos = siren.pos; _threatsList.push(_threatSiren); }
+        if (fastone && fastone.state !== 'idle' && fastone.pos) { _threatFast.pos = fastone.pos; _threatsList.push(_threatFast); }
+        _worldUpdateOpts.pos = player.pos;
+        _worldUpdateOpts.disturbed = birdDisturbed && !!verNow.birdFade;
+        _worldUpdateOpts.still = A.still;
+        _worldUpdateOpts.enabled = !!verNow.forestBirds;
+        _worldUpdateOpts.threats = verNow.forestRing ? _threatsList : null;
+        _worldUpdateOpts.onScatter = verNow.forestRing ? _onBirdScatter : null;
+        world.update(simDt, gameTime, _worldUpdateOpts);
         if (state === 'play') {
           updateHUD(simDt);
           updateHintUI();
@@ -1374,6 +1660,7 @@
       if (deathShown && V().deathRoom) { deathRoom.update(dt, window.innerWidth / window.innerHeight, A.deathMusicTime()); deathRoom.render(renderer); }
     } else if (state !== 'credits') renderer.render(scene, camera);
     if (pendingCapture) capturePhoto();
+    updateFlashStrobe(dt);
 
     // 3D audio listener & directional subtitle tracker follow the camera
     camera.getWorldDirection(fwd);
@@ -1477,6 +1764,8 @@
       getMoths: () => moths,
       getSneaky: () => sneaky,
       getFastOne: () => fastone,
+      getHazards: () => hazards,
+      getRenderer: () => renderer,
       getScene: () => scene,
       getCamera: () => camera,
       pause,
@@ -1487,6 +1776,8 @@
       showHint,
       applyDisplay,
       applyAdminLighting,
+      scatterBirds: () => world && world.scatterBirdsAt && player && world.scatterBirdsAt(player.pos, 45, gameTime),
+      resetSilence: () => { if (player) { player.silentTime = 0; player.silentTick = 0; } },
       markEvidence(ev) {
         if (!ev || ev.found) return;
         ev.found = true;
@@ -1532,7 +1823,7 @@
     };
     if (LO.isTesting && LO.admin && LO.admin.init) LO.admin.init();
     // expose for debugging
-    LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, startGame, startEnding, beginPlay };
+    LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, get hazards() { return hazards; }, startGame, startEnding, beginPlay };
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

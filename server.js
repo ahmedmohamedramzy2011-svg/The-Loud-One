@@ -9,7 +9,9 @@ app.get(['/testing', '/testing/', '/testing.html'], (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(path.join(__dirname)));
+app.use('/testing', express.static(path.join(__dirname, 'public'), { redirect: false }));
 app.use('/testing', express.static(path.join(__dirname), { redirect: false }));
 
 app.get('*', (req, res) => {

@@ -8,6 +8,7 @@ window.LO = window.LO || {};
   const MAP_PAD = 44;
   const MAP_INNER = MAP_SIZE - MAP_PAD * 2;
   let staticCache = null;
+  let midCache = null;
 
   function drawOutlinedText(g, text, x, y, fill, stroke, lineW, maxW) {
     if (stroke) {
@@ -151,23 +152,11 @@ window.LO = window.LO || {};
     return { canvas: c, world: w, forestRing, halfSpan, toX, toY, sc };
   }
 
-  function resetCache() {
-    staticCache = null;
-  }
-
-  function drawTownMap(opts) {
-    opts = opts || {};
-    const canvas = document.getElementById('map-canvas');
-    const w = opts.world;
-    const player = opts.player;
-    if (!canvas || !w || !player) return;
-    const forestRing = !!opts.forestRing;
-    if (!staticCache || staticCache.world !== w || staticCache.forestRing !== forestRing) {
-      staticCache = buildStaticMapLayer(w, forestRing);
-    }
-    const { canvas: base, toX, toY, sc } = staticCache;
-    const g = canvas.getContext('2d');
-    g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+  function buildMidMapLayer(baseLayer, w, forestRing, hazards) {
+    const c = document.createElement('canvas');
+    c.width = c.height = MAP_SIZE;
+    const g = c.getContext('2d');
+    const { canvas: base, toX, toY, sc } = baseLayer;
     g.drawImage(base, 0, 0);
 
     // Enterable lookup by building id for doorway / floor / POI metadata
@@ -263,6 +252,28 @@ window.LO = window.LO || {};
       });
     }
 
+    // Active utility / environmental hazards (subtle surveyor marks)
+    if (hazards && hazards.length) {
+      for (let i = 0; i < hazards.length; i++) {
+        const h = hazards[i];
+        if (!h || !h.pos) continue;
+        if (h.type === 'beartrap' && h.disarmed) continue;
+        if (h.type === 'tindebris' && h.toppled) continue;
+        const hx = toX(h.pos.x), hy = toY(h.pos.z);
+        if (h.type === 'powerline' || h.type === 'steam' || h.type === 'beartrap') {
+          g.fillStyle = h.type === 'powerline' ? '#f0a830' : (h.type === 'steam' ? '#d96f2e' : '#965c34');
+          g.strokeStyle = '#261709';
+          g.lineWidth = 1.2;
+          g.beginPath();
+          g.arc(hx, hy, 3.6, 0, Math.PI * 2);
+          g.fill(); g.stroke();
+        } else {
+          g.fillStyle = 'rgba(200, 155, 70, 0.72)';
+          g.fillRect(hx - 2, hy - 2, 4, 4);
+        }
+      }
+    }
+
     // Photographed evidence markers (green check circles)
     (w.evidence || []).forEach(ev => {
       if (!ev.found || !ev.pos) return;
@@ -323,6 +334,59 @@ window.LO = window.LO || {};
       drawOutlinedText(g, 'N. GATE', toX(-27), toY(w.HALF + 3) + 14, '#2b3d1e', 'rgba(236, 228, 200, 0.9)', 2.6);
       drawOutlinedText(g, 'W. GATE', toX(-(w.HALF + 3)) - 2, toY(-27) - 9, '#2b3d1e', 'rgba(236, 228, 200, 0.9)', 2.6);
     }
+
+    return c;
+  }
+
+  function resetCache() {
+    staticCache = null;
+    midCache = null;
+  }
+
+  function drawTownMap(opts) {
+    opts = opts || {};
+    const canvas = document.getElementById('map-canvas');
+    const w = opts.world;
+    const player = opts.player;
+    if (!canvas || !w || !player) return;
+    const forestRing = !!opts.forestRing;
+    if (!staticCache || staticCache.world !== w || staticCache.forestRing !== forestRing) {
+      staticCache = buildStaticMapLayer(w, forestRing);
+      midCache = null;
+    }
+
+    let smashedCount = 0;
+    const blds = w.buildings || [];
+    for (let i = 0; i < blds.length; i++) if (blds[i].smashed) smashedCount++;
+    let brokenFenceCount = 0;
+    const fns = w.fences || [];
+    for (let i = 0; i < fns.length; i++) if (fns[i].broken) brokenFenceCount++;
+    let foundEvCount = 0;
+    const evs = w.evidence || [];
+    for (let i = 0; i < evs.length; i++) if (evs[i].found) foundEvCount++;
+
+    const hazList = opts.hazards || null;
+    let hazStateCount = 0;
+    if (hazList) {
+      for (let i = 0; i < hazList.length; i++) {
+        const h = hazList[i];
+        if (h && !h.disarmed && !h.toppled) hazStateCount++;
+      }
+    }
+    const midKey = `${smashedCount}:${brokenFenceCount}:${foundEvCount}:${hazList ? hazList.length : 0}:${hazStateCount}`;
+    if (!midCache || midCache.world !== w || midCache.forestRing !== forestRing || midCache.key !== midKey) {
+      midCache = {
+        world: w,
+        forestRing,
+        key: midKey,
+        canvas: buildMidMapLayer(staticCache, w, forestRing, hazList),
+      };
+    }
+
+    const { toX, toY } = staticCache;
+    const g = canvas.getContext('2d');
+    g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+    g.drawImage(midCache.canvas, 0, 0);
 
     // Active Hint target marker (amber ring)
     const hintTarget = opts.hintTarget;

@@ -933,11 +933,17 @@
         const camDist = _fTo.length() || 0.001;
         _fTo.divideScalar(camDist);
         let clearLOS = _fTo.dot(_fFwd) > 0.76;
+        if (clearLOS && this.world.segmentHitsTree && this.world.segmentHitsTree(camera.position.x, camera.position.z, _fTarget.x, _fTarget.z)) {
+          clearLOS = false;
+        }
         if (clearLOS && this.world.occluders && this.world.occluders.length) {
           this._losRay = this._losRay || new THREE.Raycaster();
           this._losRay.set(camera.position, _fTo);
           this._losRay.far = camDist;
-          const hits = this._losRay.intersectObjects(this.world.occluders, false);
+          const occl = this.world.queryOccluders
+            ? this.world.queryOccluders(camera.position.x, camera.position.z, _fTarget.x, _fTarget.z)
+            : this.world.occluders;
+          const hits = occl.length ? this._losRay.intersectObjects(occl, false) : [];
           if (hits.length && hits[0].distance < camDist - 0.9) clearLOS = false;
         }
         if (clearLOS) {

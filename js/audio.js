@@ -76,9 +76,44 @@
       ctx.decodeAudioData(buf.buffer, cb, () => {});
     } catch (e) { /* missing sound is not fatal */ }
   }
+  const BREATH_MAX_SEC = 12.0;
+  A.BREATH_MAX_SEC = BREATH_MAX_SEC;
+  function trimAudioBuffer(buf, maxSec) {
+    if (!buf || !ctx) return buf;
+    const maxFrames = Math.min(buf.length, Math.floor(buf.sampleRate * maxSec));
+    if (maxFrames <= 0) return buf;
+    const out = ctx.createBuffer(buf.numberOfChannels, maxFrames, buf.sampleRate);
+    const fadeFrames = Math.min(Math.floor(buf.sampleRate * 0.03), Math.floor(maxFrames * 0.05));
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const src = buf.getChannelData(ch);
+      const dst = out.getChannelData(ch);
+      dst.set(src.subarray(0, maxFrames));
+      for (let i = 0; i < fadeFrames; i++) {
+        const k = i / fadeFrames;
+        dst[i] *= k;
+        dst[maxFrames - 1 - i] *= k;
+      }
+    }
+    return out;
+  }
+  function loadBreathingClip() {
+    if (typeof fetch !== 'function' || !ctx) return;
+    const url = '/assets/aistudio/freesound_community-breathing-6091_970a27c3.mp3';
+    fetch(url)
+      .then(r => (r && r.ok) ? r.arrayBuffer() : null)
+      .then(ab => {
+        if (!ab || !ctx) return;
+        ctx.decodeAudioData(ab, buf => {
+          samples.panting = trimAudioBuffer(buf, BREATH_MAX_SEC);
+          if (breathAmt > 0.02) A.setBreathing(breathAmt);
+        }, () => {});
+      })
+      .catch(() => {});
+  }
   function loadSamples() {
     const V = LO.VOICE_DATA;
     if (V) Object.keys(V).forEach(text => decodeB64(V[text], b => { voiceSamples[text] = b; }));
+    loadBreathingClip();
     const D = LO.SOUND_DATA;
     if (!D) return;
     Object.keys(D).forEach(key => {
@@ -91,6 +126,7 @@
       } catch (e) { /* missing sound is not fatal */ }
     });
   }
+  A.getBreathingDuration = () => (samples.panting ? samples.panting.duration : 0);
   let deathSrc = null, deathStart = 0;
   A.DEATH_TV_ON = 2.31;     // the click + CRT whine of the TV switching on
   A.DEATH_TAPE = 3.3;       // whine has faded: the tape starts
@@ -177,10 +213,12 @@
     const t = ctx.currentTime;
     if (on) {
       heartAmt = 0;
-      [buzz && buzz.g, wind && wind.g, wind && wind.wg, forestWind && forestWind.g1, forestWind && forestWind.g2,
+      breathAmt = 0;
+      [breath && breath.g, buzz && buzz.g, wind && wind.g, wind && wind.wg, forestWind && forestWind.g1, forestWind && forestWind.g2,
        tenant && tenant.g, tenant && tenant.og, silent && silent.og, silent && silent.sg,
        moth && moth.g, expo && expo.g1, expo && expo.g2, proxAmb && proxAmb.out, envHum && envHum.g, birdBus, worldBus]
         .forEach(g => { if (g && g.gain) { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0, t); } });
+      if (breath && breath.src) { try { breath.src.stop(); } catch (e) {} breath = null; }
     } else if (worldBus && !A.still) {
       worldBus.gain.cancelScheduledValues(t); worldBus.gain.setTargetAtTime(1, t, 0.3);
       if (birdBus) birdBus.gain.setTargetAtTime(birdState.enabled && !birdState.indoor ? 1 : 0, t, 0.4);
@@ -190,7 +228,7 @@
   A.setStillness = function (on) {
     if (A.still === on) return;
     A.still = on;
-    if (on) { A.stopVoices(); }
+    if (on) { A.stopVoices(); A.setBreathing(0); }
     applyVolumes();
   };
 
@@ -337,8 +375,45 @@
     n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t); n.stop(t + 0.2);
   };
 
-  // panting audio removed in v2.6.1 (no-op preserved for older callers if any)
-  A.setBreathing = function () {};
+  // player exhaustion panting (loops only the 0..12s clip from the breathing asset)
+  let breath = null, breathAmt = 0, breathStopTimer = null;
+  A.setBreathing = function (amt) {
+    const clean = (A.worldMuted || A.still) ? 0 : Math.max(0, Math.min(1, amt || 0));
+    breathAmt = clean;
+    if (!ctx || !samples.panting) return;
+    const t = ctx.currentTime;
+    if (clean > 0.02) {
+      if (breathStopTimer) { clearTimeout(breathStopTimer); breathStopTimer = null; }
+      if (!breath) {
+        const src = ctx.createBufferSource();
+        src.buffer = samples.panting;
+        src.loop = true;
+        src.loopStart = 0;
+        src.loopEnd = Math.min(BREATH_MAX_SEC, samples.panting.duration);
+        const f = ctx.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.value = 3200;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        src.connect(f); f.connect(g); g.connect(sfxBus);
+        src.start(t, 0);
+        breath = { src, f, g };
+      }
+      breath.f.frequency.setTargetAtTime(2400 + clean * 2400, t, 0.15);
+      breath.g.gain.setTargetAtTime(0.10 + clean * 0.36, t, 0.14);
+    } else if (breath) {
+      breath.g.gain.setTargetAtTime(0, t, 0.16);
+      if (!breathStopTimer) {
+        breathStopTimer = setTimeout(() => {
+          breathStopTimer = null;
+          if (breathAmt <= 0.02 && breath) {
+            try { breath.src.stop(); } catch (e) {}
+            breath = null;
+          }
+        }, 650);
+      }
+    }
+  };
 
   // flashlight hum (the "slight buzzing")
   let buzz = null;
@@ -1769,4 +1844,92 @@
     A.clearSubs();
   };
   A.isSpeaking = () => speaking;
+
+  // ---------- Environmental hazard SFX (v2.7.6) ----------
+  function hazardBus(pos, ref) {
+    if (pos && ctx.createPanner) {
+      const p = panner(pos, ref || 7, 1.15);
+      p.connect(worldBus);
+      return p;
+    }
+    return worldBus || sfxBus;
+  }
+
+  A.hazardZap = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime, dest = hazardBus(pos, 8);
+    // 60Hz transformer hum + high-voltage crackle bursts
+    const hum = ctx.createOscillator(); hum.type = 'sawtooth'; hum.frequency.setValueAtTime(120, t);
+    const hg = ctx.createGain(); env(hg, t, 0.005, 0.24, 0.34, 0.0001);
+    hum.connect(hg); hg.connect(dest); hum.start(t); hum.stop(t + 0.38);
+    for (let i = 0; i < 4; i++) {
+      const st = t + i * 0.045;
+      const n = noiseSrc(false, false);
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3400 + i * 650; bp.Q.value = 2.0;
+      const g = ctx.createGain(); env(g, st, 0.002, 0.32, 0.06, 0.0001);
+      n.connect(bp); bp.connect(g); g.connect(dest); n.start(st); n.stop(st + 0.09);
+    }
+  };
+
+  A.hazardTrapSnap = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime, dest = hazardBus(pos, 7);
+    const slam = noiseSrc(false, false);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1450; bp.Q.value = 1.6;
+    const sg = ctx.createGain(); env(sg, t, 0.002, 0.42, 0.11, 0.0001);
+    slam.connect(bp); bp.connect(sg); sg.connect(dest); slam.start(t); slam.stop(t + 0.14);
+    [540, 1180].forEach((freq, idx) => {
+      const o = ctx.createOscillator(); o.type = 'triangle';
+      o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq * 0.42, t + 0.24);
+      const g = ctx.createGain(); env(g, t, 0.002, idx ? 0.18 : 0.28, 0.22, 0.0001);
+      o.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.28);
+    });
+  };
+
+  A.hazardSteamBurn = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime, dest = hazardBus(pos, 7);
+    const n = noiseSrc(false, false);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2200, t); bp.frequency.linearRampToValueAtTime(3600, t + 0.25); bp.Q.value = 0.9;
+    const g = ctx.createGain(); env(g, t, 0.015, 0.36, 0.42, 0.0001);
+    n.connect(bp); bp.connect(g); g.connect(dest); n.start(t); n.stop(t + 0.48);
+  };
+
+  A.hazardGlass = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime, dest = hazardBus(pos, 6);
+    for (let i = 0; i < 4; i++) {
+      const st = t + i * 0.028;
+      const n = noiseSrc(false, false);
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 4200 + i * 700;
+      const g = ctx.createGain(); env(g, st, 0.002, 0.16, 0.055, 0.0001);
+      n.connect(hp); hp.connect(g); g.connect(dest); n.start(st); n.stop(st + 0.08);
+    }
+  };
+
+  A.hazardCreak = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime, dest = hazardBus(pos, 6);
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(84, t); o.frequency.linearRampToValueAtTime(52, t + 0.36);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 3.2;
+    const g = ctx.createGain(); env(g, t, 0.025, 0.22, 0.34, 0.0001);
+    o.connect(bp); bp.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.4);
+  };
+
+  A.hazardTinClatter = function (pos) {
+    if (!ctx) return;
+    const t = ctx.currentTime, dest = hazardBus(pos, 9);
+    const freqs = [310, 485, 690, 940];
+    for (let i = 0; i < 3; i++) {
+      const st = t + i * 0.11;
+      const f = freqs[(Math.random() * freqs.length) | 0];
+      const o = ctx.createOscillator(); o.type = 'square';
+      o.frequency.setValueAtTime(f, st); o.frequency.exponentialRampToValueAtTime(f * 0.65, st + 0.28);
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f * 1.4; bp.Q.value = 2.5;
+      const g = ctx.createGain(); env(g, st, 0.003, 0.22 / (i + 1), 0.28, 0.0001);
+      o.connect(bp); bp.connect(g); g.connect(dest); o.start(st); o.stop(st + 0.32);
+    }
+  };
 })();

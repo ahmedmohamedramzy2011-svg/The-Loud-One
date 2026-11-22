@@ -27,11 +27,14 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.7.3',
-    autoLatest: '2.7.3',
+    gameVersion: '2.7.6',
+    autoLatest: '2.7.6',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.7.6', label: 'v2.7.6', era: '6 environmental hazards, 3 hazard death tapes, draw-call/FPS optimization & expanded Admin Panel' },
+    { id: '2.7.5', label: 'v2.7.5', era: 'Frame-synced camera strobe flash & 3 randomized Town Map wall locations' },
+    { id: '2.7.4', label: 'v2.7.4', era: 'Dynamic viewfinder lens flare, 12s panting audio restoration & ending cutscene camera fix' },
     { id: '2.7.3', label: 'v2.7.3', era: 'Health heartbeat pulse below 30% HP, Moth leg joint fix, unified Settings menu, Credits screen & streamlined changelog' },
     { id: '2.7.2', label: 'v2.7.2', era: 'Map POI labels, fixed left-building map spawn, sealed perimeter seams, denser forest & low-end optimization' },
     { id: '2.7.1', label: 'v2.7.1', era: 'Collectible Town Survey Map (E to take, M / Tab to toggle) with live tracking & breaches' },
@@ -112,6 +115,12 @@ window.LO = window.LO || {};
       echoClosePause: v >= 20700,
       townMap: v >= 20701,
       leftBuildingMap: v >= 20702,
+      viewfinderFlare: v >= 20704,
+      panting: v >= 20704,
+      photoStrobe: v >= 20705,
+      mapThreeSpots: v >= 20705,
+      hazards: v >= 20706,
+      perfOpt276: v >= 20706,
     };
   }
 
@@ -126,7 +135,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

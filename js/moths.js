@@ -19,6 +19,7 @@
     this.root = new THREE.Group();
     scene.add(this.root);
     this.raycaster = new THREE.Raycaster();
+    this._frame = 0;
     this.mat = new THREE.MeshLambertMaterial({ color: 0xd8d4c8 });
     this.wingMat = new THREE.MeshLambertMaterial({ color: 0xbdb7a6, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
     this.buildSpots();
@@ -115,6 +116,43 @@
     return geo;
   }
 
+  const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+  function mergePartEntries(entries) {
+    const geos = [];
+    let totalVerts = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const it = entries[i];
+      let g = it.geo.index ? it.geo.toNonIndexed() : it.geo.clone();
+      if (it.mat4) g.applyMatrix4(it.mat4);
+      else {
+        _q.setFromEuler(_e.set(it.rx || 0, it.ry || 0, it.rz || 0));
+        _p.set(it.x || 0, it.y || 0, it.z || 0);
+        _s.set(it.sx !== undefined ? it.sx : 1, it.sy !== undefined ? it.sy : 1, it.sz !== undefined ? it.sz : 1);
+        g.applyMatrix4(_m4.compose(_p, _q, _s));
+      }
+      totalVerts += g.attributes.position.count;
+      geos.push(g);
+    }
+    const pos = new Float32Array(totalVerts * 3);
+    const nor = new Float32Array(totalVerts * 3);
+    const uv = new Float32Array(totalVerts * 2);
+    let offset = 0;
+    for (let i = 0; i < geos.length; i++) {
+      const g = geos[i], cnt = g.attributes.position.count;
+      pos.set(g.attributes.position.array, offset * 3);
+      if (g.attributes.normal) nor.set(g.attributes.normal.array, offset * 3);
+      if (g.attributes.uv) uv.set(g.attributes.uv.array, offset * 2);
+      offset += cnt;
+      g.dispose();
+    }
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    merged.computeBoundingSphere();
+    return merged;
+  }
+
   Moths.prototype.kit = function () {
     if (this._kit) return this._kit;
     const lowQ = !!(LO.settings && LO.settings.quality === 'low');
@@ -130,27 +168,86 @@
       new V3(sd * 0.14, 0.34, 0.1),
       new V3(sd * 0.3, 0.42, 0.02),
     ]));
+    const thoraxG = lathe(0.75, [[0.05, 0], [0.2, 0.08], [0.24, 0.35], [0.2, 0.75], [0.12, 1]], lowQ ? 6 : 10);
+    const abdomenG = lathe(0.55, [[0.12, 0], [0.16, 0.3], [0.13, 0.75], [0.05, 1]], lowQ ? 6 : 10);
+    const thighG = lathe(0.76, [[0.072, 0], [0.064, 0.25], [0.052, 0.75], [0.042, 1]], lowQ ? 5 : 7);
+    const shinG = lathe(0.74, [[0.044, 0], [0.038, 0.35], [0.028, 0.8], [0.024, 1]], lowQ ? 5 : 7);
+    const kneeG = new THREE.SphereGeometry(0.046, lowQ ? 5 : 7, lowQ ? 4 : 6);
+    const footG = new THREE.ConeGeometry(0.036, 0.14, lowQ ? 4 : 6);
+    const armG = lathe(0.62, [[0.04, 0], [0.03, 0.9], [0.022, 1]], lowQ ? 4 : 6);
+    const fingerG = lathe(0.2, [[0.012, 0], [0.004, 1]], 4);
+    const headBaseG = new THREE.SphereGeometry(0.13, lowQ ? 8 : 12, lowQ ? 6 : 10);
+    const eyeG = new THREE.SphereGeometry(0.075, lowQ ? 8 : 12, lowQ ? 6 : 10);
+    const collarG = new THREE.ConeGeometry(0.03, 0.14, 4);
+    const ringGs = [0, 1, 2].map(i => new THREE.TorusGeometry(0.135 - i * 0.012, 0.012, 4, lowQ ? 8 : 14));
+    const antTubes = antCurves.map(c => new THREE.TubeGeometry(c, lowQ ? 6 : 10, 0.008, 4));
+    const barbG = new THREE.CylinderGeometry(0.003, 0.003, 0.07, 3);
+
+    // Bake static fur body parts (thorax, abdomen, 10 neck collar tufts) into 1 geometry
+    const furParts = [
+      { geo: thoraxG, x: 0, y: 2.15, z: 0, sx: 1, sy: 1, sz: 0.75 },
+      { geo: abdomenG, x: 0, y: 1.42, z: -0.04, sx: 0.9, sy: 1, sz: 0.8 },
+    ];
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      furParts.push({ geo: collarG, x: Math.cos(a) * 0.17, y: 2.1, z: Math.sin(a) * 0.13, rx: Math.sin(a) * 1.2, ry: 0, rz: -Math.cos(a) * 1.2 });
+    }
+    const bodyFurGeo = mergePartEntries(furParts);
+
+    // Bake static skin body parts (connected hip->knee->shin->foot chains, arms+fingers, abdomen rings) into 1 geometry
+    const skinParts = [];
+    const localM = new THREE.Matrix4(), childM = new THREE.Matrix4(), footM = new THREE.Matrix4();
+    [-1, 1].forEach(sd => {
+      localM.compose(new V3(sd * 0.105, 1.45, -0.01), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.14, 0, sd * 0.03)), new V3(1, 1, 1));
+      skinParts.push({ geo: thighG, mat4: localM.clone() });
+      childM.compose(new V3(0, -0.74, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(0.26, 0, -sd * 0.02)), new V3(1, 1, 1));
+      const kneeM = localM.clone().multiply(childM);
+      skinParts.push({ geo: kneeG, mat4: kneeM.clone() });
+      skinParts.push({ geo: shinG, mat4: kneeM.clone() });
+      footM.compose(new V3(0, -0.73, 0.04), new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 - 0.12, 0, 0)), new V3(1, 1, 0.6));
+      skinParts.push({ geo: footG, mat4: kneeM.clone().multiply(footM) });
+
+      // Arms + elbows + 3 fingers per arm
+      localM.compose(new V3(sd * 0.2, 2.05, 0.02), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, sd * 0.12)), new V3(1, 1, 1));
+      skinParts.push({ geo: armG, mat4: localM.clone() });
+      childM.compose(new V3(0, -0.62, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.25, 0, 0)), new V3(1, 1, 1));
+      const elM = localM.clone().multiply(childM);
+      skinParts.push({ geo: armG, mat4: elM.clone() });
+      for (let f = 0; f < 3; f++) {
+        footM.compose(new V3((f - 1) * 0.025, -0.62, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0, (f - 1) * 0.15)), new V3(1, 1, 1));
+        skinParts.push({ geo: fingerG, mat4: elM.clone().multiply(footM) });
+      }
+    });
+    for (let i = 0; i < 3; i++) {
+      skinParts.push({ geo: ringGs[i], x: 0, y: 1.3 - i * 0.12, z: -0.04, rx: Math.PI / 2, ry: 0, rz: 0 });
+    }
+    const bodySkinGeo = mergePartEntries(skinParts);
+
+    // Bake head fur, compound eyes, and feathery antennae into 3 geometries
+    const headFurGeo = mergePartEntries([{ geo: headBaseG, x: 0, y: 0.05, z: 0, sx: 1, sy: 1.05, sz: 0.95 }]);
+    const headEyeGeo = mergePartEntries([
+      { geo: eyeG, x: -0.085, y: 0.07, z: 0.07, sx: 0.85, sy: 1.1, sz: 0.9 },
+      { geo: eyeG, x: 0.085, y: 0.07, z: 0.07, sx: 0.85, sy: 1.1, sz: 0.9 },
+    ]);
+    const antParts = [];
+    antCurves.forEach((c, idx) => {
+      const sd = idx === 0 ? -1 : 1;
+      antParts.push({ geo: antTubes[idx], x: 0, y: 0, z: 0 });
+      for (let b = 1; b < 9; b++) {
+        const pt = c.getPoint(b / 9);
+        antParts.push({ geo: barbG, x: pt.x, y: pt.y + 0.02, z: pt.z, rx: 0.4, ry: 0, rz: sd * 0.6 });
+      }
+    });
+    const headAntGeo = mergePartEntries(antParts);
+
+    // Dispose raw source geometries now that merged kits exist
+    [thoraxG, abdomenG, thighG, shinG, kneeG, footG, armG, fingerG, headBaseG, eyeG, collarG, barbG]
+      .concat(ringGs, antTubes)
+      .forEach(g => g.dispose());
+
     this._kit = {
       fur, skin, eye, fore, hind,
-      thorax: lathe(0.75, [[0.05, 0], [0.2, 0.08], [0.24, 0.35], [0.2, 0.75], [0.12, 1]], lowQ ? 6 : 10),
-      abdomen: lathe(0.55, [[0.12, 0], [0.16, 0.3], [0.13, 0.75], [0.05, 1]], lowQ ? 6 : 10),
-      thigh: lathe(0.76, [[0.072, 0], [0.064, 0.25], [0.052, 0.75], [0.042, 1]], lowQ ? 5 : 7),
-      shin: lathe(0.74, [[0.044, 0], [0.038, 0.35], [0.028, 0.8], [0.024, 1]], lowQ ? 5 : 7),
-      kneeG: new THREE.SphereGeometry(0.046, lowQ ? 5 : 7, lowQ ? 4 : 6),
-      footG: new THREE.ConeGeometry(0.036, 0.14, lowQ ? 4 : 6),
-      arm: lathe(0.62, [[0.04, 0], [0.03, 0.9], [0.022, 1]], lowQ ? 4 : 6),
-      finger: lathe(0.2, [[0.012, 0], [0.004, 1]], 4),
-      head: new THREE.SphereGeometry(0.13, lowQ ? 8 : 12, lowQ ? 6 : 10),
-      eyeG: new THREE.SphereGeometry(0.075, lowQ ? 8 : 12, lowQ ? 6 : 10),
-      collar: new THREE.ConeGeometry(0.03, 0.14, 4),
-      rings: [0, 1, 2].map(i => new THREE.TorusGeometry(0.135 - i * 0.012, 0.012, 4, lowQ ? 8 : 14)),
-      antTubes: antCurves.map(c => new THREE.TubeGeometry(c, lowQ ? 6 : 10, 0.008, 4)),
-      antBarbs: antCurves.map((c, idx) => {
-        const sd = idx === 0 ? -1 : 1, pts = [];
-        for (let b = 1; b < 9; b++) { const p = c.getPoint(b / 9); pts.push({ x: p.x, y: p.y + 0.02, z: p.z, rz: sd * 0.6 }); }
-        return pts;
-      }),
-      barbG: new THREE.CylinderGeometry(0.003, 0.003, 0.07, 3),
+      bodyFurGeo, bodySkinGeo, headFurGeo, headEyeGeo, headAntGeo,
       foreG: wingGeo([[0, 0], [0.25, 0.32], [0.78, 0.5], [0.95, 0.25], [0.8, -0.1], [0.4, -0.28], [0.08, -0.12]]),
       hindG: wingGeo([[0, 0], [0.4, 0.05], [0.72, -0.15], [0.7, -0.5], [0.38, -0.62], [0.1, -0.35]]),
     };
@@ -160,47 +257,15 @@
   Moths.prototype.makeMoth = function () {
     const K = this.kit();
     const g = new THREE.Group();
-    const add = (geo, mat, x, y, z, rx, ry, rz, parent) => {
-      const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx || 0, ry || 0, rz || 0); (parent || g).add(m); return m;
-    };
-    // connected pelvis -> thigh -> knee -> shin -> foot legs (local y = 0 rests on ground)
-    [-1, 1].forEach(sd => {
-      const hip = new THREE.Group();
-      hip.position.set(sd * 0.105, 1.45, -0.01);
-      hip.rotation.set(-0.14, 0, sd * 0.03);
-      g.add(hip);
-      add(K.thigh, K.skin, 0, 0, 0, 0, 0, 0, hip);
-      const knee = new THREE.Group();
-      knee.position.set(0, -0.74, 0);
-      knee.rotation.set(0.26, 0, -sd * 0.02);
-      hip.add(knee);
-      add(K.kneeG, K.skin, 0, 0, 0, 0, 0, 0, knee);
-      add(K.shin, K.skin, 0, 0, 0, 0, 0, 0, knee);
-      add(K.footG, K.skin, 0, -0.73, 0.04, Math.PI / 2 - 0.12, 0, 0, knee).scale.set(1, 1, 0.6);
-    });
-    // furry thorax and a hanging, segmented abdomen
-    add(K.thorax, K.fur, 0, 2.15, 0).scale.set(1, 1, 0.75);
-    const ab = add(K.abdomen, K.fur, 0, 1.42, -0.04); ab.scale.set(0.9, 1, 0.8);
-    for (let i = 0; i < 3; i++) add(K.rings[i], K.skin, 0, 1.3 - i * 0.12, -0.04, Math.PI / 2);
-    // a ruff of fur around the neck
-    for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2; add(K.collar, K.fur, Math.cos(a) * 0.17, 2.1, Math.sin(a) * 0.13, Math.sin(a) * 1.2, 0, -Math.cos(a) * 1.2); }
-    // long arms with spindly fingers
-    [-1, 1].forEach(sd => {
-      const sh = new THREE.Group(); sh.position.set(sd * 0.2, 2.05, 0.02); sh.rotation.z = sd * 0.12; g.add(sh);
-      add(K.arm, K.skin, 0, 0, 0, 0, 0, 0, sh);
-      const el = new THREE.Group(); el.position.y = -0.62; el.rotation.x = -0.25; sh.add(el);
-      add(K.arm, K.skin, 0, 0, 0, 0, 0, 0, el);
-      for (let f = 0; f < 3; f++) add(K.finger, K.skin, (f - 1) * 0.025, -0.62, 0, 0.2, 0, (f - 1) * 0.15, el);
-    });
+    g.add(new THREE.Mesh(K.bodyFurGeo, K.fur));
+    g.add(new THREE.Mesh(K.bodySkinGeo, K.skin));
+
     // the head: big, glossy, black compound eyes and feathery antennae
     const head = new THREE.Group(); head.position.y = 2.28; g.add(head);
-    add(K.head, K.fur, 0, 0.05, 0, 0, 0, 0, head).scale.set(1, 1.05, 0.95);
-    [0, 1].forEach(idx => {
-      const sd = idx === 0 ? -1 : 1;
-      add(K.eyeG, K.eye, sd * 0.085, 0.07, 0.07, 0, 0, 0, head).scale.set(0.85, 1.1, 0.9);
-      add(K.antTubes[idx], K.skin, 0, 0, 0, 0, 0, 0, head);
-      K.antBarbs[idx].forEach(bp => add(K.barbG, K.skin, bp.x, bp.y, bp.z, 0.4, 0, bp.rz, head));
-    });
+    head.add(new THREE.Mesh(K.headFurGeo, K.fur));
+    head.add(new THREE.Mesh(K.headEyeGeo, K.eye));
+    head.add(new THREE.Mesh(K.headAntGeo, K.skin));
+
     // four wings, half-folded behind the back
     const wings = [];
     [-1, 1].forEach(side => {
@@ -261,6 +326,8 @@
     const BEAM_COS = Math.cos(BEAM_ANGLE);
     const BEAM_RANGE_SQ = BEAM_RANGE * BEAM_RANGE;
     const beamActive = player.flashOn && player.flash.intensity > 0.5 && !player.hidden;
+    this._frame = (this._frame + 1) | 0;
+    const camP = camera.position;
     for (let idx = 0; idx < this.moths.length; idx++) {
       const m = this.moths[idx];
       if (idx >= activeLimit) { m.g.visible = false; continue; }
@@ -273,16 +340,24 @@
       let inBeam = false;
       if (beamActive) {
         _chest.copy(m.g.position); _chest.y += 1.7;
-        _to.copy(_chest).sub(camera.position);
+        _to.copy(_chest).sub(camP);
         const d2 = _to.lengthSq();
         if (d2 < BEAM_RANGE_SQ && d2 > 1e-6) {
           const d = Math.sqrt(d2);
           _to.multiplyScalar(1 / d);
           if (_to.dot(_fwd) > BEAM_COS) {
-            this.raycaster.set(camera.position, _to);
-            this.raycaster.far = d;
-            const hits = this.raycaster.intersectObjects(W.occluders, false);
-            inBeam = !hits.length || hits[0].distance > d - 0.6;
+            // Stagger distant unlit checks across alternate frames to avoid raycast spikes
+            if (d2 > 196 && m.lit === 0 && ((idx + this._frame) & 1) === 1) {
+              inBeam = false;
+            } else if (W.segmentHitsTree && W.segmentHitsTree(camP.x, camP.z, _chest.x, _chest.z)) {
+              inBeam = false;
+            } else {
+              this.raycaster.set(camP, _to);
+              this.raycaster.far = d;
+              const occl = W.queryOccluders ? W.queryOccluders(camP.x, camP.z, _chest.x, _chest.z) : W.occluders;
+              const hits = this.raycaster.intersectObjects(occl, false);
+              inBeam = !hits.length || hits[0].distance > d - 0.6;
+            }
           }
         }
       }

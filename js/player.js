@@ -69,6 +69,7 @@
     this.stamina = 100;
     this.exhausted = false;
     this.panting = 0;
+    LO.audio && LO.audio.setBreathing && LO.audio.setBreathing(0);
     this.battery = 100;
     this.flashOn = false;
     this.cameraUp = false;
@@ -115,8 +116,15 @@
     this.windedTimer = 0;
     this.dizzy = 0;
     this.dizzyT = 0;
+    this.trapSlowTimer = 0;
     this.hasMap = false;
     this.mapOpen = false;
+  };
+
+  Player.prototype.addNoise = function (radius) {
+    if (LO.admin && LO.admin.zeroNoise) return;
+    this.spike = Math.max(this.spike || 0, radius || 0);
+    this.noiseRadius = Math.max(this.noiseRadius || 0, this.spike);
   };
 
   Player.prototype.triggerAdrenaline = function (duration) {
@@ -213,6 +221,7 @@
     this.adrenaline = Math.max(0, (this.adrenaline || 0) - dt);
     this.adrenalineCooldown = Math.max(0, (this.adrenalineCooldown || 0) - dt);
     this.windedTimer = Math.max(0, (this.windedTimer || 0) - dt);
+    this.trapSlowTimer = Math.max(0, (this.trapSlowTimer || 0) - dt);
     const windedMult = this.windedTimer > 2.0 ? 0 : (this.windedTimer > 0 ? 0.5 : 1);
     if (this.dizzy > 0) {
       this.dizzy = Math.max(0, this.dizzy - dt * 0.22);
@@ -238,6 +247,8 @@
       if (this.windedTimer > 0) {
         this.panting = Math.max(this.panting, this.windedTimer > 2.0 ? 1.0 : 0.7);
       }
+      const VpH = LO.ver ? LO.ver() : { panting: true };
+      LO.audio.setBreathing && LO.audio.setBreathing((VpH.panting && this.enabled && this.alive && !this.calm) ? this.panting : 0);
       this.zoom = 0;
       return;
     }
@@ -320,6 +331,7 @@
       const sprintSpeed = this.adrenaline > 0 ? 13.8 : 6.9;
       let speed = (wantCrouch ? 1.6 : sprinting ? sprintSpeed : 3.3) * (sprinting ? 1 : Math.max(0.5, analog)) * speedMult;
       if (this.cameraUp) speed *= 0.6;
+      if (this.trapSlowTimer > 0) speed *= 0.28;
       const sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw);
       let mx = -sinY * fwd + cosY * str, mz = -cosY * fwd - sinY * str;
       const ml = Math.hypot(mx, mz) || 1;
@@ -383,6 +395,8 @@
         if (sprinting && this.stamina < 40) this.panting = Math.max(this.panting, 0.6);
         if (!sprinting && this.windedTimer <= 0) this.panting = Math.max(0, this.panting - dt * (this.crouch > 0.5 ? 0.25 : 0.12));
       }
+      const VpB = LO.ver ? LO.ver() : { panting: true };
+      LO.audio.setBreathing && LO.audio.setBreathing((VpB.panting && this.enabled && this.alive && !this.calm) ? this.panting : 0);
 
       // footsteps
       const hspeed = Math.hypot(this.vel.x, this.vel.z);
@@ -444,29 +458,32 @@
     }
 
     // ---------- pickups ----------
-    W.pickups.forEach(p => {
-      if (p.taken) return;
-      if (p.type === 'rock' && !Vs.rocks) return;
-      if (Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z) < 1.4 &&
+    const pickups = W.pickups;
+    for (let pi = 0; pi < pickups.length; pi++) {
+      const p = pickups[pi];
+      if (p.taken) continue;
+      if (p.type === 'rock' && !Vs.rocks) continue;
+      const pdx = p.pos.x - this.pos.x, pdz = p.pos.z - this.pos.z;
+      if (pdx * pdx + pdz * pdz < 1.96 &&
           Math.abs((p.baseY !== undefined ? p.baseY : (p.pos.y || 0)) - (this.pos.y + 0.5)) < 1.9) {
         if (p.type === 'rock') {
-          if (this.hidden) return;
+          if (this.hidden) continue;
           if (this.rocks >= MAX_ROCKS) {
             if (!p.fullWarned) { p.fullWarned = true; this.hint && this.hint(`You can only carry ${MAX_ROCKS} rocks.`); }
-            return;
+            continue;
           }
           p.taken = true; p.mesh.visible = false;
           this.rocks++;
           LO.audio.click(false);
           this.hint && this.hint(`Rock picked up (${this.rocks}/${MAX_ROCKS}). ${LO.isTouch ? 'Tap THROW' : 'Press G'} to throw and distract it.`);
-          return;
+          continue;
         }
         p.taken = true; p.mesh.visible = false;
         this.battery = Math.min(100, this.battery + 45);
         LO.audio.pickup();
         this.hint && this.hint('Battery found (+45%)');
       }
-    });
+    }
 
     // ---------- thrown rocks ----------
     this.updateRocks(dt);
@@ -867,28 +884,34 @@
     const cam = this.camera;
     cam.getWorldDirection(_fwd);
     let best = null, bestScore = -1, tooFar = null;
-    this.world.evidence.forEach(ev => {
-      if (ev.found) return;
+    const evList = this.world.evidence;
+    for (let i = 0; i < evList.length; i++) {
+      const ev = evList[i];
+      if (ev.found) continue;
       _dir.copy(ev.pos).sub(cam.position);
       const dist = _dir.length();
-      _dir.normalize();
+      _dir.divideScalar(dist || 1);
       const ang = Math.acos(Math.max(-1, Math.min(1, _dir.dot(_fwd))));
       const maxAng = THREE.MathUtils.degToRad(ev.ground ? 20 : 16);
-      if (ang > maxAng) return;
-      if (dist > ev.maxDist) { if (dist < ev.maxDist * 2.2) tooFar = ev; return; }
-      // line of sight (avoid per-call concat allocation)
+      if (ang > maxAng) continue;
+      if (dist > ev.maxDist) { if (dist < ev.maxDist * 2.2) tooFar = ev; continue; }
+      if (this.world.segmentHitsTree && this.world.segmentHitsTree(cam.position.x, cam.position.z, ev.pos.x, ev.pos.z)) continue;
+      // line of sight via spatial occluder grid
       this.raycaster.set(cam.position, _dir);
       this.raycaster.far = dist;
       const margin = ev.margin || (ev.id === 'police' ? 3 : ev.id === 'tower' ? 2 : 1.2);
-      const hits = this.raycaster.intersectObjects(this.world.occluders, false);
-      if (hits.length && hits[0].distance < dist - margin) return;
+      const occl = this.world.queryOccluders
+        ? this.world.queryOccluders(cam.position.x, cam.position.z, ev.pos.x, ev.pos.z)
+        : this.world.occluders;
+      const hits = this.raycaster.intersectObjects(occl, false);
+      if (hits.length && hits[0].distance < dist - margin) continue;
       if (this.world.evOccluders.length) {
         const hits2 = this.raycaster.intersectObjects(this.world.evOccluders, false);
-        if (hits2.length && hits2[0].distance < dist - margin) return;
+        if (hits2.length && hits2[0].distance < dist - margin) continue;
       }
       const score = 1 - ang / maxAng;
       if (score > bestScore) { bestScore = score; best = ev; }
-    });
+    }
     if (best) return { ev: best, ok: true };
     if (tooFar) return { ev: tooFar, ok: false };
     return null;

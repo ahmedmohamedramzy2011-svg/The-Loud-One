@@ -10,7 +10,7 @@
   const admin = {
     open: false,
     returnTo: 'title',     // 'play' | 'pause' | 'title'
-    activeTab: 'entities', // 'entities' | 'player' | 'world' | 'debug'
+    activeTab: 'entities', // 'entities' | 'hazards' | 'player' | 'world' | 'debug'
     freezeWhenOpen: true,
     timeScale: 1,
     // cheats & overrides
@@ -20,6 +20,7 @@
     zeroNoise: false,
     noclip: false,
     fullbright: false,
+    noFog: false,
     speedMult: 1,
     sirenIgnore: false,
     sirenFreeze: false,
@@ -29,10 +30,18 @@
     noSilent: false,
     noTenant: false,
     noExposure: false,
+    // hazards
+    noHazards: false,
+    noPowerlines: false,
+    noBearTraps: false,
+    noSteam: false,
+    noNoiseHazards: false,
     // 3D debug helpers
     dbgSiren: false,
     dbgEvidence: false,
     dbgHideSpots: false,
+    dbgHazards: false,
+    dbgFreezeBirds: false,
   };
   window.LO = window.LO || {};
   LO.admin = admin;
@@ -49,6 +58,7 @@
   let dbgSirenTarget = null;
   let dbgEvidenceGroup = null;
   let dbgHideGroup = null;
+  let dbgHazardGroup = null;
 
   function setStatus(msg) {
     statusMsg = msg || '';
@@ -84,15 +94,21 @@
 
   function isBlocked(world, x, z, y) {
     if (!world || !world.colliders) return false;
-    const all = world.evColliders && world.evColliders.length
-      ? world.colliders.concat(world.evColliders)
-      : world.colliders;
     const r = 0.45;
     const py = y || 0;
-    for (let i = 0; i < all.length; i++) {
-      const c = all[i];
+    const cols = world.queryColliders ? world.queryColliders(x, z, r + 0.5) : world.colliders;
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
       if (c.disabled || c.maxY < py + 0.3 || c.minY > py + 1.75) continue;
       if (x + r > c.minX && x - r < c.maxX && z + r > c.minZ && z - r < c.maxZ) return true;
+    }
+    const evc = world.evColliders;
+    if (evc && evc.length) {
+      for (let i = 0; i < evc.length; i++) {
+        const c = evc[i];
+        if (c.disabled || c.maxY < py + 0.3 || c.minY > py + 1.75) continue;
+        if (x + r > c.minX && x - r < c.maxX && z + r > c.minZ && z - r < c.maxZ) return true;
+      }
     }
     return false;
   }
@@ -163,9 +179,10 @@
     const siren = H.getSiren();
     if (!scene) return;
 
-    const anyOn = admin.dbgSiren || admin.dbgEvidence || admin.dbgHideSpots;
+    const hazards = H.getHazards ? H.getHazards() : null;
+    const anyOn = admin.dbgSiren || admin.dbgEvidence || admin.dbgHideSpots || admin.dbgHazards;
     if (!anyOn) {
-      if (dbgGroup) { disposeGroup(dbgGroup); dbgGroup = null; dbgScene = null; dbgSirenLine = null; dbgSirenTarget = null; dbgEvidenceGroup = null; dbgHideGroup = null; }
+      if (dbgGroup) { disposeGroup(dbgGroup); dbgGroup = null; dbgScene = null; dbgSirenLine = null; dbgSirenTarget = null; dbgEvidenceGroup = null; dbgHideGroup = null; dbgHazardGroup = null; }
       return;
     }
 
@@ -175,7 +192,7 @@
       scene.add(dbgGroup);
       dbgScene = scene;
       dbgSirenLine = null; dbgSirenTarget = null;
-      dbgEvidenceGroup = null; dbgHideGroup = null;
+      dbgEvidenceGroup = null; dbgHideGroup = null; dbgHazardGroup = null;
     }
 
     // 1. Siren Head path & target marker
@@ -266,6 +283,44 @@
       });
     } else if (dbgHideGroup) {
       dbgHideGroup.visible = false;
+    }
+
+    // 4. Hazard beacons
+    if (admin.dbgHazards && hazards && hazards.list && hazards.list.length) {
+      if (!dbgHazardGroup || dbgHazardGroup._hazRef !== hazards.list) {
+        if (dbgHazardGroup) disposeGroup(dbgHazardGroup);
+        dbgHazardGroup = new THREE.Group();
+        dbgHazardGroup._hazRef = hazards.list;
+        const hazGeo = new THREE.OctahedronGeometry(0.45, 0);
+        const cols = {
+          powerline: 0x55d8ff,
+          beartrap: 0xff5544,
+          steam: 0xffaa33,
+          glass: 0xb8ecff,
+          floorboard: 0xd8a862,
+          tindebris: 0xd4d8dc,
+        };
+        for (let i = 0; i < hazards.list.length; i++) {
+          const h = hazards.list[i];
+          const m = new THREE.Mesh(
+            hazGeo,
+            new THREE.MeshBasicMaterial({ color: cols[h.type] || 0xf0a830, wireframe: true })
+          );
+          m.position.set(h.pos.x, (h.pos.y || 0) + 2.8, h.pos.z);
+          m._h = h;
+          dbgHazardGroup.add(m);
+        }
+        dbgGroup.add(dbgHazardGroup);
+      }
+      dbgHazardGroup.visible = true;
+      for (let i = 0; i < dbgHazardGroup.children.length; i++) {
+        const c = dbgHazardGroup.children[i];
+        const h = c._h;
+        c.visible = !!(h && h.group && h.group.visible && !h.disarmed && !h.toppled);
+        c.rotation.y += 0.035;
+      }
+    } else if (dbgHazardGroup) {
+      dbgHazardGroup.visible = false;
     }
   }
 
@@ -618,6 +673,11 @@
         }
         setStatus('Town Map granted (press M or Tab to view).');
         break;
+      case 'p-clear-slow':
+        if (!ensurePlayContext()) return;
+        player.trapSlowTimer = 0;
+        setStatus('Cleared bear trap slow.');
+        break;
 
       // ---- World / Evidence / Teleports ----
       case 'ev-mark': {
@@ -733,6 +793,14 @@
         setStatus(wm.taken ? 'Teleported to Wall Map building (already collected).' : 'Teleported inside facing the Town Wall Map.');
         break;
       }
+      case 'tp-lookout': {
+        if (!ensurePlayContext() || !world) return;
+        if (!world.lookout) { setStatus('Fire Lookout Tower not available in selected game version.'); break; }
+        const lx = world.lookout.x, lz = world.lookout.z;
+        safeTeleport({ x: lx - 8, y: 0, z: lz }, { x: lx, y: 6, z: lz });
+        setStatus('Teleported to Fire Lookout Tower clearing.');
+        break;
+      }
 
       case 'w-repair-fences':
         if (!ensurePlayContext() || !world || !world.fences) return;
@@ -770,6 +838,47 @@
         world.buildings.forEach(b => { if (b.smashed && b.restore) b.restore(); });
         setStatus('Restored all smashed buildings.');
         break;
+      case 'w-scatter-birds':
+        if (!ensurePlayContext()) return;
+        if (H.scatterBirds && H.scatterBirds()) setStatus('Scattered nearby perched birds!');
+        else setStatus('No perched birds nearby to scatter.');
+        break;
+
+      // ---- Hazards ----
+      case 'haz-tp': {
+        if (!ensurePlayContext()) return;
+        const haz = H.getHazards && H.getHazards();
+        if (!haz || !haz.list || !haz.list.length) { setStatus('Hazards not spawned.'); break; }
+        const matches = haz.list.filter(h => h.type === arg);
+        if (!matches.length) { setStatus(`No ${arg} hazards found in this world.`); break; }
+        matches.sort((a, b) => Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z) - Math.hypot(b.pos.x - player.pos.x, b.pos.z - player.pos.z));
+        const pick = matches[0];
+        const baseY = pick.pos.y > 1.5 ? pick.pos.y : 0;
+        safeTeleport({ x: pick.pos.x + 2.7, y: baseY, z: pick.pos.z + 2.7 }, pick.pos);
+        setStatus(`Teleported near ${pick.label}.`);
+        break;
+      }
+      case 'haz-disarm-traps': {
+        if (!ensurePlayContext()) return;
+        const haz = H.getHazards && H.getHazards();
+        const n = haz && haz.disarmAllTraps ? haz.disarmAllTraps() : 0;
+        setStatus(`Disarmed ${n} bear trap${n === 1 ? '' : 's'}.`);
+        break;
+      }
+      case 'haz-reset-tin': {
+        if (!ensurePlayContext()) return;
+        const haz = H.getHazards && H.getHazards();
+        const n = haz && haz.resetTin ? haz.resetTin() : 0;
+        setStatus(`Restored ${n} tin debris pile${n === 1 ? '' : 's'}.`);
+        break;
+      }
+      case 'haz-reset-all': {
+        if (!ensurePlayContext()) return;
+        const haz = H.getHazards && H.getHazards();
+        if (haz && haz.reset) haz.reset();
+        setStatus('All hazards reset to active/initial state.');
+        break;
+      }
 
       case 'timescale':
         admin.timeScale = parseFloat(arg) || 1;
@@ -795,12 +904,12 @@
   function toggleFlag(key) {
     const H = host();
     admin[key] = !admin[key];
-    if (key === 'fullbright' && H) H.applyAdminLighting();
+    if ((key === 'fullbright' || key === 'noFog') && H) H.applyAdminLighting();
     if (key === 'showFps') {
       LO.Settings && LO.Settings.set('showFps', !LO.settings.showFps);
       admin.showFps = !!LO.settings.showFps;
     }
-    if (key === 'dbgSiren' || key === 'dbgEvidence' || key === 'dbgHideSpots') syncDebugVisuals();
+    if (key === 'dbgSiren' || key === 'dbgEvidence' || key === 'dbgHideSpots' || key === 'dbgHazards') syncDebugVisuals();
     renderBody();
     refreshLiveUI();
   }
@@ -911,6 +1020,49 @@
         btn('Exposure: Clear', 'expo-clear'),
         toggleBtn('Disable Exposure', 'noExposure'),
       ]));
+    } else if (admin.activeTab === 'hazards') {
+      const haz = H && H.getHazards && H.getHazards();
+      const sum = haz && haz.getSummary ? haz.getSummary() : null;
+      const summaryNote = sum
+        ? `Powerlines:${sum.powerline} · Traps:${sum.beartrapActive}/${sum.beartrap} · Steam:${sum.steam} · Glass:${sum.glass} · Boards:${sum.floorboard} · Tin:${sum.tinIntact}/${sum.tindebris}`
+        : 'Hazards spawn during active play.';
+      const banner = document.createElement('div');
+      banner.className = 'adm-banner';
+      const txt = document.createElement('span');
+      txt.textContent = summaryNote;
+      banner.append(txt);
+      body.appendChild(banner);
+
+      body.appendChild(group('HAZARD TOGGLES & VISUALS', [
+        toggleBtn('Disable All Hazards', 'noHazards', 'Master switch for all 6 types'),
+        toggleBtn('Disable Power Lines', 'noPowerlines', 'Street puddle shock arcs'),
+        toggleBtn('Disable Bear Traps', 'noBearTraps', 'Forest trail traps + slow'),
+        toggleBtn('Disable Steam Leaks', 'noSteam', 'Alley pipe bursts'),
+        toggleBtn('Disable Noise Hazards', 'noNoiseHazards', 'Glass, boards, tin piles'),
+        toggleBtn('Show Hazard Beacons', 'dbgHazards', 'Floating diamonds above hazards'),
+      ]));
+
+      body.appendChild(group('TELEPORT TO NEAREST HAZARD', [
+        btn('Nearest Power Line', 'haz-tp', 'powerline'),
+        btn('Nearest Bear Trap', 'haz-tp', 'beartrap'),
+        btn('Nearest Steam Leak', 'haz-tp', 'steam'),
+        btn('Nearest Broken Glass', 'haz-tp', 'glass'),
+        btn('Nearest Creak Boards', 'haz-tp', 'floorboard'),
+        btn('Nearest Tin Debris', 'haz-tp', 'tindebris'),
+      ]));
+
+      body.appendChild(group('HAZARD STATE ACTIONS', [
+        btn('Disarm All Bear Traps', 'haz-disarm-traps'),
+        btn('Restore Tin Debris', 'haz-reset-tin'),
+        btn('Reset All Hazards', 'haz-reset-all', null, 'primary'),
+        btn('Clear Bear Trap Slow', 'p-clear-slow'),
+      ]));
+
+      body.appendChild(group('TEST HAZARD DEATH TAPES', [
+        btn('Die: Power Line (Zap)', 'die', 'powerline', 'danger'),
+        btn('Die: Bear Trap (Jaws)', 'die', 'beartrap', 'danger'),
+        btn('Die: Steam Leak (Scald)', 'die', 'steam', 'danger'),
+      ]));
     } else if (admin.activeTab === 'player') {
       body.appendChild(group('SURVIVAL & UTILITY CHEATS', [
         toggleBtn('God Mode (Invincible)', 'god', 'Blocks all damage & catches'),
@@ -930,6 +1082,7 @@
         btn('Trigger Adrenaline', 'p-adrenaline'),
         btn('Reset Adr. Cooldown', 'p-adrenaline-cd'),
         btn('Apply Winded (5s)', 'p-winded'),
+        btn('Clear Bear Trap Slow', 'p-clear-slow'),
         btn('Test Dizzy + Shake', 'p-dizzy'),
         btn('Give Town Map', 'p-give-map', null, 'primary'),
       ]));
@@ -991,6 +1144,7 @@
       body.appendChild(group('LANDMARK TELEPORTS', [
         btn('Spawn Car', 'tp-spawn'),
         btn('Sheriff\'s Station', 'tp-sheriff'),
+        btn('Fire Lookout Tower', 'tp-lookout'),
         btn('Center Crossroads', 'tp-center'),
         btn('Nearest Hiding Spot', 'tp-hide'),
         btn('Nearest Exterior Dumpster', 'tp-dumpster'),
@@ -1002,6 +1156,7 @@
         btn('Repair All Fences', 'w-repair-fences'),
         btn('Smash Nearest Building', 'w-smash-bldg'),
         btn('Restore Smashed Buildings', 'w-restore-bldgs'),
+        btn('Scatter Nearby Birds', 'w-scatter-birds'),
         btn('Restart Run (Skip Intro)', 'restart-run'),
         btn('Quit To Title', 'go-title'),
       ]));
@@ -1019,10 +1174,32 @@
       tsCard.append(th, tg);
       body.appendChild(tsCard);
     } else if (admin.activeTab === 'debug') {
+      const rend = H && H.getRenderer && H.getRenderer();
+      const world = H && H.getWorld && H.getWorld();
+      const haz = H && H.getHazards && H.getHazards();
+      const info = rend && rend.info ? rend.info : null;
+      const perfCard = document.createElement('div');
+      perfCard.className = 'adm-card';
+      const ph = document.createElement('div');
+      ph.className = 'adm-card-title';
+      ph.textContent = 'LIVE PERF & PARTS TELEMETRY';
+      const pBody = document.createElement('div');
+      pBody.className = 'adm-muted';
+      pBody.style.lineHeight = '1.55';
+      pBody.innerHTML = info
+        ? `Draw Calls: <b>${info.render.calls}</b> · Triangles: <b>${info.render.triangles.toLocaleString()}</b> · Geometries: <b>${info.memory.geometries}</b> · Textures: <b>${info.memory.textures}</b><br>` +
+          `Tree Colliders: <b>${world && world.treeColliders ? world.treeColliders.length : 0}</b> · Occluders: <b>${world && world.occluders ? world.occluders.length : 0}</b> · Birds: <b>${world && world.birds ? world.birds.length : 0}</b> · Hazards: <b>${haz && haz.list ? haz.list.length : 0}</b>`
+        : 'Renderer telemetry unavailable.';
+      perfCard.append(ph, pBody);
+      body.appendChild(perfCard);
+
       body.appendChild(group('3D DEBUG OVERLAYS & STATS', [
         toggleBtn('Siren Head Path & Target', 'dbgSiren', 'Red line + target sphere'),
         toggleBtn('Unfound Evidence Beams', 'dbgEvidence', 'Tall cyan beacons'),
         toggleBtn('Hiding Spot Markers', 'dbgHideSpots', 'Blue dumpster · Green locker'),
+        toggleBtn('Hazard Beacons', 'dbgHazards', 'Color-coded diamonds above hazards'),
+        toggleBtn('Freeze Bird Flocks', 'dbgFreezeBirds', 'Stops bird scatter & flapping'),
+        toggleBtn('Disable Scene Fog', 'noFog', 'Clear long-distance visibility'),
         toggleBtn('Show FPS Counter', 'showFps'),
       ]));
 
@@ -1034,6 +1211,9 @@
         btn('Die: The Tenant', 'die', 'tenant', 'danger'),
         btn('Die: The Moths', 'die', 'moth', 'danger'),
         btn('Die: The Exposure', 'die', 'exposure', 'danger'),
+        btn('Die: Power Line', 'die', 'powerline', 'danger'),
+        btn('Die: Bear Trap', 'die', 'beartrap', 'danger'),
+        btn('Die: Steam Leak', 'die', 'steam', 'danger'),
       ]));
     }
   }
@@ -1047,6 +1227,8 @@
     const fastone = H.getFastOne();
     const sneaky = H.getSneaky();
     const world = H.getWorld();
+    const haz = H.getHazards && H.getHazards();
+    const rend = H.getRenderer && H.getRenderer();
     const st = H.getState();
 
     const px = player ? player.pos.x.toFixed(1) : '0';
@@ -1075,15 +1257,20 @@
     const brokenFences = world && world.fences ? world.fences.filter(f => f.broken).length : 0;
     const smashedBldgs = world && world.buildings ? world.buildings.filter(b => b.smashed).length : 0;
     const mapTxt = !player ? '-' : (player.hasMap ? (player.mapOpen ? 'OPEN' : 'CARRIED') : 'ON WALL');
+    const hazCnt = haz && haz.list ? haz.list.length : 0;
+    const dc = rend && rend.info ? rend.info.render.calls : '-';
+    const tris = rend && rend.info ? rend.info.render.triangles : '-';
+    const slowTxt = player && player.trapSlowTimer > 0 ? ` · SLOW ${player.trapSlowTimer.toFixed(1)}s` : '';
 
     strip.innerHTML =
       `<div><b>STATE</b> ${st.toUpperCase()} (${LO.settings ? 'v' + LO.settings.gameVersion : ''})</div>` +
       `<div><b>POS</b> ${px}, ${py}, ${pz}</div>` +
-      `<div><b>PLAYER</b> ${hp}HP · ${sta}% STA · ${bat}% BAT · ${noise}m NOISE · MAP ${mapTxt}</div>` +
+      `<div><b>PLAYER</b> ${hp}HP · ${sta}% STA · ${bat}% BAT · ${noise}m NOISE · MAP ${mapTxt}${slowTxt}</div>` +
       `<div><b>ADRENALINE</b> ${adr}${player && player.windedTimer > 0 ? ` · WINDED ${player.windedTimer.toFixed(1)}s` : ''}</div>` +
       `<div><b>SIREN</b> ${shState} · ${shDist} · ANGER ${shAnger}</div>` +
       `<div><b>AMBUSH</b> FAST:${foTxt} · SNEAKY:${snTxt}</div>` +
-      `<div><b>WORLD</b> EV ${H.getEvidenceCount()}/5 · FENCES BROKEN ${brokenFences} · SMASHED ${smashedBldgs}</div>`;
+      `<div><b>WORLD</b> EV ${H.getEvidenceCount()}/5 · FENCES BROKEN ${brokenFences} · SMASHED ${smashedBldgs} · HAZ ${hazCnt}</div>` +
+      `<div><b>PERF</b> CALLS ${dc} · TRIS ${tris}</div>`;
   }
 
   admin.update = function (dt) {

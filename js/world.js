@@ -262,6 +262,32 @@
     }
     W.box = box;
 
+    // Helper to merge homogeneous static BufferGeometries into a single draw call
+    function batchGeos(geos) {
+      let n = 0;
+      for (let i = 0; i < geos.length; i++) n += geos[i].attributes.position.count;
+      if (!n) return new THREE.BufferGeometry();
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+      let o = 0;
+      for (let i = 0; i < geos.length; i++) {
+        const raw = geos[i];
+        const g = raw.index ? raw.toNonIndexed() : raw;
+        const cnt = g.attributes.position.count;
+        pos.set(g.attributes.position.array, o * 3);
+        if (g.attributes.normal) nor.set(g.attributes.normal.array, o * 3);
+        if (g.attributes.uv) uv.set(g.attributes.uv.array, o * 2);
+        o += cnt;
+        raw.dispose();
+        if (g !== raw) g.dispose();
+      }
+      const out = new THREE.BufferGeometry();
+      out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      out.computeBoundingSphere();
+      return out;
+    }
+
     // =========================================================
     //  GROUND, STREETS, SKY
     // =========================================================
@@ -276,35 +302,48 @@
     roadEWMat.map = M.road.map.clone();
     roadEWMat.map.rotation = Math.PI / 2;
     roadEWMat.map.needsUpdate = true;
-    STREETS.forEach((s, i) => {
+    const nsGeos = [], ewGeos = [], interGeos = [], swGeos = [];
+    const _tM = new THREE.Matrix4(), _tQ = new THREE.Quaternion(), _tE = new THREE.Euler(), _tP = new THREE.Vector3(), _tS = new THREE.Vector3(1, 1, 1);
+    const bakePlane = (geo, x, y, z) => {
+      const ni = geo.index ? geo.toNonIndexed() : geo;
+      if (ni !== geo) geo.dispose();
+      _tQ.setFromEuler(_tE.set(-Math.PI / 2, 0, 0));
+      ni.applyMatrix4(_tM.compose(_tP.set(x, y, z), _tQ, _tS));
+      return ni;
+    };
+    STREETS.forEach(s => {
       // N-S street
       let g = new THREE.PlaneGeometry(ST, streetLen);
       g.attributes.uv.array.forEach((v, k, a) => { a[k] = k % 2 ? v * streetLen / ST : v; });
-      let m = new THREE.Mesh(g, M.road); m.rotation.x = -Math.PI / 2; m.position.set(s, 0.02, 0);
-      add(m, { cast: false });
+      nsGeos.push(bakePlane(g, s, 0.02, 0));
       // E-W street (shared rotated texture & material)
       g = new THREE.PlaneGeometry(streetLen, ST);
       g.attributes.uv.array.forEach((v, k, a) => { a[k] = k % 2 ? v : v * streetLen / ST; });
-      m = new THREE.Mesh(g, roadEWMat); m.rotation.x = -Math.PI / 2; m.position.set(0, 0.025, s);
-      add(m, { cast: false });
+      ewGeos.push(bakePlane(g, 0, 0.025, s));
     });
     // intersections: plain asphalt patches to hide line overlap
     STREETS.forEach(x => STREETS.forEach(z => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(ST, ST), M.asphalt);
-      m.rotation.x = -Math.PI / 2; m.position.set(x, 0.03, z); add(m, { cast: false });
+      interGeos.push(bakePlane(new THREE.PlaneGeometry(ST, ST), x, 0.03, z));
     }));
     // road out of town to the south (opening drive)
     {
       const len = 520;
       const g = new THREE.PlaneGeometry(ST - 2, len);
       g.attributes.uv.array.forEach((v, k, a) => { a[k] = k % 2 ? v * len / ST : v; });
-      const m = new THREE.Mesh(g, M.road); m.rotation.x = -Math.PI / 2;
-      m.position.set(0, 0.02, -HALF - len / 2 + 1); add(m, { cast: false });
+      nsGeos.push(bakePlane(g, 0, 0.02, -HALF - len / 2 + 1));
     }
-    // sidewalks (block slabs)
+    // sidewalks (block slabs merged into 1 draw call)
     BLOCK_C.forEach(bx => BLOCK_C.forEach(bz => {
-      boxAt(bx - BLOCK / 2, bx + BLOCK / 2, 0, 0.12, bz - BLOCK / 2, bz + BLOCK / 2, M.sidewalk, { collide: false, tile: 4, cast: false });
+      const g = worldUV(new THREE.BoxGeometry(BLOCK, 0.12, BLOCK), BLOCK, 0.12, BLOCK, 4);
+      const ni = g.index ? g.toNonIndexed() : g;
+      if (ni !== g) g.dispose();
+      ni.translate(bx, 0.06, bz);
+      swGeos.push(ni);
     }));
+    add(new THREE.Mesh(batchGeos(nsGeos), M.road), { cast: false });
+    add(new THREE.Mesh(batchGeos(ewGeos), roadEWMat), { cast: false });
+    add(new THREE.Mesh(batchGeos(interGeos), M.asphalt), { cast: false });
+    add(new THREE.Mesh(batchGeos(swGeos), M.sidewalk), { cast: false });
 
     // sky dome
     {
@@ -913,7 +952,7 @@
       {
         id: 'shop_1f_corner', kind: 'shop', floors: 1, roofAccess: false, L: 15, D: 14, H: 4.9, awning: true,
         build(ctx) {
-          const { hl, hd, t, addCrossWall, placeFurn, placeLocker, placeCrates, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const { hl, hd, t, addCrossWall, placeFurn, placeLocker, placeCrates, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addMapWall, addBarricade, R } = ctx;
           const pb = -2.4;
           const backDoorA = 3.2;
           addCrossWall(pb, -hl + t, hl - t, 0, 3.5, backDoorA, 1.6);
@@ -935,6 +974,9 @@
           placePainting(hl - t - 0.03, -4.5, -1, 0, 0.14);
           placeLamp(0, -4.6, 3.5);
           addSafeWall(-3.2, pb + 0.12, 0, 1, 0.14);
+          addMapWall(4.2, -hd + t + 0.04, 0, 1, 0.14, 'current');
+          addMapWall(-2.75, -hd + t + 0.04, 0, 1, 0.14, 'locker');
+          addMapWall(hl - t - 0.04, 5.45, -1, 0, 0.14, 'shelf');
           if (R() < 0.25 && !ctx.sheriff) {
             addBarricade(backDoorA, pb, 0.14, 0, 1, 1.6);
           } else {
@@ -1036,7 +1078,7 @@
       {
         id: 'shop_2f_apartment', kind: 'shop', floors: 2, roofAccess: false, L: 15, D: 14, H: 8.5, awning: true,
         build(ctx) {
-          const { hl, hd, t, floor2Y, ceil1, ceil2, addStair1to2, addF2SlabsAndRails, addCrossWall, placeFurn, placeLocker, placeCoffeeTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const { hl, hd, t, floor2Y, ceil1, ceil2, addStair1to2, addF2SlabsAndRails, addCrossWall, placeFurn, placeLocker, placeCoffeeTable, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addMapWall, addBarricade, R } = ctx;
           const stA0 = -hl + t + 0.04, stA1 = -hl + t + 1.99;
           addStair1to2(stA0, stA1, 3.55, -1.55, -1);
           addF2SlabsAndRails(stA0, stA1, 3.55, -1.55, -1);
@@ -1054,6 +1096,9 @@
           placeLocker(-3.8, -hd + t + 0.38, 0, 1, 0.14);
           placeLamp(1.5, -4.4, ceil1);
           addSafeWall(hl - t - 0.04, -4.4, -1, 0, 0.14);
+          addMapWall(hl - t - 0.04, -4.4, -1, 0, 0.14, 'current');
+          addMapWall(-5.45, -hd + t + 0.04, 0, 1, 0.14, 'locker');
+          addMapWall(0.45, -hd + t + 0.04, 0, 1, 0.14, 'shelf');
           addSafeDesk(2.2, -hd + t + 0.9, 0, 1, 0.14);
           // Floor 2 Apartment loft
           const pb2 = -0.2;
@@ -1173,7 +1218,7 @@
       {
         id: 'rooftop_shop_loft', kind: 'shop', floors: 1, roofAccess: true, L: 14, D: 14, H: 3.75, awning: true,
         build(ctx) {
-          const { hl, hd, t, ceil1, roofY, addF1RoofStairsAndDeck, addCrossWall, placeFurn, placeLocker, placeCrates, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addBarricade, R } = ctx;
+          const { hl, hd, t, ceil1, roofY, addF1RoofStairsAndDeck, addCrossWall, placeFurn, placeLocker, placeCrates, placeRug, placePainting, placeLamp, placeBattery, addSafeWall, addSafeDesk, addMapWall, addBarricade, R } = ctx;
           const rStA0 = -hl + t + 0.04, rStA1 = -hl + t + 1.99;
           // Stair climbs front -> back (+3.2 -> -2.2) along West wall straight to Rooftop
           addF1RoofStairsAndDeck(rStA0, rStA1, 3.2, -2.2, -1);
@@ -1192,6 +1237,9 @@
           placeCrates(4.6, -4.8, 0.14);
           placeLamp(1.5, -4.6, ceil1);
           addSafeWall(hl - t - 0.04, -4.4, -1, 0, 0.14);
+          addMapWall(hl - t - 0.04, -4.4, -1, 0, 0.14, 'current');
+          addMapWall(-5.40, -hd + t + 0.04, 0, 1, 0.14, 'locker');
+          addMapWall(0.45, -hd + t + 0.04, 0, 1, 0.14, 'shelf');
           addSafeDesk(1.2, -hd + t + 0.9, 0, 1, 0.14);
           // Rooftop deck: Wooden water tank on steel stilts + crates + locker
           ctx.addRoofWaterTank(2.6, 2.2);
@@ -1367,7 +1415,7 @@
         group: new THREE.Group(), deco: new Map(), colliders: [], occluders: [], hideSpots: [], walkSurfaces: [],
         interior: null, debrisGroup: null, debrisColliders: [], debrisOccluders: [],
         smashed: false, hasEvidence: !!(opts && opts.sheriff),
-        safeWallSpots: [], safeDeskSpots: [],
+        safeWallSpots: [], safeDeskSpots: [], mapWallSpots: [],
       };
       W.root.add(b.group);
       W.buildings.push(b);
@@ -1705,6 +1753,9 @@
           },
           addSafeDesk(a, bPos, da, db, baseY) {
             b.safeDeskSpots.push({ p: F.point(a, bPos), yaw: yawFaceDir(da, db), y: baseY });
+          },
+          addMapWall(a, bPos, da, db, baseY, tag) {
+            b.mapWallSpots.push({ p: F.point(a, bPos), yaw: yawFaceDir(da, db), y: baseY, tag: tag || 'spot' });
           },
           addBarricade(a, bPos, baseY, da, db, spanW) {
             hasBarricade = true;
@@ -3139,6 +3190,41 @@
     }
 
     // forest outside town (remodeled multi-tier pine InstancedMesh: 2 draw calls total, visible in cutscene & in-game)
+    W.treeColliders = [];
+    const TREE_CELL = 16;
+    const _treeGrid = new Map();
+    const recordTreeTrunk = (x, z, r) => {
+      const item = { x, z, r, r2: r * r };
+      W.treeColliders.push(item);
+      const gx = Math.floor(x / TREE_CELL), gz = Math.floor(z / TREE_CELL);
+      const key = ((gx + 256) << 12) | (gz + 256);
+      let b = _treeGrid.get(key);
+      if (!b) { b = []; _treeGrid.set(key, b); }
+      b.push(item);
+    };
+    W.segmentHitsTree = function (ax, az, bx, bz) {
+      const minX = Math.min(ax, bx) - 1, maxX = Math.max(ax, bx) + 1;
+      const minZ = Math.min(az, bz) - 1, maxZ = Math.max(az, bz) + 1;
+      const gx0 = Math.floor(minX / TREE_CELL), gx1 = Math.floor(maxX / TREE_CELL);
+      const gz0 = Math.floor(minZ / TREE_CELL), gz1 = Math.floor(maxZ / TREE_CELL);
+      const abx = bx - ax, abz = bz - az;
+      const len2 = abx * abx + abz * abz;
+      if (len2 < 1e-6) return false;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          const bucket = _treeGrid.get(((gx + 256) << 12) | (gz + 256));
+          if (!bucket) continue;
+          for (let i = 0; i < bucket.length; i++) {
+            const tr = bucket[i];
+            let t = ((tr.x - ax) * abx + (tr.z - az) * abz) / len2;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            const dx = ax + abx * t - tr.x, dz = az + abz * t - tr.z;
+            if (dx * dx + dz * dz <= tr.r2) return true;
+          }
+        }
+      }
+      return false;
+    };
     {
       const n = S.quality === 'low' ? 540 : S.viewDistance === 'near' ? 820 : 1320;
       const trunk = new THREE.InstancedMesh(pineTrunkGeo, M.pineBark, n);
@@ -3161,6 +3247,7 @@
         m4.compose(p.set(hx, 0, hz), q, sc.set(hs, hs * 1.05, hs));
         trunk.setMatrixAt(i, m4);
         top.setMatrixAt(i, m4);
+        recordTreeTrunk(hx, hz, 0.42 * hs);
         treelinePerches.push({ x: hx, y: 9.65 * hs * 1.05, z: hz });
       }
       // Populate navigable pines inside the playable Woodland Perimeter Ring first so cover is evenly distributed
@@ -3179,6 +3266,7 @@
         trunk.setMatrixAt(i, m4);
         top.setMatrixAt(i, m4);
         collider(x - 0.36 * s, x + 0.36 * s, z - 0.36 * s, z + 0.36 * s, 7);
+        recordTreeTrunk(x, z, 0.42 * s);
         reserveBox(x - 1.1, x + 1.1, z - 1.1, z + 1.1, 'tree');
         if (ringPerches.length < 28) ringPerches.push({ x, y: 9.65 * hs, z });
         ringPlaced++;
@@ -3200,6 +3288,7 @@
         m4.compose(p.set(x, 0, z), q, sc.set(s, hs, s));
         trunk.setMatrixAt(i, m4);
         top.setMatrixAt(i, m4);
+        if (nearBelt) recordTreeTrunk(x, z, 0.42 * s);
         if (treelinePerches.length < 28 && Math.abs(x) < OUTER_E + 42 && Math.abs(z) < OUTER_E + 42) {
           treelinePerches.push({ x, y: 9.65 * hs, z });
         }
@@ -3208,13 +3297,17 @@
       trunk.instanceMatrix.needsUpdate = true;
       top.instanceMatrix.needsUpdate = true;
       W.root.add(trunk, top);
-      W.baseOccluders.push(trunk); // pine trunks naturally occlude Moths / LOS checks
     }
-    // distant hills silhouette (low-poly 4-sided cones)
-    for (let i = 0; i < 14; i++) {
-      const a = i / 14 * Math.PI * 2;
-      const h = new THREE.Mesh(new THREE.ConeGeometry(R(120, 220), R(40, 90), 4), M.leaves);
-      h.position.set(Math.cos(a) * 640, 0, Math.sin(a) * 640); W.root.add(h);
+    // distant hills silhouette (low-poly 4-sided cones batched into 1 mesh)
+    {
+      const hillGeos = [];
+      for (let i = 0; i < 14; i++) {
+        const a = i / 14 * Math.PI * 2;
+        const cg = new THREE.ConeGeometry(R(120, 220), R(40, 90), 4).toNonIndexed();
+        cg.translate(Math.cos(a) * 640, 0, Math.sin(a) * 640);
+        hillGeos.push(cg);
+      }
+      W.root.add(new THREE.Mesh(batchGeos(hillGeos), M.leaves));
     }
 
     // subtle 3D forest birds (flock clusters perching on perimeter fences / pine crowns & circling treeline sky)
@@ -3375,12 +3468,18 @@
       return out;
     };
     W.isIndoor = function (p) {
-      return W.interiors.some(r =>
-        !r.disabled && p.x > r.minX && p.x < r.maxX && p.z > r.minZ && p.z < r.maxZ &&
-        (r.roofY === undefined || (p.y || 0) < r.roofY - 0.15)
-      );
+      if (Math.abs(p.x) > HALF + 2 && !(p.x > 130 && p.x < 146 && p.z > 23 && p.z < 31)) return false;
+      const py = p.y || 0;
+      for (let i = 0; i < W.interiors.length; i++) {
+        const r = W.interiors[i];
+        if (!r.disabled && p.x > r.minX && p.x < r.maxX && p.z > r.minZ && p.z < r.maxZ && (r.roofY === undefined || py < r.roofY - 0.15)) {
+          return true;
+        }
+      }
+      return false;
     };
     W.floorHeightAt = function (x, z, curY) {
+      if (Math.abs(x) > HALF + 2 && !(x > 130 && x < 146 && z > 23 && z < 31)) return 0;
       const maxStep = (curY || 0) + 0.72;
       let best = 0;
       for (let i = 0; i < W.walkSurfaces.length; i++) {
@@ -3403,14 +3502,61 @@
     // =========================================================
     //  BUILDING SMASHING & EVIDENCE PATH QUERIES
     // =========================================================
+    const OCC_CELL = 24;
+    const _occGrid = new Map();
+    const _occBBox = new THREE.Box3();
+    let _occQSeq = 0;
+    const _occQOut = [];
     W.syncOccluders = function () {
       W.occluders.length = 0;
-      for (let i = 0; i < W.baseOccluders.length; i++) W.occluders.push(W.baseOccluders[i]);
+      _occGrid.clear();
+      W.root.updateMatrixWorld(true);
+      const pushOcc = (mesh) => {
+        if (!mesh || !mesh.visible) return;
+        W.occluders.push(mesh);
+        if (!mesh.userData) mesh.userData = {};
+        if (!mesh.userData._occBox) {
+          mesh.userData._occBox = new THREE.Box3().setFromObject(mesh);
+        }
+        const b = mesh.userData._occBox;
+        if (b.isEmpty()) return;
+        const gx0 = Math.floor(b.min.x / OCC_CELL), gx1 = Math.floor(b.max.x / OCC_CELL);
+        const gz0 = Math.floor(b.min.z / OCC_CELL), gz1 = Math.floor(b.max.z / OCC_CELL);
+        for (let gx = gx0; gx <= gx1; gx++) {
+          for (let gz = gz0; gz <= gz1; gz++) {
+            const key = ((gx + 256) << 12) | (gz + 256);
+            let bucket = _occGrid.get(key);
+            if (!bucket) { bucket = []; _occGrid.set(key, bucket); }
+            bucket.push(mesh);
+          }
+        }
+      };
+      for (let i = 0; i < W.baseOccluders.length; i++) pushOcc(W.baseOccluders[i]);
       for (let i = 0; i < W.buildings.length; i++) {
         const b = W.buildings[i];
         const list = b.smashed ? b.debrisOccluders : b.occluders;
-        for (let j = 0; j < list.length; j++) W.occluders.push(list[j]);
+        for (let j = 0; j < list.length; j++) pushOcc(list[j]);
       }
+    };
+    W.queryOccluders = function (ax, az, bx, bz) {
+      _occQOut.length = 0;
+      _occQSeq++;
+      const gx0 = Math.floor(Math.min(ax, bx) / OCC_CELL), gx1 = Math.floor(Math.max(ax, bx) / OCC_CELL);
+      const gz0 = Math.floor(Math.min(az, bz) / OCC_CELL), gz1 = Math.floor(Math.max(az, bz) / OCC_CELL);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          const bucket = _occGrid.get(((gx + 256) << 12) | (gz + 256));
+          if (!bucket) continue;
+          for (let i = 0; i < bucket.length; i++) {
+            const m = bucket[i];
+            if (m._occQSeq !== _occQSeq) {
+              m._occQSeq = _occQSeq;
+              _occQOut.push(m);
+            }
+          }
+        }
+      }
+      return _occQOut;
     };
 
     W.segmentHitsBox = function (ax, az, bx, bz, x0, x1, z0, z1, pad) {
@@ -3550,17 +3696,16 @@
       }
       W.syncOccluders();
 
-      // erupting flying debris parts pushed in Siren Head's travel direction
+      // erupting flying debris parts pushed in Siren Head's travel direction (reusing pooled meshes)
       const ox = impactPos ? impactPos.x : b.cx, oz = impactPos ? impactPos.z : b.cz;
       const dx = dir ? dir.x : 0, dz = dir ? dir.z : 1;
       const mats = [M.brick, M.rubble, M.wood, M.trim];
       for (let i = 0; i < 20; i++) {
         const sx = 0.28 + Math.random() * 0.65, sy = 0.18 + Math.random() * 0.4, sz = 0.28 + Math.random() * 0.9;
-        const m = new THREE.Mesh(_debrisGeo, mats[i % mats.length]);
+        const m = acquireDebrisMesh(_debrisGeo, mats[i % mats.length]);
         m.scale.set(sx, sy, sz);
         m.position.set(ox + (Math.random() - 0.5) * 5, 1.5 + Math.random() * Math.min(7, b.H * 0.6), oz + (Math.random() - 0.5) * 5);
         m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-        W.debrisGroup.add(m);
         const fwdSp = 5 + Math.random() * 14, sideSp = (Math.random() - 0.5) * 14;
         W.flyingDebris.push({
           mesh: m, halfY: sy * 0.5,
@@ -3578,6 +3723,28 @@
     };
 
     const _plankGeo = new THREE.BoxGeometry(1, 1, 1);
+    const _debrisPool = [];
+    function acquireDebrisMesh(geo, material, castRecv) {
+      let m = null;
+      if (_debrisPool.length) {
+        m = _debrisPool.pop();
+        m.geometry = geo;
+        m.material = material;
+        m.visible = true;
+      } else {
+        m = new THREE.Mesh(geo, material);
+        W.debrisGroup.add(m);
+      }
+      if (shadows && castRecv) { m.castShadow = true; m.receiveShadow = true; }
+      else { m.castShadow = false; m.receiveShadow = false; }
+      return m;
+    }
+    function releaseDebrisMesh(m) {
+      m.visible = false;
+      if (_debrisPool.length < 96) _debrisPool.push(m);
+      else W.debrisGroup.remove(m);
+    }
+
     W.smashFence = function (f, impactPos, dir) {
       if (f && f.broken) return false;
       const pos = f ? f.pos : impactPos;
@@ -3633,12 +3800,12 @@
         W.fenceDebrisGroup.add(m);
       }
 
-      // dynamic airborne boards that bounce and stay settled on the ground permanently
+      // dynamic airborne boards that bounce and stay settled on the ground permanently (pooled)
       for (let i = 0; i < 18; i++) {
         const pw = 0.14 + Math.random() * 0.10;
         const ph = 0.045;
         const pl = 0.65 + Math.random() * 1.15;
-        const m = new THREE.Mesh(_plankGeo, M.wood);
+        const m = acquireDebrisMesh(_plankGeo, M.wood, true);
         m.scale.set(pw, ph, pl);
         m.position.set(
           pos.x + (Math.random() - 0.5) * 3.8,
@@ -3646,8 +3813,6 @@
           pos.z + (Math.random() - 0.5) * 3.8
         );
         m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-        if (shadows) { m.castShadow = true; m.receiveShadow = true; }
-        W.debrisGroup.add(m);
         const fwdSp = 4 + Math.random() * 11, sideSp = (Math.random() - 0.5) * 10;
         W.flyingDebris.push({
           mesh: m,
@@ -3682,7 +3847,7 @@
       W.fenceDebrisGroup.clear();
       for (let i = W.flyingDebris.length - 1; i >= 0; i--) {
         if (W.flyingDebris[i].isFence) {
-          W.debrisGroup.remove(W.flyingDebris[i].mesh);
+          releaseDebrisMesh(W.flyingDebris[i].mesh);
           W.flyingDebris.splice(i, 1);
         }
       }
@@ -3734,12 +3899,42 @@
       D.pts.geometry.attributes.position.needsUpdate = true;
     };
 
+    W.scatterBirdsAt = function (pos, radius, time) {
+      if (!W.birdClusters || !pos) return 0;
+      const rad = radius || 30, r2 = rad * rad;
+      const t = time || 0;
+      let count = 0;
+      for (let ci = 0; ci < W.birdClusters.length; ci++) {
+        const cl = W.birdClusters[ci];
+        const dx = cl.x - pos.x, dz = cl.z - pos.z;
+        if (dx * dx + dz * dz <= r2) {
+          cl.scared = true;
+          if (cl.cooldown <= t && LO.audio && LO.audio.birdScatter) {
+            cl.cooldown = t + 8.0;
+            LO.audio.birdScatter({ x: cl.x, y: cl.y + 4, z: cl.z });
+          }
+          count++;
+        }
+      }
+      if (W.birds) {
+        for (let i = 0; i < W.birds.length; i++) {
+          const b = W.birds[i];
+          if (b.mode === 'fly') b.scareBoost = 1;
+          else if (b.cluster && b.cluster.scared && b.state === 'perched') {
+            b.state = 'flee'; b.fleeT = 0; b.calmTimer = 10 + (i % 5) * 1.4;
+          }
+        }
+      }
+      return count;
+    };
+
     W.updateBirds = function (dt, time, opts) {
       if (!W.birdsGroup) return;
       opts = opts || {};
       const enabled = opts.enabled !== false;
       if (W.birdsGroup.visible !== enabled) W.birdsGroup.visible = enabled;
       if (!enabled || !W.birds || !W.birds.length) return;
+      if (LO.admin && LO.admin.dbgFreezeBirds) return;
       const pPos = opts.pos || null;
       const disturbed = !!opts.disturbed;
       const still = !!opts.still;
@@ -3892,7 +4087,8 @@
 
     W.update = function (dt, time, birdCtx) {
       W.updateBirds(dt, time, birdCtx);
-      W.flickers.forEach(f => {
+      for (let i = 0; i < W.flickers.length; i++) {
+        const f = W.flickers[i];
         f.t -= dt;
         if (f.mode === 'flicker') {
           if (f.t <= 0) { f.on = !f.on; f.t = f.on ? R(0.05, 1.8) : R(0.03, 0.4); }
@@ -3905,18 +4101,19 @@
         } else {
           f.light.intensity = f.base;
         }
-      });
-      W.pickups.forEach(p => {
-        if (p.taken || p.type === 'rock') return;
+      }
+      for (let i = 0; i < W.pickups.length; i++) {
+        const p = W.pickups[i];
+        if (p.taken || p.type === 'rock') continue;
         p.mesh.position.y = p.baseY + Math.sin(time * 2 + p.pos.x) * 0.06;
         p.mesh.rotation.y += dt;
-      });
+      }
       for (let i = W.flyingDebris.length - 1; i >= 0; i--) {
         const d = W.flyingDebris[i];
         if (!d.persistent) {
           d.life -= dt;
           if (d.life <= 0) {
-            W.debrisGroup.remove(d.mesh);
+            releaseDebrisMesh(d.mesh);
             W.flyingDebris.splice(i, 1);
             continue;
           }
@@ -4068,7 +4265,10 @@
         wm.mesh.visible = false;
         return null;
       }
-      const hasGroundWall = b => b && b.building && b.building.safeWallSpots && b.building.safeWallSpots.some(s => (s.y === undefined || s.y <= 0.25));
+      const hasGroundWall = b => b && b.building && (
+        (b.building.mapWallSpots && b.building.mapWallSpots.length > 0) ||
+        (b.building.safeWallSpots && b.building.safeWallSpots.some(s => (s.y === undefined || s.y <= 0.25)))
+      );
       let candidates = [];
       if (preferEnterable && hasGroundWall(preferEnterable)) {
         candidates = [preferEnterable];
@@ -4083,13 +4283,18 @@
         return null;
       }
       const chosen = candidates[(Math.random() * candidates.length) | 0];
+      const useThreeSpots = !LO.ver || LO.ver().mapThreeSpots;
+      const mapSpots = (useThreeSpots && chosen.building.mapWallSpots && chosen.building.mapWallSpots.length)
+        ? chosen.building.mapWallSpots : null;
       const groundSpots = chosen.building.safeWallSpots.filter(s => s.y === undefined || s.y <= 0.25);
-      const spot = groundSpots[(Math.random() * groundSpots.length) | 0] || chosen.building.safeWallSpots[0];
+      const pool = mapSpots || groundSpots;
+      const spot = pool[(Math.random() * pool.length) | 0] || chosen.building.safeWallSpots[0];
       const baseY = spot.y !== undefined ? spot.y : 0.14;
       const nx = Math.sin(spot.yaw), nz = Math.cos(spot.yaw);
       wm.pos.set(spot.p.x + nx * 0.035, baseY + 1.54, spot.p.z + nz * 0.035);
       wm.yaw = spot.yaw;
       wm.baseY = baseY;
+      wm.slotTag = spot.tag || 'wall';
       wm.taken = false;
       wm.disabled = false;
       wm.building = chosen.building;
@@ -4109,7 +4314,7 @@
       W.buildings.forEach(b => {
         if (b.smashed && b.restore) b.restore();
         b.hasEvidence = b.sheriff;
-        b.hasMap = false;
+        b.hasMap = !!(W.wallMap && !W.wallMap.taken && W.wallMap.building === b);
       });
       W.repairFences();
       const r = Math.random, pk = a => a[(r() * a.length) | 0];

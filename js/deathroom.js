@@ -51,6 +51,24 @@
       'If safety is far away, adrenaline lets you sprint twice as fast',
       'Reach the blue-lit locker or dumpster within 6 seconds',
     ] },
+    powerline: { name: 'DOWNED POWER LINE', label: 'HAZARD — VOLTAGE', tips: [
+      'Snapped high-voltage cable resting in a street puddle',
+      'Cycles on and off with an amber warning spark beforehand',
+      'Stepping in the energized puddle causes severe electrocution',
+      'Wait for the arcs to stop before crossing the street',
+    ] },
+    beartrap: { name: 'BEAR TRAP', label: 'HAZARD — SNARE', tips: [
+      'Rusted steel animal snare hidden along woodland trails',
+      'Snaps shut if stepped on, crippling movement speed briefly',
+      'Look closely at the forest dirt with your flashlight',
+      'Throw a rock into a trap to spring it safely from afar',
+    ] },
+    steam: { name: 'STEAM LEAK', label: 'HAZARD — PRESSURE', tips: [
+      'Ruptured alley steam pipe venting scalding pressure',
+      'Whistles briefly with a thin vapor plume before blasting',
+      'Standing inside the scalding jet burns you quickly',
+      'Listen for the warning hiss and wait out the burst',
+    ] },
   };
   LO.DEATH_ENTRIES = ENTRIES;
 
@@ -285,6 +303,48 @@
       g.font = `23px ${HAND}`; g.fillText('hide!', w * 0.61, h * 0.22);
       g.fillStyle = '#333'; g.fillText('broken fence...', w * 0.07, h * 0.24);
       g.fillStyle = '#9e1c16'; g.fillText('adrenaline x2', w * 0.50, h * 0.91);
+      g.restore();
+    },
+    powerline(g, w, h) {
+      // utility pole stub, sagging live wire into jagged puddle + bolt warning
+      pencil(g, [[w * 0.18, h * 0.16], [w * 0.22, h * 0.68]], 3, 2);
+      pencil(g, [[w * 0.12, h * 0.22], [w * 0.28, h * 0.22]], 3, 2);
+      pencil(g, [[w * 0.26, h * 0.22], [w * 0.42, h * 0.56], [w * 0.62, h * 0.72]], 3, 3);
+      ellipse(g, w * 0.64, h * 0.74, 110, 42, 3);
+      hatch(g, w * 0.44, h * 0.68, w * 0.84, h * 0.80, 40, 0.2);
+      g.save();
+      g.strokeStyle = '#b45a15'; g.lineWidth = 3;
+      pencil(g, [[w * 0.56, h * 0.34], [w * 0.48, h * 0.50], [w * 0.60, h * 0.50], [w * 0.52, h * 0.66]], 2, 2);
+      g.fillStyle = '#9e1c16'; g.font = `28px ${HAND}`; g.fillText('wait for idle!', w * 0.48, h * 0.24);
+      g.restore();
+    },
+    beartrap(g, w, h) {
+      // open circular jaw plate + teeth + thrown rock arrow
+      ellipse(g, w * 0.5, h * 0.58, 120, 68, 3);
+      ellipse(g, w * 0.5, h * 0.58, 52, 28, 2);
+      for (let i = -3; i <= 3; i++) {
+        const tx = w * 0.5 + i * 28;
+        pencil(g, [[tx - 8, h * 0.50], [tx, h * 0.56], [tx + 8, h * 0.50]], 2, 1.5);
+        pencil(g, [[tx - 8, h * 0.66], [tx, h * 0.60], [tx + 8, h * 0.66]], 2, 1.5);
+      }
+      g.save();
+      g.strokeStyle = '#1f5b99'; g.lineWidth = 3;
+      pencil(g, [[w * 0.16, h * 0.24], [w * 0.34, h * 0.38], [w * 0.46, h * 0.52]], 2, 2);
+      ellipse(g, w * 0.14, h * 0.22, 16, 12, 2);
+      g.fillStyle = '#1f5b99'; g.font = `27px ${HAND}`; g.fillText('throw rock!', w * 0.18, h * 0.16);
+      g.restore();
+    },
+    steam(g, w, h) {
+      // pipe + valve wheel + expanding vapor cloud
+      pencil(g, [[w * 0.22, h * 0.22], [w * 0.22, h * 0.78]], 3, 2);
+      pencil(g, [[w * 0.22, h * 0.46], [w * 0.36, h * 0.46]], 3, 2);
+      ellipse(g, w * 0.22, h * 0.38, 22, 22, 2);
+      for (let i = 0; i < 4; i++) {
+        pencil(g, [[w * 0.38, h * 0.46], [w * (0.58 + i * 0.06), h * (0.30 + i * 0.08)]], 2, 2.5);
+      }
+      ellipse(g, w * 0.72, h * 0.44, 72, 48, 2);
+      g.save();
+      g.fillStyle = '#9e1c16'; g.font = `26px ${HAND}`; g.fillText('hiss = RUN', w * 0.44, h * 0.22);
       g.restore();
     },
   };
@@ -572,6 +632,71 @@
       g.restore();
       caption(g, W, H, T < 3.45 ? 'RUN FOR THE BLUE LOCKER!' : T < 5.35 ? 'WAIT OUT THE SLAM...' : 'IT BREAKS BACK OUT');
     },
+    powerline(g, W, H, T) {
+      // wet street + pole + wire + person waiting out live cycle before crossing
+      g.fillStyle = '#1d2126'; g.fillRect(0, H * 0.72, W, H);
+      g.fillStyle = '#3c3125'; g.fillRect(W * 0.58, H * 0.34, 8, H * 0.38);
+      g.strokeStyle = '#111'; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(W * 0.58, H * 0.38); g.quadraticCurveTo(W * 0.50, H * 0.62, W * 0.46, H * 0.73); g.stroke();
+      const live = T < 3.6;
+      const warn = T >= 6.4;
+      g.fillStyle = live ? 'rgba(90,210,255,0.42)' : 'rgba(20,30,40,0.75)';
+      g.beginPath(); g.ellipse(W * 0.46, H * 0.74, 38, 11, 0, 0, 7); g.fill();
+      if (live || (warn && Math.sin(T * 30) > 0)) {
+        g.strokeStyle = live ? '#80ecff' : '#ffc966'; g.lineWidth = 2;
+        for (let i = 0; i < 4; i++) {
+          const x = W * 0.46 + (Math.random() - 0.5) * 44;
+          g.beginPath(); g.moveTo(x, H * 0.73); g.lineTo(x + (Math.random() - 0.5) * 18, H * 0.55); g.stroke();
+        }
+      }
+      const px = T < 3.8 ? W * 0.24 : W * 0.24 + ((T - 3.8) / 3.0) * (W * 0.48);
+      fig(g, Math.min(W * 0.78, px), H * 0.72, 1);
+      caption(g, W, H, live ? 'LIVE VOLTAGE — WAIT' : 'CLEAR — CROSS QUICKLY');
+    },
+    beartrap(g, W, H, T) {
+      // forest trail + bear trap + thrown rock springing it safely
+      g.fillStyle = '#1f281b'; g.fillRect(0, H * 0.72, W, H);
+      const sprung = T >= 2.8;
+      g.fillStyle = '#5a4332'; g.fillRect(W * 0.58 - 16, H * 0.71, 32, 6);
+      if (!sprung) {
+        g.strokeStyle = '#9aa'; g.lineWidth = 2;
+        g.beginPath(); g.arc(W * 0.58, H * 0.71, 14, Math.PI, 0); g.stroke();
+      } else {
+        g.fillStyle = '#c8c0b0';
+        g.beginPath(); g.arc(W * 0.58 + 20, H * 0.71, 4, 0, 7); g.fill();
+        if (T < 3.4) {
+          g.strokeStyle = '#ffe082'; g.font = 'bold 12px Courier New, monospace';
+          g.fillText('SNAP!', W * 0.58 - 18, H * 0.54);
+        }
+      }
+      fig(g, T < 3.6 ? W * 0.22 : W * 0.22 + ((T - 3.6) / 3.4) * (W * 0.52), H * 0.72, 1);
+      if (T >= 1.2 && T < 2.8) {
+        const k = (T - 1.2) / 1.6;
+        const rx = W * 0.25 + k * (W * 0.33);
+        const ry = H * 0.58 - Math.sin(k * Math.PI) * 48 + k * (H * 0.13);
+        g.fillStyle = '#c8c0b0';
+        g.beginPath(); g.arc(rx, ry, 4, 0, 7); g.fill();
+      }
+      caption(g, W, H, T < 2.8 ? 'THROW ROCK AT TRAP [F]' : 'SNARE DISARMED — SAFE');
+    },
+    steam(g, W, H, T) {
+      // alley wall pipe venting scalding jet on cycle
+      g.fillStyle = '#242320'; g.fillRect(0, H * 0.72, W, H);
+      g.fillStyle = '#554436'; g.fillRect(W * 0.45, H * 0.45, 10, H * 0.27);
+      const venting = T < 3.2;
+      const warn = T >= 6.4;
+      if (venting || warn) {
+        g.fillStyle = venting ? 'rgba(220,235,245,0.58)' : 'rgba(220,235,245,0.22)';
+        g.beginPath();
+        g.moveTo(W * 0.48, H * 0.52);
+        g.lineTo(W * (venting ? 0.78 : 0.60), H * (venting ? 0.38 : 0.47));
+        g.lineTo(W * (venting ? 0.78 : 0.60), H * (venting ? 0.66 : 0.57));
+        g.closePath(); g.fill();
+      }
+      const px = T < 3.4 ? W * 0.24 : W * 0.24 + ((T - 3.4) / 3.0) * (W * 0.50);
+      fig(g, Math.min(W * 0.80, px), H * 0.72, 1);
+      caption(g, W, H, venting ? 'STEAM BLAST — HOLD BACK' : 'VALVE SHUT — PASS NOW');
+    },
   };
 
   // ============================================================
@@ -602,6 +727,7 @@
     const bezel = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.86, 0.06), new THREE.MeshLambertMaterial({ color: 0x3a3a37 }));
     bezel.position.z = 0.3; tv.add(bezel);
     this.tapeCanvas = document.createElement('canvas'); this.tapeCanvas.width = 320; this.tapeCanvas.height = 240;
+    this.staticImg = this.tapeCanvas.getContext('2d').createImageData(320, 240);
     this.tapeTex = new THREE.CanvasTexture(this.tapeCanvas);
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 0.58), new THREE.MeshBasicMaterial({ map: this.tapeTex }));
     screen.position.set(-0.08, 0.02, 0.335); tv.add(screen);
@@ -731,8 +857,9 @@
     } else if (t < TAPE || Math.random() < 0.012) {
       // switched on: a white flash that settles into static
       const flash = Math.max(0, 1 - (t - TV_ON) / 0.25);
-      const id = g.createImageData(W, H);
-      for (let i = 0; i < id.data.length; i += 4) { const v = Math.random() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 255; }
+      const id = this.staticImg || (this.staticImg = g.createImageData(W, H));
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) { const v = (Math.random() * 255) | 0; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
       g.putImageData(id, 0, 0);
       if (flash > 0) { g.fillStyle = `rgba(255,255,255,${flash})`; g.fillRect(0, 0, W, H); }
       this.glow.color.set(0xb0b8c8); this.glow.intensity = 0.9 + Math.random() * 0.6 + flash * 2;

@@ -412,6 +412,51 @@
     let sirens = [], heliSnd = null, fallStart = -1;
     ctx.cleanup.push(() => { sirens.forEach(s => s.stop()); sirens = []; if (heliSnd) heliSnd.stop(); heliSnd = null; });
 
+    function segmentHitsBox(ax, ay, az, bx, by, bz, minX, maxX, minY, maxY, minZ, maxZ) {
+      let t0 = 0, t1 = 1;
+      const dx = bx - ax, dy = by - ay, dz = bz - az;
+      const clip = (p, q) => {
+        if (Math.abs(p) < 1e-8) return q >= 0;
+        const r = q / p;
+        if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+        else       { if (r < t0) return false; if (r < t1) t1 = r; }
+        return true;
+      };
+      return clip(-dx, ax - minX) && clip(dx, maxX - ax)
+          && clip(-dy, ay - minY) && clip(dy, maxY - ay)
+          && clip(-dz, az - minZ) && clip(dz, maxZ - az)
+          && t0 <= t1;
+    }
+    function ensureClearCam(camPos, target) {
+      const blds = W.buildings;
+      if (!blds || !blds.length) return;
+      const pad = 1.6;
+      for (let pass = 0; pass < 3; pass++) {
+        let adjusted = false;
+        for (let i = 0; i < blds.length; i++) {
+          const b = blds[i];
+          const x0 = b.minX - pad, x1 = b.maxX + pad;
+          const z0 = b.minZ - pad, z1 = b.maxZ + pad;
+          const top = (b.H || 8) + 2.0;
+          const inside = camPos.x >= x0 && camPos.x <= x1 && camPos.z >= z0 && camPos.z <= z1 && camPos.y < top;
+          if (inside) {
+            // push horizontally onto the nearest open Main/Fourth street corridor if low, or lift above roofline
+            const ox = Math.abs(camPos.x) < 9 ? (camPos.x < 0 ? x1 + 0.5 : x0 - 0.5) : camPos.x;
+            const oz = Math.abs(camPos.z) < 9 ? (camPos.z < 0 ? z1 + 0.5 : z0 - 0.5) : camPos.z;
+            if (Math.abs(ox) < 5.2 && Math.abs(camPos.x) >= 5.2) camPos.x = ox;
+            else if (Math.abs(oz) < 5.2 && Math.abs(camPos.z) >= 5.2) camPos.z = oz;
+            else camPos.y = Math.max(camPos.y, top);
+            adjusted = true;
+          } else if (segmentHitsBox(camPos.x, camPos.y, camPos.z, target.x, target.y, target.z,
+            b.minX - 0.5, b.maxX + 0.5, -0.5, (b.H || 8) + 0.8, b.minZ - 0.5, b.maxZ + 0.5)) {
+            camPos.y = Math.max(camPos.y + 1.5, top);
+            adjusted = true;
+          }
+        }
+        if (!adjusted) break;
+      }
+    }
+
     const look = new V3();
     const tl = new Timeline(43, [
       { at: 0.1, fn: () => { ui.fadeIn(2.5); ui.caption('6:02 AM', 'Thirty minutes after the photos were sent'); A.playMusic('chase', 2); } },
@@ -482,26 +527,28 @@
       siren.update(dt, null, t);
       updateCables(t);
 
-      // ---- cameras ----
+      // ---- cameras (kept strictly along open street corridors / above roofs) ----
       if (t < 7) {               // high wide shot of the convoy
-        camera.position.set(lerp(-40, -25, t / 7), lerp(45, 35, t / 7), lerp(-120, -90, t / 7));
-        look.set(0, 2, lerp(-140, -40, t / 7));
-      } else if (t < 13.5) {     // low angle on the monster, police lights in front
+        camera.position.set(lerp(-30, -16, t / 7), lerp(42, 30, t / 7), lerp(-118, -86, t / 7));
+        look.set(0, 2, lerp(-140, -36, t / 7));
+      } else if (t < 13.5) {     // low hero angle down open Main St corridor, police lights flanking
         const k = (t - 7) / 6.5;
-        camera.position.set(lerp(-8, -6, k), 1.2, lerp(-30, -26, k));
-        look.set(0, lerp(8, 13, k), 0);
-      } else if (t < 22.5) {     // restraint cables firing
+        camera.position.set(lerp(-1.1, 0.7, k), lerp(1.6, 2.2, k), lerp(-14.5, -10.5, k));
+        look.set(0, lerp(7.5, 13.0, k), 0);
+      } else if (t < 22.5) {     // restraint cables firing from open West cross-street (z in [-4, 4])
         const k = (t - 13.5) / 9;
-        camera.position.set(lerp(-26, -30, k), lerp(6, 9, k), lerp(-26, -14, k));
-        look.set(0, 8, -6);
-      } else if (t < 27) {       // the fall
-        camera.position.set(18, 3, -30);
-        look.set(0, lerp(10, 1, clamp01((t - 22.5) / 3.2)), -8);
-      } else {                   // aftermath, slow crane up
+        camera.position.set(lerp(-17, -25, k), lerp(4.0, 5.8, k), lerp(-3.2, 3.6, k));
+        look.set(0, 7.8, -5.5);
+      } else if (t < 27) {       // the fall: unobstructed shot from open East cross-street (z in [-3, 4])
+        const k = clamp01((t - 22.5) / 4.5);
+        camera.position.set(lerp(17, 22, k), lerp(4.2, 5.6, k), lerp(-2.5, 3.5, k));
+        look.set(0, lerp(9.5, 1.4, clamp01((t - 22.5) / 3.2)), -6.0);
+      } else {                   // aftermath: rise quickly above roofs before sweeping over -Z
         const k = clamp01((t - 27) / 13);
-        camera.position.set(lerp(14, 22, k), lerp(4, 28, k), lerp(-34, -48, k));
-        look.set(0, 1, -8);
+        camera.position.set(lerp(22, 15, k), lerp(5.6, 29, Math.pow(k, 0.72)), lerp(3.5, -34, Math.pow(k, 1.85)));
+        look.set(0, 1.2, -7.5);
       }
+      ensureClearCam(camera.position, look);
       ctx.applyShake(look);
       camera.lookAt(look);
       camera.updateMatrixWorld();

@@ -135,6 +135,43 @@
       g.fillStyle = 'rgba(255,45,20,0.85)';
       g.beginPath(); g.ellipse(s * 0.21, -s * 0.035, s * 0.032, s * 0.018, -0.2, 0, 7); g.fill();
     },
+    powerline(g, s, k) {
+      // snapped utility cable + crackling high-voltage lightning forks
+      g.strokeStyle = 'rgba(10,0,0,0.92)'; g.lineWidth = s * 0.035; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(-s * 0.48, -s * 0.42); g.quadraticCurveTo(-s * 0.1, -s * 0.1, 0, s * 0.16); g.stroke();
+      g.strokeStyle = 'rgba(255,215,90,0.88)'; g.lineWidth = s * 0.022;
+      for (let i = 0; i < 4; i++) {
+        const dx = Math.cos(i * 1.6 + k * 25) * s * 0.28, dy = Math.sin(i * 1.9) * s * 0.22;
+        g.beginPath();
+        g.moveTo(0, s * 0.12);
+        g.lineTo(dx * 0.5 + (Math.random() - 0.5) * s * 0.08, s * 0.12 + dy * 0.5);
+        g.lineTo(dx, s * 0.12 + dy);
+        g.stroke();
+      }
+    },
+    beartrap(g, s, k) {
+      // serrated steel jaws snapping shut
+      g.fillStyle = 'rgba(10,0,0,0.93)'; g.strokeStyle = 'rgba(10,0,0,0.93)';
+      g.lineWidth = s * 0.04;
+      g.beginPath(); g.arc(0, s * 0.05, s * 0.34, Math.PI, 0); g.stroke();
+      g.beginPath(); g.arc(0, s * 0.05, s * 0.34, 0, Math.PI); g.stroke();
+      for (let i = -3; i <= 3; i++) {
+        const tx = i * s * 0.085;
+        g.beginPath(); g.moveTo(tx - s * 0.03, -s * 0.05); g.lineTo(tx, s * 0.07); g.lineTo(tx + s * 0.03, -s * 0.05); g.fill();
+        g.beginPath(); g.moveTo(tx - s * 0.03, s * 0.15); g.lineTo(tx, s * 0.03); g.lineTo(tx + s * 0.03, s * 0.15); g.fill();
+      }
+    },
+    steam(g, s, k) {
+      // ruptured pipe + scalding jet cone
+      g.fillStyle = 'rgba(10,0,0,0.92)';
+      g.fillRect(-s * 0.42, s * 0.06, s * 0.28, s * 0.12);
+      g.fillStyle = 'rgba(255,140,95,0.55)';
+      g.beginPath();
+      g.moveTo(-s * 0.14, s * 0.12);
+      g.lineTo(s * 0.48, -s * 0.26);
+      g.lineTo(s * 0.48, s * 0.36);
+      g.closePath(); g.fill();
+    },
   };
 
   const FX = {
