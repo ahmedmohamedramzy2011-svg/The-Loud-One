@@ -934,6 +934,10 @@
     steam: { title: 'SCALDED', tips: [
       'Pressurized alley pipes hiss softly before erupting with boiling steam. Hold back for 3 seconds until the vent clears.',
     ] },
+    fall: { title: 'FELL TO YOUR DEATH', tips: [
+      'Building rooftops have open edges with no guardrails. Watch your footing near the drop.',
+      'Use interior stairwells to climb down safely instead of stepping or jumping off high roofs.',
+    ] },
   };
   // death by damage (the Silent One / the Tenant)
   function clearGlitch() {

@@ -66,11 +66,11 @@ window.LO = window.LO || {};
   Hazards.prototype._clearPos = function (x, z, pad, skipBuildings) {
     const W = this.world;
     if (!W) return true;
-    const cols = W.queryColliders ? W.queryColliders(x, z, pad || 1.2) : W.colliders;
     const p = pad || 0.9;
+    const cols = W.queryColliders ? W.queryColliders(x, z, p + 0.5) : W.colliders;
     for (let i = 0; i < cols.length; i++) {
       const c = cols[i];
-      if (c.disabled || c.minY > 1.7 || c.maxY < 0.25) continue;
+      if (c.disabled || c.minY > 1.7 || c.maxY < 0.08) continue;
       if (x + p > c.minX && x - p < c.maxX && z + p > c.minZ && z - p < c.maxZ) return false;
     }
     if (!skipBuildings && W.buildings) {
@@ -79,6 +79,54 @@ window.LO = window.LO || {};
         if (b.smashed) continue;
         if (x + p > b.minX && x - p < b.maxX && z + p > b.minZ && z - p < b.maxZ) return false;
       }
+    }
+    if (W.hideSpots) {
+      for (let i = 0; i < W.hideSpots.length; i++) {
+        const hs = W.hideSpots[i];
+        if (hs.disabled || (hs.baseY || 0) > 0.5) continue;
+        if (Math.hypot(hs.pos.x - x, hs.pos.z - z) < p + 0.95) return false;
+        if (hs.interact && Math.hypot(hs.interact.x - x, hs.interact.z - z) < p + 0.7) return false;
+      }
+    }
+    for (let i = 0; i < this.list.length; i++) {
+      const h = this.list[i];
+      if (h.pos.y > 1.2) continue;
+      if (Math.hypot(h.pos.x - x, h.pos.z - z) < p + (h.radius || 1.2) * 0.7) return false;
+    }
+    return true;
+  };
+
+  Hazards.prototype._clearFloorPos = function (x, y, z, pad) {
+    const W = this.world;
+    if (!W) return true;
+    const p = pad || 0.85;
+    const cols = W.queryColliders ? W.queryColliders(x, z, p + 0.5) : W.colliders;
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
+      if (c.disabled || c.minY >= y + 1.45 || c.maxY <= y + 0.06) continue;
+      if (x + p > c.minX && x - p < c.maxX && z + p > c.minZ && z - p < c.maxZ) return false;
+    }
+    if (W.floorHeightAt) {
+      const fh = W.floorHeightAt(x, z, y + 0.35);
+      if (Math.abs(fh - y) > 0.16) return false;
+      const e = Math.min(0.65, p * 0.72);
+      if (Math.abs(W.floorHeightAt(x + e, z, y + 0.35) - y) > 0.16) return false;
+      if (Math.abs(W.floorHeightAt(x - e, z, y + 0.35) - y) > 0.16) return false;
+      if (Math.abs(W.floorHeightAt(x, z + e, y + 0.35) - y) > 0.16) return false;
+      if (Math.abs(W.floorHeightAt(x, z - e, y + 0.35) - y) > 0.16) return false;
+    }
+    if (W.hideSpots) {
+      for (let i = 0; i < W.hideSpots.length; i++) {
+        const hs = W.hideSpots[i];
+        if (hs.disabled || Math.abs((hs.baseY || 0) - y) > 0.9) continue;
+        if (Math.hypot(hs.pos.x - x, hs.pos.z - z) < p + 0.7) return false;
+        if (hs.interact && Math.hypot(hs.interact.x - x, hs.interact.z - z) < p + 0.55) return false;
+      }
+    }
+    for (let i = 0; i < this.list.length; i++) {
+      const h = this.list[i];
+      if (Math.abs(h.pos.y - y) > 0.9) continue;
+      if (Math.hypot(h.pos.x - x, h.pos.z - z) < p + 1.35) return false;
     }
     return true;
   };
@@ -373,11 +421,18 @@ window.LO = window.LO || {};
     for (let i = 0; i < ints.length && glassAdded < 8; i++) {
       const r = ints[i];
       if (!r || r.disabled) continue;
-      const gx = (r.minX + r.maxX) * 0.5 + (rand() - 0.5) * Math.max(1, (r.maxX - r.minX) * 0.32);
-      const gz = (r.minZ + r.maxZ) * 0.5 + (rand() - 0.5) * Math.max(1, (r.maxZ - r.minZ) * 0.32);
-      if (!farFromSpawn(gx, gz, 12)) continue;
-      this._addGlass(gx, 0.14, gz, rand() * 6.28);
-      glassAdded++;
+      const spanX = Math.max(0.5, (r.maxX - r.minX) - 2.8);
+      const spanZ = Math.max(0.5, (r.maxZ - r.minZ) - 2.8);
+      const cx = (r.minX + r.maxX) * 0.5, cz = (r.minZ + r.maxZ) * 0.5;
+      for (let t = 0; t < 24; t++) {
+        const gx = cx + (rand() - 0.5) * spanX;
+        const gz = cz + (rand() - 0.5) * spanZ;
+        if (!farFromSpawn(gx, gz, 12)) continue;
+        if (!this._clearFloorPos(gx, 0.14, gz, 0.95)) continue;
+        this._addGlass(gx, 0.14, gz, rand() * 6.28);
+        glassAdded++;
+        break;
+      }
     }
 
     // 5. Rotten Creaking Floorboards (upper floors + Lookout Tower deck)
@@ -388,10 +443,16 @@ window.LO = window.LO || {};
       if (!s || s.disabled || s.type === 'ramp' || s.y < 2.2) continue;
       const w = s.maxX - s.minX, d = s.maxZ - s.minZ;
       if (w < 2.4 || d < 2.4) continue;
-      const fx = (s.minX + s.maxX) * 0.5;
-      const fz = (s.minZ + s.maxZ) * 0.5;
-      this._addFloorboard(fx, s.y, fz, (fbAdded % 2) * (Math.PI / 2));
-      fbAdded++;
+      const cx = (s.minX + s.maxX) * 0.5, cz = (s.minZ + s.maxZ) * 0.5;
+      const spanX = Math.max(0, w - 2.0), spanZ = Math.max(0, d - 2.0);
+      for (let t = 0; t < 24; t++) {
+        const fx = t === 0 ? cx : cx + (rand() - 0.5) * spanX;
+        const fz = t === 0 ? cz : cz + (rand() - 0.5) * spanZ;
+        if (!this._clearFloorPos(fx, s.y, fz, 0.85)) continue;
+        this._addFloorboard(fx, s.y, fz, (fbAdded % 2) * (Math.PI / 2));
+        fbAdded++;
+        break;
+      }
     }
 
     // 6. Loose Corrugated Tin Debris (alleys / passages)
@@ -399,12 +460,15 @@ window.LO = window.LO || {};
     for (let bi = 0; bi < bc.length && tinAdded < 6; bi++) {
       for (let bj = 0; bj < bc.length && tinAdded < 6; bj++) {
         if ((bi + bj) % 2 === 0) continue;
-        const tx = bc[bi] + (rand() - 0.5) * 14;
-        const tz = bc[bj] + (bj % 2 ? -18.5 : 18.5);
-        if (!farFromSpawn(tx, tz, 18)) continue;
-        if (!this._clearPos(tx, tz, 1.3, false)) continue;
-        this._addTinDebris(tx, tz, rand() * Math.PI * 2);
-        tinAdded++;
+        for (let t = 0; t < 6; t++) {
+          const tx = bc[bi] + (rand() - 0.5) * 14;
+          const tz = bc[bj] + (bj % 2 ? -18.5 : 18.5) + (t === 0 ? 0 : (rand() - 0.5) * 2.5);
+          if (!farFromSpawn(tx, tz, 18)) continue;
+          if (!this._clearPos(tx, tz, 1.35, false)) continue;
+          this._addTinDebris(tx, tz, rand() * Math.PI * 2);
+          tinAdded++;
+          break;
+        }
       }
     }
   };

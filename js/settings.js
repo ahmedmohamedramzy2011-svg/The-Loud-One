@@ -27,11 +27,12 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.7.7',
-    autoLatest: '2.7.7',
+    gameVersion: '2.8',
+    autoLatest: '2.8',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.8',   label: 'v2.8',   era: 'Fall damage, open rooftops & clipping fixes' },
     { id: '2.7.7', label: 'v2.7.7', era: 'Bug fixes' },
     { id: '2.7.6', label: 'v2.7.6', era: '6 hazards, hazard death tapes, FPS optimization & Admin Panel' },
     { id: '2.7.5', label: 'v2.7.5', era: 'Camera strobe flash & 3 Town Map wall locations' },
@@ -122,6 +123,7 @@ window.LO = window.LO || {};
       mapThreeSpots: v >= 20705,
       hazards: v >= 20706,
       perfOpt276: v >= 20706,
+      fallDamage: v >= 20800,
     };
   }
 
@@ -136,7 +138,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === '2.7.6' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === '2.7.6' || S.gameVersion === '2.7.7' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

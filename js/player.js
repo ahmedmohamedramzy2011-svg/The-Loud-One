@@ -65,6 +65,7 @@
     this.vel.set(0, 0, 0);
     this.yaw = yaw || 0; this.pitch = 0;
     this.onGround = true;
+    this.fallPeakY = spawn.y || 0;
     this.crouch = 0;
     this.stamina = 100;
     this.exhausted = false;
@@ -260,6 +261,7 @@
       const sp = this.hidden;
       this.pos.set(sp.pos.x, sp.baseY || 0, sp.pos.z);
       this.vel.set(0, 0, 0);
+      this.fallPeakY = sp.baseY || 0;
       let d = this.yaw - (sp.yaw + Math.PI);
       while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
       d = Math.max(-0.9, Math.min(0.9, d));
@@ -344,6 +346,7 @@
         this.pos.addScaledVector(this.vel, dt);
         if (this.pos.y < 0.1) this.pos.y = 0.1;
         this.onGround = this.pos.y <= 0.11;
+        this.fallPeakY = this.pos.y;
       } else {
         const accel = this.onGround ? 12 : 3;
         this.vel.x += (mx * speed * (moving ? 1 : 0) - this.vel.x) * Math.min(1, accel * dt);
@@ -352,24 +355,38 @@
         // jump
         if (k.Space && this.onGround && (adm.infStamina || this.stamina > 12) && !wantCrouch) {
           this.vel.y = 4.6; this.onGround = false;
+          this.fallPeakY = this.pos.y;
           if (!adm.infStamina) this.stamina -= 12;
           this.spike = Math.max(this.spike, NOISE.jump);
           LO.audio.jumpGrunt();
           k.Space = false;
         }
         const prevY = this.pos.y, wasOnGround = this.onGround;
+        if (wasOnGround) this.fallPeakY = prevY;
+        else this.fallPeakY = Math.max(this.fallPeakY !== undefined ? this.fallPeakY : prevY, prevY);
         this.vel.y -= 13 * dt;
         this.pos.addScaledVector(this.vel, dt);
+        this.fallPeakY = Math.max(this.fallPeakY, this.pos.y);
         const floorY = W.floorHeightAt ? W.floorHeightAt(this.pos.x, this.pos.z, prevY) : 0;
         const stepDown = wasOnGround && this.vel.y <= 0.01 && (this.pos.y - floorY) <= 0.45 && this.pos.y >= floorY;
         if (this.pos.y <= floorY || stepDown) {
           if (!wasOnGround && this.pos.y <= floorY) {
-            const hard = this.vel.y < -4;
+            const drop = Math.max(0, this.fallPeakY - floorY);
+            const Vfd = LO.ver ? LO.ver() : { fallDamage: true };
+            const dmg = (Vfd.fallDamage && drop > 2.4 && this.vel.y < -7.5)
+              ? (drop >= 6.8 ? 100 : Math.min(95, Math.round(16 + (drop - 2.4) * 18.5)))
+              : 0;
+            const hard = dmg > 0 || this.vel.y < -4;
             LO.audio.land(hard);
-            this.spike = Math.max(this.spike, NOISE.land * (hard ? 1 : 0.6));
-            this.shake = Math.max(this.shake, 0.15);
+            this.spike = Math.max(this.spike, dmg > 0 ? Math.min(48, NOISE.land + 8) : NOISE.land * (hard ? 1 : 0.6));
+            this.shake = Math.max(this.shake, dmg > 0 ? Math.min(0.95, 0.35 + dmg * 0.008) : 0.15);
+            if (dmg > 0) {
+              this.triggerDizzy(Math.min(1.0, dmg / 80));
+              this.damage(dmg, 'fall');
+            }
           }
           this.pos.y = floorY; this.vel.y = 0; this.onGround = true;
+          this.fallPeakY = floorY;
         } else {
           this.onGround = false;
         }
@@ -534,6 +551,7 @@
       this.pos.y = 0;
     }
     this.onGround = true;
+    this.fallPeakY = this.pos.y;
   };
 
   Player.prototype.applyCamera = function (dt, time) {
@@ -835,6 +853,7 @@
         this.pos.set(sp.exit.x, sp.baseY || 0, sp.exit.z);
         this.yaw = sp.yaw + Math.PI;
         this.spike = Math.max(this.spike, NOISE.hide);
+        this.fallPeakY = this.pos.y;
       }
     }
   };

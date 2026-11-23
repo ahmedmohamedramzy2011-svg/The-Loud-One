@@ -149,6 +149,7 @@
     player.pos.set(tx, finalY, tz);
     player.vel.set(0, 0, 0);
     player.onGround = true;
+    player.fallPeakY = finalY;
     if (lookAt) {
       const dx = lookAt.x - tx, dz = lookAt.z - tz;
       player.yaw = Math.atan2(-dx, -dz);
@@ -1214,6 +1215,7 @@
         btn('Die: Power Line', 'die', 'powerline', 'danger'),
         btn('Die: Bear Trap', 'die', 'beartrap', 'danger'),
         btn('Die: Steam Leak', 'die', 'steam', 'danger'),
+        btn('Die: Fall Damage', 'die', 'fall', 'danger'),
       ]));
     }
   }

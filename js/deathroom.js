@@ -69,6 +69,12 @@
       'Standing inside the scalding jet burns you quickly',
       'Listen for the warning hiss and wait out the burst',
     ] },
+    fall: { name: 'THE DROP', label: 'HAZARD — GRAVITY', tips: [
+      'Building rooftops & fire towers sit high above the street',
+      'Unfenced roof edges drop straight to concrete below',
+      'Stepping or leaping from upper heights cripples or kills you',
+      'Turn around and take the interior stairs down safely',
+    ] },
   };
   LO.DEATH_ENTRIES = ENTRIES;
 
@@ -345,6 +351,33 @@
       ellipse(g, w * 0.72, h * 0.44, 72, 48, 2);
       g.save();
       g.fillStyle = '#9e1c16'; g.font = `26px ${HAND}`; g.fillText('hiss = RUN', w * 0.44, h * 0.22);
+      g.restore();
+    },
+    fall(g, w, h) {
+      // building rooftop edge + stairwell sign + falling figure silhouette
+      pencil(g, [[w * 0.12, h * 0.36], [w * 0.56, h * 0.36], [w * 0.56, h * 0.88]], 3, 2);
+      pencil(g, [[w * 0.14, h * 0.44], [w * 0.48, h * 0.44]], 2, 1.5);
+      hatch(g, w * 0.14, h * 0.38, w * 0.54, h * 0.86, 65, 0.8);
+      // ground concrete line
+      pencil(g, [[w * 0.56, h * 0.86], [w * 0.90, h * 0.86]], 3, 2);
+      // tumbling figure + dashed drop trajectory
+      for (let i = 0; i < 4; i++) {
+        const y0 = h * (0.40 + i * 0.09);
+        pencil(g, [[w * 0.68, y0], [w * 0.68, y0 + h * 0.05]], 2, 1.5);
+      }
+      ellipse(g, w * 0.69, h * 0.72, 14, 14, 2);
+      pencil(g, [[w * 0.66, h * 0.73], [w * 0.76, h * 0.79]], 3, 2);
+      pencil(g, [[w * 0.61, h * 0.68], [w * 0.68, h * 0.73], [w * 0.60, h * 0.78]], 2, 2);
+      pencil(g, [[w * 0.76, h * 0.79], [w * 0.82, h * 0.74]], 2, 2);
+      pencil(g, [[w * 0.76, h * 0.79], [w * 0.83, h * 0.83]], 2, 2);
+      // curved turn-back arrow on roof
+      g.save();
+      g.strokeStyle = '#1f5b99'; g.lineWidth = 3;
+      pencil(g, [[w * 0.48, h * 0.28], [w * 0.36, h * 0.24], [w * 0.22, h * 0.28]], 2, 1.5);
+      pencil(g, [[w * 0.26, h * 0.24], [w * 0.21, h * 0.28], [w * 0.27, h * 0.32]], 2, 1.5);
+      g.fillStyle = '#9e1c16'; g.font = `26px ${HAND}`; g.fillText('no railing!', w * 0.54, h * 0.28);
+      g.fillStyle = '#1f5b99'; g.font = `24px ${HAND}`; g.fillText('take stairs', w * 0.14, h * 0.19);
+      g.fillStyle = '#333'; g.font = `22px ${HAND}`; g.fillText('7.5m drop...', w * 0.59, h * 0.57);
       g.restore();
     },
   };
@@ -696,6 +729,31 @@
       const px = T < 3.4 ? W * 0.24 : W * 0.24 + ((T - 3.4) / 3.0) * (W * 0.50);
       fig(g, Math.min(W * 0.80, px), H * 0.72, 1);
       caption(g, W, H, venting ? 'STEAM BLAST — HOLD BACK' : 'VALVE SHUT — PASS NOW');
+    },
+    fall(g, W, H, T) {
+      // high building silhouette + open rooftop drop + figure backing away toward stairwell door
+      g.fillStyle = '#191a1e'; g.fillRect(0, H * 0.82, W, H);
+      g.fillStyle = '#2b2b30'; g.fillRect(W * 0.08, H * 0.36, W * 0.54, H * 0.46);
+      g.fillStyle = '#40424a'; g.fillRect(W * 0.08, H * 0.34, W * 0.54, 5);
+      // stairwell bulkhead door on left
+      g.fillStyle = '#373530'; g.fillRect(W * 0.13, H * 0.20, 32, H * 0.14);
+      g.fillStyle = '#1a1917'; g.fillRect(W * 0.18, H * 0.23, 18, H * 0.11);
+      // edge danger glow
+      const pulse = 0.45 + 0.35 * Math.sin(T * 6);
+      g.strokeStyle = `rgba(255,95,80,${pulse})`; g.lineWidth = 2;
+      g.setLineDash([4, 4]);
+      g.beginPath(); g.moveTo(W * 0.62, H * 0.34); g.lineTo(W * 0.62, H * 0.82); g.stroke();
+      g.setLineDash([]);
+      let px = W * 0.42;
+      if (T < 2.2) px = W * 0.34 + (T / 2.2) * (W * 0.23);
+      else if (T < 3.6) px = W * 0.57;
+      else px = Math.max(W * 0.21, W * 0.57 - ((T - 3.6) / 3.2) * (W * 0.36));
+      fig(g, px, H * 0.34, 1);
+      if (T >= 2.1 && T < 3.6) {
+        g.fillStyle = '#ff6b5b'; g.font = 'bold 12px Courier New, monospace';
+        g.fillText('!', W * 0.58, H * 0.20);
+      }
+      caption(g, W, H, T < 3.6 ? 'OPEN ROOF EDGE — STOP!' : 'TAKE THE STAIRS DOWN');
     },
   };
 

@@ -1079,15 +1079,15 @@
           placeLamp(-3.0, -3.0, 3.5);
           // Back-east study (optionally barricaded if non-evidence)
           placeFurn('desk', hl - t, -2.5, -1, 0, 1.8, 0.14);
-          placeLocker(2.6, -hd + t + 0.38, 0, 1, 0.14);
+          placeLocker(1.55, -hd + t + 0.38, 0, 1, 0.14);
           placeLamp(3.6, -3.0, 3.5);
           if (R() < 0.28 && !ctx.sheriff) {
             addBarricade(rightDoorA, pb, 0.14, 0, 1, 1.45);
           } else {
-            addSafeDesk(3.6, -hd + t + 0.9, 0, 1, 0.14);
+            addSafeDesk(4.0, -hd + t + 0.9, 0, 1, 0.14);
           }
-          addSafeWall(0, pb + 0.12, 0, 1, 0.14);
-          addSafeWall(-1.8, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeWall(-3.6, hd - t - 0.04, 0, -1, 0.14);
+          addSafeWall(3.8, hd - t - 0.04, 0, -1, 0.14);
           if (R() < 0.45) placeBattery(-4.2, -1.6, 0.14);
         },
       },
@@ -1105,7 +1105,7 @@
           placePainting(2.08, -0.5, -1, 0, 0.14);
           placeLamp(0, 2.2, 3.5);
           placeLamp(0, -2.8, 3.5);
-          addSafeWall(0.9, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeWall(-4.4, -hd + t + 0.04, 0, 1, 0.14);
           // West wing (living & bedroom)
           placeFurn('couch', -hl + t, 3.2, 1, 0, 1.9, 0.14);
           placeFurn('bookshelf', -hl + t, -0.2, 1, 0, 1.6, 0.14);
@@ -1116,7 +1116,7 @@
           placeDiningTable(4.4, 3.0, 0.14);
           placeFurn('desk', hl - t, -2.2, -1, 0, 1.8, 0.14);
           placeFurn('dresser', hl - t, -5.0, -1, 0, 1.3, 0.14);
-          placePainting(hl - t - 0.03, 0.8, -1, 0, 0.14);
+          placePainting(hl - t - 0.03, 3.4, -1, 0, 0.14);
           placeLamp(4.4, 0.0, 3.5);
           if (R() < 0.28 && !ctx.sheriff) {
             addBarricade(2.2, -2.2, 0.14, -1, 0, 1.55);
@@ -1150,17 +1150,17 @@
           placeCrates(-4.8, -5.0, 0.14);
           placeLocker(-1.2, -hd + t + 0.38, 0, 1, 0.14);
           placeLocker(0.2, -hd + t + 0.38, 0, 1, 0.14);
-          placePainting(hl - t - 0.03, -4.5, -1, 0, 0.14);
+          placePainting(-3.6, hd - t - 0.03, 0, -1, 0.14);
           placeLamp(0, -4.6, 3.5);
           addSafeWall(-3.2, pb + 0.12, 0, 1, 0.14);
           addMapWall(hl - t - 0.04, 5.45, -1, 0, 0.14, 'shelf');
           if (R() < 0.25 && !ctx.sheriff && !ctx.isSpawnLeft) {
             addBarricade(backDoorA, pb, 0.14, 0, 1, 1.6);
           } else {
-            addMapWall(4.2, -hd + t + 0.04, 0, 1, 0.14, 'current');
+            addMapWall(3.2, hd - t - 0.04, 0, -1, 0.14, 'current');
             addMapWall(-2.75, -hd + t + 0.04, 0, 1, 0.14, 'locker');
             addSafeDesk(4.4, -hd + t + 0.9, 0, 1, 0.14);
-            addSafeWall(4.2, -hd + t + 0.04, 0, 1, 0.14);
+            addSafeWall(hl - t - 0.04, -4.5, -1, 0, 0.14);
           }
           if (R() < 0.5) placeBattery(-5.0, -3.8, 0.72);
         },
@@ -1186,7 +1186,7 @@
           placeFurn('desk', -1.8, -hd + t, 0, 1, 1.7, 0.14);
           placeLocker(-4.5, -hd + t + 0.38, 0, 1, 0.14);
           placeLamp(-3.4, -3.2, 3.5);
-          addSafeWall(-0.12, -1.0, -1, 0, 0.14);
+          addSafeWall(2.4, pb + 0.12, 0, 1, 0.14);
           // East manager office
           placeFurn('desk', hl - t, -3.2, -1, 0, 1.9, 0.14);
           placeFurn('dresser', hl - t, -5.8, -1, 0, 1.3, 0.14);
@@ -1221,10 +1221,10 @@
           // Floor 1 back room
           placeDiningTable(-3.8, -3.4, 0.14);
           placeFurn('dresser', -hl + t, -3.4, 1, 0, 1.3, 0.14);
-          placeLocker(1.8, -hd + t + 0.38, 0, 1, 0.14);
+          placeLocker(0.6, -hd + t + 0.38, 0, 1, 0.14);
           placeLamp(-1.2, -3.4, ceil1);
-          addSafeWall(-1.2, -hd + t + 0.04, 0, 1, 0.14);
-          addSafeDesk(2.4, -hd + t + 0.9, 0, 1, 0.14);
+          addSafeWall(-1.8, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(3.1, -hd + t + 0.9, 0, 1, 0.14);
           // Floor 2 layout
           const pb2 = -0.2;
           const f2End = stA0 - 0.05;
@@ -1275,7 +1275,7 @@
           placeLocker(-3.8, -hd + t + 0.38, 0, 1, 0.14);
           placeLamp(1.5, -4.4, ceil1);
           addSafeWall(hl - t - 0.04, -4.4, -1, 0, 0.14);
-          addMapWall(hl - t - 0.04, -4.4, -1, 0, 0.14, 'current');
+          addMapWall(3.4, hd - t - 0.04, 0, -1, 0.14, 'current');
           addMapWall(-5.45, -hd + t + 0.04, 0, 1, 0.14, 'locker');
           addMapWall(0.45, -hd + t + 0.04, 0, 1, 0.14, 'shelf');
           addSafeDesk(2.2, -hd + t + 0.9, 0, 1, 0.14);
@@ -1299,7 +1299,7 @@
           } else {
             addSafeDesk(3.2, -3.6, 0, 1, floor2Y);
           }
-          if (R() < 0.5) placeBattery(4.2, 3.4, floor2Y + 0.45);
+          if (R() < 0.5) placeBattery(4.8, 3.4, floor2Y + 0.64);
         },
       },
       // 7. Two-floor Municipal Office (East Staircase)
@@ -1321,11 +1321,11 @@
           // F1 back office
           placeFurn('desk', -hl + t, -2.4, 1, 0, 1.8, 0.14);
           placeFurn('bookshelf', -hl + t, -5.2, 1, 0, 1.8, 0.14);
-          placeLocker(2.0, -hd + t + 0.38, 0, 1, 0.14);
+          placeLocker(0.6, -hd + t + 0.38, 0, 1, 0.14);
           placePainting(-hl + t + 0.03, -3.5, 1, 0, 0.14);
           placeLamp(-1.4, -3.4, ceil1);
-          addSafeWall(-1.2, -hd + t + 0.04, 0, 1, 0.14);
-          addSafeDesk(2.2, -hd + t + 0.9, 0, 1, 0.14);
+          addSafeWall(-2.0, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(3.0, -hd + t + 0.9, 0, 1, 0.14);
           // Floor 2
           const pb2 = 0.0;
           addCrossWall(pb2, -hl + t, stA0 - 0.05, floor2Y, ceil2, -2.6, 1.5);
@@ -1413,13 +1413,13 @@
           // Rear storeroom
           placeFurn('shopShelf', -1.8, -hd + t, 0, 1, 2.0, 0.14);
           placeLocker(-3.8, -hd + t + 0.38, 0, 1, 0.14);
-          placeCrates(4.6, -4.8, 0.14);
+          placeCrates(4.6, -3.5, 0.14);
           placeLamp(1.5, -4.6, ceil1);
           addSafeWall(hl - t - 0.04, -4.4, -1, 0, 0.14);
-          addMapWall(hl - t - 0.04, -4.4, -1, 0, 0.14, 'current');
+          addMapWall(hl - t - 0.04, 5.4, -1, 0, 0.14, 'current');
           addMapWall(-5.40, -hd + t + 0.04, 0, 1, 0.14, 'locker');
           addMapWall(0.45, -hd + t + 0.04, 0, 1, 0.14, 'shelf');
-          addSafeDesk(1.2, -hd + t + 0.9, 0, 1, 0.14);
+          addSafeDesk(2.8, -hd + t + 0.9, 0, 1, 0.14);
           // Rooftop deck: Wooden water tank on steel stilts + crates + locker
           ctx.addRoofWaterTank(2.6, 2.2);
           placeCrates(-2.2, -4.6, roofY);
@@ -1450,11 +1450,11 @@
           // Rear office
           placeFurn('desk', -hl + t, -3.2, 1, 0, 1.9, 0.14);
           placeFurn('dresser', -hl + t, -5.6, 1, 0, 1.2, 0.14);
-          placeLocker(2.0, -hd + t + 0.38, 0, 1, 0.14);
+          placeLocker(0.6, -hd + t + 0.38, 0, 1, 0.14);
           placePainting(-hl + t + 0.03, -1.6, 1, 0, 0.14);
           placeLamp(-1.4, -3.4, ceil1);
-          addSafeWall(-1.2, -hd + t + 0.04, 0, 1, 0.14);
-          addSafeDesk(2.4, -hd + t + 0.9, 0, 1, 0.14);
+          addSafeWall(-1.8, -hd + t + 0.04, 0, 1, 0.14);
+          addSafeDesk(3.3, -hd + t + 0.9, 0, 1, 0.14);
           // Rooftop deck: Dual HVACs, Chimney, Radio Antenna & Locker
           ctx.addRoofHVAC(-3.4, -3.6);
           ctx.addRoofHVAC(-3.4, 3.2);
@@ -1719,15 +1719,17 @@
             boxAt(hx0, hx1, bhH, bhH + 0.18, hz0, hz1, M.roof, { collide: false, tile: 4 });
             roofSafeZone = { a0: rStA0 - 1.0, a1: rStA1 + 1.0, b0: minB - 2.0, b1: maxB + 0.8 };
           }
-          // Safety roof parapet colliders
-          const [p1x0, p1x1, p1z0, p1z1] = F.rect(-hl - 0.2, hl + 0.2, -hd - 0.2, -hd + 0.15);
-          collider(p1x0, p1x1, p1z0, p1z1, roofY + 1.15, roofY);
-          const [p2x0, p2x1, p2z0, p2z1] = F.rect(-hl - 0.2, hl + 0.2, hd - 0.15, hd + 0.2);
-          collider(p2x0, p2x1, p2z0, p2z1, roofY + 1.15, roofY);
-          const [p3x0, p3x1, p3z0, p3z1] = F.rect(-hl - 0.2, -hl + 0.15, -hd + 0.15, hd - 0.15);
-          collider(p3x0, p3x1, p3z0, p3z1, roofY + 1.15, roofY);
-          const [p4x0, p4x1, p4z0, p4z1] = F.rect(hl - 0.15, hl + 0.2, -hd + 0.15, hd - 0.15);
-          collider(p4x0, p4x1, p4z0, p4z1, roofY + 1.15, roofY);
+          // Safety roof parapet colliders (removed in v2.8+ for rooftop fall damage)
+          if (LO.ver && !LO.ver().fallDamage) {
+            const [p1x0, p1x1, p1z0, p1z1] = F.rect(-hl - 0.2, hl + 0.2, -hd - 0.2, -hd + 0.15);
+            collider(p1x0, p1x1, p1z0, p1z1, roofY + 1.15, roofY);
+            const [p2x0, p2x1, p2z0, p2z1] = F.rect(-hl - 0.2, hl + 0.2, hd - 0.15, hd + 0.2);
+            collider(p2x0, p2x1, p2z0, p2z1, roofY + 1.15, roofY);
+            const [p3x0, p3x1, p3z0, p3z1] = F.rect(-hl - 0.2, -hl + 0.15, -hd + 0.15, hd - 0.15);
+            collider(p3x0, p3x1, p3z0, p3z1, roofY + 1.15, roofY);
+            const [p4x0, p4x1, p4z0, p4z1] = F.rect(hl - 0.15, hl + 0.2, -hd + 0.15, hd - 0.15);
+            collider(p4x0, p4x1, p4z0, p4z1, roofY + 1.15, roofY);
+          }
         };
         const pCtx = {
           F, hl, hd, t, floor2Y, ceil1, ceil2, roofY,
@@ -2813,17 +2815,42 @@
       }
     }
     // outdoor batteries
-    [[-58, -20], [47, 58], [-20, 47], [56, -80], [-102, 70], [80, 100], [4, -40]].forEach(([x, z]) => battery(x, 0.4, z));
+    {
+      const freeSpot = (cx, cz, pad) => !W.colliders.some(c =>
+        !c.disabled && c.minY < 1.5 && c.maxY > 0.05 &&
+        cx + pad > c.minX && cx - pad < c.maxX && cz + pad > c.minZ && cz - pad < c.maxZ
+      ) && canPlaceBox(cx - pad, cx + pad, cz - pad, cz + pad, 0.2);
+      const bTries = [[0, 0], [2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4], [3.5, 2.5], [-3.5, -2.5], [4.2, -2.2], [-4.2, 2.2]];
+      [[-58, -20], [47, 58], [-20, 47], [56, -80], [-102, 70], [80, 100], [4, -40]].forEach(([x, z]) => {
+        for (const [ox, oz] of bTries) {
+          const bx = x + ox, bz = z + oz;
+          if (freeSpot(bx, bz, 0.5)) {
+            battery(bx, 0.4, bz);
+            reserveBox(bx - 0.45, bx + 0.45, bz - 0.45, bz + 0.45, 'battery');
+            break;
+          }
+        }
+      });
+    }
     // throwable rocks lying around (sparse — you only find one occasionally)
     {
       const rg = new THREE.DodecahedronGeometry(0.14);
       const rm = mat({ color: 0x77736c });
       for (let i = 0; i < 16; i++) {
-        const s = pick(STREETS), a = R(-HALF + 10, HALF - 10), off = R(-4.5, 4.5);
-        const v = rand() < 0.5;
+        let rx = 0, rz = 0, ok = false;
+        for (let t = 0; t < 16; t++) {
+          const s = pick(STREETS), a = R(-HALF + 10, HALF - 10), off = R(-4.5, 4.5);
+          const v = rand() < 0.5;
+          const cx = v ? s + off : a, cz = v ? a : s + off;
+          if (canPlaceBox(cx - 0.4, cx + 0.4, cz - 0.4, cz + 0.4, 0.2) &&
+            !W.colliders.some(c => !c.disabled && c.minY < 0.8 && c.maxY > 0.02 && cx + 0.45 > c.minX && cx - 0.45 < c.maxX && cz + 0.45 > c.minZ && cz - 0.45 < c.maxZ)) {
+            rx = cx; rz = cz; ok = true; break;
+          }
+        }
+        if (!ok) continue;
         const m = new THREE.Mesh(rg, rm);
         m.userData.keepDynamic = true;
-        m.position.set(v ? s + off : a, 0.12, v ? a : s + off);
+        m.position.set(rx, 0.12, rz);
         m.rotation.set(R(0, 3), R(0, 3), 0);
         W.root.add(m);
         W.pickups.push({ type: 'rock', mesh: m, pos: m.position, baseY: 0.12, taken: false, still: true });
@@ -2839,14 +2866,22 @@
       const sc = new THREE.Vector3(), pos = new THREE.Vector3();
       let iR = 0, iW = 0;
       for (let i = 0; i < 40; i++) {
-        const s = pick(STREETS), a = R(-HALF + 8, HALF - 8);
-        const v = rand() < 0.5, h = R(0.1, 0.4);
-        const px = v ? s + R(-5, 5) : a, pz = v ? a : s + R(-5, 5);
+        let px = 0, pz = 0, ok = false;
+        const h = R(0.1, 0.4);
+        for (let t = 0; t < 10; t++) {
+          const s = pick(STREETS), a = R(-HALF + 8, HALF - 8), v = rand() < 0.5;
+          const cx = v ? s + R(-5, 5) : a, cz = v ? a : s + R(-5, 5);
+          if (canPlaceBox(cx - 0.8, cx + 0.8, cz - 0.8, cz + 0.8, 0.2) &&
+            !W.colliders.some(c => !c.disabled && c.minY < 0.9 && c.maxY > 0.02 && cx + 0.8 > c.minX && cx - 0.8 < c.maxX && cz + 0.8 > c.minZ && cz - 0.8 < c.maxZ)) {
+            px = cx; pz = cz; ok = true; break;
+          }
+        }
+        if (!ok) continue;
         q.setFromEuler(eu.set(0, R(0, 3), 0));
         m4.compose(pos.set(px, h * 0.5, pz), q, sc.set(R(0.3, 1.2), h, R(0.3, 1.2)));
         if (rand() < 0.5 && iR < 20) dmR.setMatrixAt(iR++, m4);
         else if (iW < 20) dmW.setMatrixAt(iW++, m4);
-        else dmR.setMatrixAt(iR++, m4);
+        else if (iR < 20) dmR.setMatrixAt(iR++, m4);
       }
       dmR.count = iR; dmW.count = iW;
       dmR.instanceMatrix.needsUpdate = true; dmW.instanceMatrix.needsUpdate = true;
@@ -4512,7 +4547,14 @@
         ? chosen.building.mapWallSpots : null;
       const groundSpots = chosen.building.safeWallSpots.filter(s => s.y === undefined || s.y <= 0.25);
       const pool = mapSpots || groundSpots;
-      const spot = pool[(Math.random() * pool.length) | 0] || chosen.building.safeWallSpots[0];
+      const clearWallSpot = s => !W.evidence || !W.evidence.some(ev =>
+        (ev.id === 'claws' || ev.id === 'warning') && ev.pos &&
+        Math.abs((s.y !== undefined ? s.y : 0.14) + 1.54 - ev.pos.y) < 1.2 &&
+        Math.hypot(s.p.x - ev.pos.x, s.p.z - ev.pos.z) < 2.6
+      );
+      const cleanPool = pool.filter(clearWallSpot);
+      const pickFrom = cleanPool.length ? cleanPool : pool;
+      const spot = pickFrom[(Math.random() * pickFrom.length) | 0] || chosen.building.safeWallSpots[0];
       const baseY = spot.y !== undefined ? spot.y : 0.14;
       const nx = Math.sin(spot.yaw), nz = Math.cos(spot.yaw);
       wm.pos.set(spot.p.x + nx * 0.035, baseY + 1.54, spot.p.z + nz * 0.035);
