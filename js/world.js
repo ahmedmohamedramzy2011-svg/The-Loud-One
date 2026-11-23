@@ -288,6 +288,174 @@
       return out;
     }
 
+    const _discardedGeos = new Set();
+    const _mInv = new THREE.Matrix4();
+    const _mRel = new THREE.Matrix4();
+    const _bBox = new THREE.Box3();
+    const _bCtr = new THREE.Vector3();
+    function mergeSubtreeByMaterial(rootObj, opts) {
+      opts = opts || {};
+      const target = opts.target || rootObj;
+      const occSet = opts.occSet || null;
+      const outOccluders = opts.outOccluders || null;
+      const skipSet = opts.skipSet || null;
+      const cellSize = opts.cellSize || 0;
+      const ignoreRootKeepDynamic = !!opts.ignoreRootKeepDynamic;
+
+      target.updateWorldMatrix(true, false);
+      rootObj.updateWorldMatrix(true, true);
+      _mInv.copy(target.matrixWorld).invert();
+
+      const meshes = [];
+      function walk(obj, isRoot) {
+        if (!obj) return;
+        if (!isRoot) {
+          if (skipSet && skipSet.has(obj)) return;
+          if (obj.userData && (obj.userData.keepDynamic || obj.userData.noBatch)) return;
+          if (obj.isLight || obj.isSprite || obj.isPoints || obj.isInstancedMesh) return;
+        } else if (!ignoreRootKeepDynamic && obj.userData && (obj.userData.keepDynamic || obj.userData.noBatch)) {
+          return;
+        }
+        if (obj.isMesh) {
+          if (!obj.visible || !obj.geometry || !obj.geometry.attributes || !obj.geometry.attributes.position) return;
+          meshes.push(obj);
+          return;
+        }
+        const ch = obj.children;
+        for (let i = 0; i < ch.length; i++) walk(ch[i], false);
+      }
+      walk(rootObj, true);
+
+      const buckets = new Map();
+      const tempGeos = [];
+      const removedMeshes = new Set();
+
+      const pushSlice = (mat, cast, recv, isOcc, cx, cz, posArr, norArr, uvArr, colArr, count) => {
+        if (!mat || !count) return;
+        let cellKey = '0';
+        if (cellSize > 0) {
+          cellKey = `${Math.floor(cx / cellSize)},${Math.floor(cz / cellSize)}`;
+        }
+        const key = `${cellKey}|${mat.uuid}|${cast ? 1 : 0}${recv ? 1 : 0}${isOcc ? 1 : 0}`;
+        let b = buckets.get(key);
+        if (!b) {
+          b = { mat, cast, recv, isOcc, slices: [], totalVerts: 0 };
+          buckets.set(key, b);
+        }
+        b.slices.push({ pos: posArr, nor: norArr, uv: uvArr, col: colArr, count });
+        b.totalVerts += count;
+      };
+
+      for (let i = 0; i < meshes.length; i++) {
+        const m = meshes[i];
+        _mRel.multiplyMatrices(_mInv, m.matrixWorld);
+        if (_mRel.determinant() < 0) continue;
+
+        const rawGeo = m.geometry;
+        const ni = rawGeo.index ? rawGeo.toNonIndexed() : rawGeo.clone();
+        ni.applyMatrix4(_mRel);
+        tempGeos.push(ni);
+
+        let cx = 0, cz = 0;
+        if (cellSize > 0) {
+          ni.computeBoundingBox();
+          ni.boundingBox.getCenter(_bCtr);
+          cx = _bCtr.x; cz = _bCtr.z;
+        }
+
+        const posA = ni.attributes.position && ni.attributes.position.array;
+        if (!posA) continue;
+        const norA = ni.attributes.normal ? ni.attributes.normal.array : null;
+        const uvA = ni.attributes.uv ? ni.attributes.uv.array : null;
+        const colA = ni.attributes.color ? ni.attributes.color.array : null;
+        const total = ni.attributes.position.count;
+        const cast = !!m.castShadow;
+        const recv = !!m.receiveShadow;
+        const isOcc = !!(occSet && occSet.has(m));
+
+        if (Array.isArray(m.material) && ni.groups && ni.groups.length > 0) {
+          for (let gi = 0; gi < ni.groups.length; gi++) {
+            const grp = ni.groups[gi];
+            const subMat = m.material[grp.materialIndex];
+            if (!subMat || grp.count <= 0) continue;
+            const s = grp.start, e = Math.min(total, grp.start + grp.count);
+            const cnt = e - s;
+            if (cnt <= 0) continue;
+            pushSlice(
+              subMat, cast, recv, isOcc, cx, cz,
+              posA.subarray(s * 3, e * 3),
+              norA ? norA.subarray(s * 3, e * 3) : null,
+              uvA ? uvA.subarray(s * 2, e * 2) : null,
+              colA ? colA.subarray(s * 3, e * 3) : null,
+              cnt
+            );
+          }
+        } else {
+          const singleMat = Array.isArray(m.material) ? m.material[0] : m.material;
+          pushSlice(singleMat, cast, recv, isOcc, cx, cz, posA, norA, uvA, colA, total);
+        }
+
+        if (m.parent) m.parent.remove(m);
+        removedMeshes.add(m);
+        _discardedGeos.add(rawGeo);
+      }
+
+      buckets.forEach(b => {
+        const n = b.totalVerts;
+        if (!n) return;
+        const pos = new Float32Array(n * 3);
+        const nor = new Float32Array(n * 3);
+        const uv = new Float32Array(n * 2);
+        const needCol = !!b.mat.vertexColors;
+        const col = needCol ? new Float32Array(n * 3) : null;
+        let o = 0;
+        for (let si = 0; si < b.slices.length; si++) {
+          const sl = b.slices[si];
+          pos.set(sl.pos, o * 3);
+          if (sl.nor) nor.set(sl.nor, o * 3);
+          if (sl.uv) uv.set(sl.uv, o * 2);
+          if (col) {
+            if (sl.col) col.set(sl.col, o * 3);
+            else col.fill(1, o * 3, (o + sl.count) * 3);
+          }
+          o += sl.count;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        if (col) geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        geo.computeBoundingSphere();
+        const mesh = new THREE.Mesh(geo, b.mat);
+        if (shadows) { mesh.castShadow = b.cast; mesh.receiveShadow = b.recv; }
+        target.add(mesh);
+        if (b.isOcc && outOccluders) outOccluders.push(mesh);
+      });
+
+      for (let i = 0; i < tempGeos.length; i++) tempGeos[i].dispose();
+
+      // Retain any unmerged (e.g. keepDynamic) occluders cleanly
+      if (occSet && outOccluders) {
+        occSet.forEach(m => {
+          if (m && !removedMeshes.has(m)) outOccluders.push(m);
+        });
+      }
+
+      // Prune empty non-dynamic static wrapper groups
+      function pruneEmpty(obj, isRoot) {
+        for (let i = obj.children.length - 1; i >= 0; i--) {
+          const ch = obj.children[i];
+          if (skipSet && skipSet.has(ch)) continue;
+          if (ch.userData && (ch.userData.keepDynamic || ch.userData.noBatch)) continue;
+          if (ch.isGroup) {
+            pruneEmpty(ch, false);
+            if (!isRoot && ch.children.length === 0) obj.remove(ch);
+          }
+        }
+      }
+      pruneEmpty(rootObj, true);
+    }
+
     // =========================================================
     //  GROUND, STREETS, SKY
     // =========================================================
@@ -295,6 +463,7 @@
     groundGeo.attributes.uv.array.forEach((v, i, a) => { a[i] = v * 140; });
     const ground = new THREE.Mesh(groundGeo, M.grass);
     ground.rotation.x = -Math.PI / 2;
+    ground.userData.noBatch = true;
     add(ground, { cast: false });
 
     const streetLen = HALF * 2;
@@ -340,10 +509,10 @@
       ni.translate(bx, 0.06, bz);
       swGeos.push(ni);
     }));
-    add(new THREE.Mesh(batchGeos(nsGeos), M.road), { cast: false });
-    add(new THREE.Mesh(batchGeos(ewGeos), roadEWMat), { cast: false });
-    add(new THREE.Mesh(batchGeos(interGeos), M.asphalt), { cast: false });
-    add(new THREE.Mesh(batchGeos(swGeos), M.sidewalk), { cast: false });
+    const mNS = add(new THREE.Mesh(batchGeos(nsGeos), M.road), { cast: false }); mNS.userData.noBatch = true;
+    const mEW = add(new THREE.Mesh(batchGeos(ewGeos), roadEWMat), { cast: false }); mEW.userData.noBatch = true;
+    const mInt = add(new THREE.Mesh(batchGeos(interGeos), M.asphalt), { cast: false }); mInt.userData.noBatch = true;
+    const mSW = add(new THREE.Mesh(batchGeos(swGeos), M.sidewalk), { cast: false }); mSW.userData.noBatch = true;
 
     // sky dome
     {
@@ -483,6 +652,7 @@
         const bar = new THREE.Group();
         const red = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.15, 0.3), new THREE.MeshBasicMaterial({ color: opts.lightsOn ? 0xff2020 : 0x501010 }));
         const blue = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.15, 0.3), new THREE.MeshBasicMaterial({ color: opts.lightsOn ? 0x2050ff : 0x101850 }));
+        red.userData.keepDynamic = true; blue.userData.keepDynamic = true;
         red.position.x = -0.35; blue.position.x = 0.35; bar.add(red, blue);
         bar.position.set(0, 0.67, -0.3);
         cab.add(bar); g.userData.red = red; g.userData.blue = blue;
@@ -502,6 +672,9 @@
         const hw = (2 * c + 4.5 * s2) / 2 + 0.1, hd = (2 * s2 + 4.5 * c) / 2 + 0.1;
         collider(x - hw, x + hw, z - hd, z + hd, 1.6);
         addOccluder(body);
+      } else {
+        // Merge standalone cutscene / evidence / parked cars internally by material (~35 -> ~9 draw calls)
+        mergeSubtreeByMaterial(g, { target: g });
       }
       return g;
     }
@@ -545,12 +718,15 @@
         const w = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.08, 6), M.tire); w.rotation.z = Math.PI / 2; w.position.set(wx, 0.11, wz); g.add(w);
       });
       // the lid: hinged along the back edge, cracked slightly when hiding/propped
-      const hinge = new THREE.Group(); hinge.position.set(0, 1.45, -0.66); g.add(hinge);
+      const hinge = new THREE.Group(); hinge.position.set(0, 1.45, -0.66); hinge.userData.keepDynamic = true; g.add(hinge);
       const lid = new THREE.Mesh(new THREE.BoxGeometry(2.26, 0.06, 1.36), M.dark); lid.position.set(0, 0.03, 0.68); hinge.add(lid);
       const lidRidge = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.05, 0.1), M.dark); lidRidge.position.set(0, 0.07, 1.25); hinge.add(lidRidge);
       hinge.rotation.x = -0.075;
       g.position.set(x, baseY, z); g.rotation.y = ry; add(g);
-      addOccluder(b);
+      mergeSubtreeByMaterial(hinge, { target: hinge, ignoreRootKeepDynamic: true });
+      const dOccOut = [];
+      mergeSubtreeByMaterial(g, { target: g, ignoreRootKeepDynamic: true, occSet: new Set([b]), outOccluders: dOccOut });
+      dOccOut.forEach(addOccluder);
       const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
       collider(x - (2.2 * c + 1.3 * s) / 2, x + (2.2 * c + 1.3 * s) / 2, z - (2.2 * s + 1.3 * c) / 2, z + (2.2 * s + 1.3 * c) / 2, baseY + 1.45, baseY);
       const front = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
@@ -578,7 +754,7 @@
       part(W2 - 2 * t, 0.02, D2 - 0.06, 0, H2 - 0.16, -0.02);                         // upper shelf
       part(W2 - 2 * t, H2 - 2 * t, 0.01, 0, H2 / 2, -D2 / 2 + t + 0.006, M.dark);     // dark inside
       // the door, hinged on the left edge, framed around a real slotted eye-level vent cutout (y = 1.35..1.82)
-      const hinge = new THREE.Group(); hinge.position.set(-W2 / 2, 0, D2 / 2); g.add(hinge);
+      const hinge = new THREE.Group(); hinge.position.set(-W2 / 2, 0, D2 / 2); hinge.userData.keepDynamic = true; g.add(hinge);
       const dPart = (w, h, d, px, py, pz, m, rx) => {
         const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m || M.locker);
         o.position.set(px, py, pz);
@@ -600,7 +776,10 @@
       }
       dPart(0.04, 0.16, 0.04, W2 - 0.07, 1.05, 0.03, M.pole);
       g.position.set(x, baseY, z); g.rotation.y = ry; add(g);
-      addOccluder(back); addOccluder(lowerDoor);
+      const hOccOut = [], lOccOut = [];
+      mergeSubtreeByMaterial(hinge, { target: hinge, ignoreRootKeepDynamic: true, occSet: new Set([lowerDoor]), outOccluders: hOccOut });
+      mergeSubtreeByMaterial(g, { target: g, ignoreRootKeepDynamic: true, occSet: new Set([back]), outOccluders: lOccOut });
+      lOccOut.forEach(addOccluder); hOccOut.forEach(addOccluder);
       const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry));
       collider(x - (W2 * c + D2 * s) / 2, x + (W2 * c + D2 * s) / 2, z - (W2 * s + D2 * c) / 2, z + (W2 * s + D2 * c) / 2, baseY + 2.1, baseY);
       const front = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
@@ -974,12 +1153,12 @@
           placePainting(hl - t - 0.03, -4.5, -1, 0, 0.14);
           placeLamp(0, -4.6, 3.5);
           addSafeWall(-3.2, pb + 0.12, 0, 1, 0.14);
-          addMapWall(4.2, -hd + t + 0.04, 0, 1, 0.14, 'current');
-          addMapWall(-2.75, -hd + t + 0.04, 0, 1, 0.14, 'locker');
           addMapWall(hl - t - 0.04, 5.45, -1, 0, 0.14, 'shelf');
-          if (R() < 0.25 && !ctx.sheriff) {
+          if (R() < 0.25 && !ctx.sheriff && !ctx.isSpawnLeft) {
             addBarricade(backDoorA, pb, 0.14, 0, 1, 1.6);
           } else {
+            addMapWall(4.2, -hd + t + 0.04, 0, 1, 0.14, 'current');
+            addMapWall(-2.75, -hd + t + 0.04, 0, 1, 0.14, 'locker');
             addSafeDesk(4.4, -hd + t + 0.9, 0, 1, 0.14);
             addSafeWall(4.2, -hd + t + 0.04, 0, 1, 0.14);
           }
@@ -1553,6 +1732,7 @@
         const pCtx = {
           F, hl, hd, t, floor2Y, ceil1, ceil2, roofY,
           sheriff: !!preset.sheriff,
+          isSpawnLeft: !!(opts && opts.isSpawnLeft),
           R: rand,
           M, collider, add, box, decoBox,
           addCrossWall(bPos, a0, a1, y0, y1, doorA, doorW2) {
@@ -2448,7 +2628,8 @@
         const H = rand() < 0.7 ? R(7, 11) : R(12, 18);
         if (type === 'enter') {
           enterCount++;
-          buildEnterable(cx, cz, L, D, Math.max(H, 6), axis, sign, (sp && sp.kind) || pick(['house', 'shop', 'office', 'house']), sp);
+          const entOpts = sp && key === '2,0,-1,-1' ? Object.assign({}, sp, { isSpawnLeft: true }) : sp;
+          buildEnterable(cx, cz, L, D, Math.max(H, 6), axis, sign, (sp && sp.kind) || pick(['house', 'shop', 'office', 'house']), entOpts);
           if (key === '2,0,-1,-1') W.spawnLeftBuilding = W.enterables[W.enterables.length - 1];
         } else if (type === 'closed') {
           buildClosed(cx, cz, L, D, H, axis, sign);
@@ -2911,6 +3092,7 @@
 
         if (shadows) g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
         barRoot.add(g);
+        mergeSubtreeByMaterial(g, { target: g });
         W.barricades.push({
           group: g,
           hit: sp.hit,
@@ -2950,11 +3132,13 @@
       const coneUpright2 = makeCone(5.6, 0, -E - 1.1, 0, -0.3, 0);
       const coneKnocked = makeCone(-1.9, 0.16, -E + 2.6, 1.48, 0.9, 0);
       const coneKnockedIntact = makeCone(-3.0, 0, -E - 1.5, 0, 0.4, 0);
-      barRoot.add(coneUpright1, coneUpright2);
+      W.root.add(coneUpright1, coneUpright2);
       rammedDebris.add(coneKnocked);
       const intactExtras = new THREE.Group();
       intactExtras.add(coneKnockedIntact);
       barRoot.add(intactExtras);
+      mergeSubtreeByMaterial(rammedDebris, { target: rammedDebris });
+      mergeSubtreeByMaterial(intactExtras, { target: intactExtras });
 
       W.setBarricadesIntact = function () {
         W.barricades.forEach(b => {
@@ -2986,7 +3170,7 @@
       const sLow = new THREE.Mesh(plankGeo, M.barricade); sLow.position.set(0, 0.62, 0.02); sg.add(sLow);
       sg.position.set(-6.85, 0, -E - 0.15); sg.rotation.y = 0.08;
       if (shadows) sg.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      barRoot.add(sg);
+      W.root.add(sg);
     }
     collider(-8.2, 6.2, -E - 2.2, -E + 0.6, 2.6);
     // welcome sign beside the south road (2:1 reflective highway signboard on twin steel posts)
@@ -3307,7 +3491,9 @@
         cg.translate(Math.cos(a) * 640, 0, Math.sin(a) * 640);
         hillGeos.push(cg);
       }
-      W.root.add(new THREE.Mesh(batchGeos(hillGeos), M.leaves));
+      const hillsMesh = new THREE.Mesh(batchGeos(hillGeos), M.leaves);
+      hillsMesh.userData.noBatch = true;
+      W.root.add(hillsMesh);
     }
 
     // subtle 3D forest birds (flock clusters perching on perimeter fences / pine crowns & circling treeline sky)
@@ -3323,6 +3509,17 @@
       const birdTailGeo = new THREE.BoxGeometry(0.10, 0.02, 0.16);
       const birdWingInGeo = new THREE.BoxGeometry(0.24, 0.018, 0.13);
       const birdWingTipGeo = new THREE.BoxGeometry(0.15, 0.014, 0.09);
+      const makeWingGeo = (side) => {
+        const g1 = birdWingInGeo.toNonIndexed();
+        g1.translate(side * 0.12, 0, -0.01);
+        const g2 = birdWingTipGeo.toNonIndexed();
+        g2.rotateY(side * -0.25);
+        g2.translate(side * 0.28, -0.01, -0.03);
+        return batchGeos([g1, g2]);
+      };
+      const birdWingLGeo = makeWingGeo(-1);
+      const birdWingRGeo = makeWingGeo(1);
+      birdWingInGeo.dispose(); birdWingTipGeo.dispose();
 
       const makeBirdMesh = (scale) => {
         const g = new THREE.Group();
@@ -3333,15 +3530,10 @@
         head.add(skull, beak);
         const tail = new THREE.Mesh(birdTailGeo, M.birdFeather);
         tail.position.set(0, 0.01, -0.18); tail.rotation.x = 0.18;
-        const makeWing = (side) => {
-          const piv = new THREE.Group(); piv.position.set(side * 0.05, 0.035, 0.02);
-          const inner = new THREE.Mesh(birdWingInGeo, M.birdFeather); inner.position.set(side * 0.12, 0, -0.01);
-          const tip = new THREE.Mesh(birdWingTipGeo, M.birdFeather); tip.position.set(side * 0.28, -0.01, -0.03);
-          tip.rotation.y = side * -0.25;
-          piv.add(inner, tip);
-          return piv;
-        };
-        const lw = makeWing(-1), rw = makeWing(1);
+        const lw = new THREE.Mesh(birdWingLGeo, M.birdFeather);
+        lw.position.set(-0.05, 0.035, 0.02);
+        const rw = new THREE.Mesh(birdWingRGeo, M.birdFeather);
+        rw.position.set(0.05, 0.035, 0.02);
         g.add(body, head, tail, lw, rw);
         g.scale.setScalar(scale);
         W.birdsGroup.add(g);
@@ -3510,12 +3702,12 @@
     W.syncOccluders = function () {
       W.occluders.length = 0;
       _occGrid.clear();
-      W.root.updateMatrixWorld(true);
       const pushOcc = (mesh) => {
         if (!mesh || !mesh.visible) return;
         W.occluders.push(mesh);
         if (!mesh.userData) mesh.userData = {};
         if (!mesh.userData._occBox) {
+          mesh.updateWorldMatrix(true, false);
           mesh.userData._occBox = new THREE.Box3().setFromObject(mesh);
         }
         const b = mesh.userData._occBox;
@@ -3678,6 +3870,10 @@
         }
 
         W.root.add(dg);
+        const debOccSet = new Set(b.debrisOccluders);
+        b.debrisOccluders.length = 0;
+        mergeSubtreeByMaterial(dg, { target: dg, occSet: debOccSet, outOccluders: b.debrisOccluders });
+        dg.updateMatrixWorld(true);
         b.debrisGroup = dg;
         b.restore = function () {
           b.smashed = false;
@@ -3748,6 +3944,7 @@
     W.smashFence = function (f, impactPos, dir) {
       if (f && f.broken) return false;
       const pos = f ? f.pos : impactPos;
+      const fgTmp = new THREE.Group();
       if (f) {
         f.broken = true;
         f.mesh.visible = false;
@@ -3766,7 +3963,7 @@
           );
           stump.rotation.set((Math.random() - 0.5) * 0.25, Math.random() * 0.4, (Math.random() - 0.5) * 0.25);
           if (shadows) { stump.castShadow = true; stump.receiveShadow = true; }
-          W.fenceDebrisGroup.add(stump);
+          fgTmp.add(stump);
         });
       }
 
@@ -3797,7 +3994,15 @@
         );
         m.rotation.set((Math.random() - 0.5) * 0.14, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.14);
         if (shadows) { m.castShadow = true; m.receiveShadow = true; }
-        W.fenceDebrisGroup.add(m);
+        fgTmp.add(m);
+      }
+      if (fgTmp.children.length) {
+        mergeSubtreeByMaterial(fgTmp, { target: fgTmp });
+        while (fgTmp.children.length) {
+          const ch = fgTmp.children[0];
+          fgTmp.remove(ch);
+          W.fenceDebrisGroup.add(ch);
+        }
       }
 
       // dynamic airborne boards that bounce and stay settled on the ground permanently (pooled)
@@ -3971,7 +4176,9 @@
         }
       }
 
-      const lowCull = !!(pPos && (S.quality === 'low' || S.viewDistance === 'near'));
+      const birdCullR = !pPos ? 9999 : (S.quality === 'low' || S.viewDistance === 'near' ? 72 : S.viewDistance === 'far' ? 140 : 98);
+      const birdCullR2 = birdCullR * birdCullR;
+      const lowCull = !!pPos;
       for (let i = 0; i < W.birds.length; i++) {
         const b = W.birds[i];
         const parts = b.parts;
@@ -4011,7 +4218,7 @@
               if (lowCull) {
                 const dx = pPos.x - b.homeX, dz = pPos.z - b.homeZ;
                 const d2 = dx * dx + dz * dz;
-                if (d2 > 75 * 75) {
+                if (d2 > birdCullR2) {
                   if (g.visible) g.visible = false;
                   continue;
                 }
@@ -4087,6 +4294,18 @@
 
     W.update = function (dt, time, birdCtx) {
       W.updateBirds(dt, time, birdCtx);
+      const pPos = birdCtx && birdCtx.pos ? birdCtx.pos : null;
+      const noFog = !!(LO.admin && LO.admin.noFog);
+      if (W.fences) {
+        const fenceCullR = (!pPos || noFog) ? 9999 : (S.viewDistance === 'near' ? 88 : S.viewDistance === 'far' ? 175 : 118);
+        const fenceCullR2 = fenceCullR * fenceCullR;
+        for (let i = 0; i < W.fences.length; i++) {
+          const f = W.fences[i];
+          if (f.broken || !f.mesh) continue;
+          const vis = (!pPos || noFog) ? true : ((pPos.x - f.pos.x) * (pPos.x - f.pos.x) + (pPos.z - f.pos.z) * (pPos.z - f.pos.z) <= fenceCullR2);
+          if (f.mesh.visible !== vis) f.mesh.visible = vis;
+        }
+      }
       for (let i = 0; i < W.flickers.length; i++) {
         const f = W.flickers[i];
         f.t -= dt;
@@ -4102,9 +4321,14 @@
           f.light.intensity = f.base;
         }
       }
+      const pkCullR = (!pPos || noFog) ? 9999 : (S.viewDistance === 'near' ? 68 : S.viewDistance === 'far' ? 140 : 92);
+      const pkCullR2 = pkCullR * pkCullR;
       for (let i = 0; i < W.pickups.length; i++) {
         const p = W.pickups[i];
-        if (p.taken || p.type === 'rock') continue;
+        if (p.taken) continue;
+        const vis = (!pPos || noFog) ? true : ((pPos.x - p.pos.x) * (pPos.x - p.pos.x) + (pPos.z - p.pos.z) * (pPos.z - p.pos.z) <= pkCullR2);
+        if (p.mesh.visible !== vis) p.mesh.visible = vis;
+        if (!vis || p.type === 'rock') continue;
         p.mesh.position.y = p.baseY + Math.sin(time * 2 + p.pos.x) * 0.06;
         p.mesh.rotation.y += dt;
       }
@@ -4305,7 +4529,13 @@
       return wm;
     };
 
+    W._evOwnedGeos = W._evOwnedGeos || [];
     W.placeEvidence = function () {
+      for (let i = 0; i < W._evOwnedGeos.length; i++) {
+        const g = W._evOwnedGeos[i];
+        if (g && g.dispose) g.dispose();
+      }
+      W._evOwnedGeos.length = 0;
       W.evGroup.clear();
       W.evColliders.length = 0; W.evOccluders.length = 0;
       W.evidence = [];
@@ -4320,9 +4550,16 @@
       const r = Math.random, pk = a => a[(r() * a.length) | 0];
       const leftB = (!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null;
       const used = new Set();
-      const takeEnter = () => {
-        let c = W.enterables.filter(b => !b.sheriff && b !== leftB && !used.has(b));
-        if (!c.length) c = W.enterables.filter(b => !b.sheriff && !used.has(b));
+      const hasRichDesks = W.enterables.some(e => !e.sheriff && e.building && e.building.safeDeskSpots && e.building.safeDeskSpots.length > 0);
+      const hasRichWalls = W.enterables.some(e => !e.sheriff && e.building && e.building.safeWallSpots && e.building.safeWallSpots.length > 0);
+      const takeEnter = (req) => {
+        const match = b => !b.sheriff &&
+          (!req || !req.desk || (b.building && b.building.safeDeskSpots && b.building.safeDeskSpots.length > 0)) &&
+          (!req || !req.wall || (b.building && b.building.safeWallSpots && b.building.safeWallSpots.length > 0));
+        let c = W.enterables.filter(b => b !== leftB && !used.has(b) && match(b));
+        if (!c.length) c = W.enterables.filter(b => !used.has(b) && match(b));
+        if (!c.length) c = W.enterables.filter(match);
+        if (!c.length) c = W.enterables.filter(b => !b.sheriff);
         const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b;
       };
       const takeFront = () => { const c = W.closedFronts.filter(b => !used.has(b) && b.H >= 7); const b = pk(c); used.add(b); if (b && b.building) b.building.hasEvidence = true; return b; };
@@ -4437,7 +4674,7 @@
           cm.position.set(p.x, y, p.z); cm.rotation.y = b.F.yawFront(); W.evGroup.add(cm);
           W.evidence.push({ id: 'claws', name: 'Giant claw marks', pos: new THREE.Vector3(p.x, y, p.z), maxDist: 22, found: false });
         } else {
-          const b = takeEnter(), w = wallSpot(b, 'side');
+          const b = takeEnter({ wall: hasRichWalls }), w = wallSpot(b, 'side');
           const wy = (w.y || 0.14) + 1.66;
           const cm = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 3.0), decalMat(clawTex));
           cm.position.set(w.p.x, wy, w.p.z); cm.rotation.y = w.yaw; W.evGroup.add(cm);
@@ -4447,7 +4684,7 @@
       // 4. survivor's warning — inside on a clean wall, or sprayed outside
       {
         if (r() < 0.6) {
-          const b = takeEnter(), w = wallSpot(b, 'back');
+          const b = takeEnter({ wall: hasRichWalls }), w = wallSpot(b, 'back');
           const wy = (w.y || 0.14) + 1.56;
           const pm = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 2.4), M.warning);
           pm.position.set(w.p.x, wy, w.p.z); pm.rotation.y = w.yaw; W.evGroup.add(pm);
@@ -4463,7 +4700,7 @@
       }
       // 5. CCTV still — on a pre-reserved unblocked security desk inside a random building
       {
-        const b = takeEnter();
+        const b = takeEnter({ desk: hasRichDesks });
         const { F, hd, t, gapA, axis } = b;
         const dSpot = b.building && b.building.safeDeskSpots && b.building.safeDeskSpots.length
           ? pk(b.building.safeDeskSpots)
@@ -4528,9 +4765,61 @@
       W.fixedEvidence.forEach(e => { e.found = false; W.evidence.push(e); });
       W.placeWallMap((!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null);
       if (shadows) W.evGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      {
+        const evOccSet = new Set(W.evOccluders);
+        W.evOccluders.length = 0;
+        mergeSubtreeByMaterial(W.evGroup, {
+          target: W.evGroup,
+          ignoreRootKeepDynamic: true,
+          occSet: evOccSet,
+          outOccluders: W.evOccluders,
+        });
+        W.evGroup.traverse(o => {
+          if (o.isMesh && o.geometry && !(W._keepStaticGeos && W._keepStaticGeos.has(o.geometry)) && !W._evOwnedGeos.includes(o.geometry)) {
+            W._evOwnedGeos.push(o.geometry);
+          }
+        });
+        if (W._keepStaticGeos) {
+          _discardedGeos.forEach(g => {
+            if (g && !W._keepStaticGeos.has(g) && g.dispose) g.dispose();
+          });
+          _discardedGeos.clear();
+        }
+        W.evGroup.updateMatrixWorld(true);
+      }
       W.syncOccluders();
     };
     flushDeco(DECO, W.root);
+
+    // Batch static geometry per building (keeping destructibility & occluders) and chunk static town props in 96m cells
+    {
+      const skipRoot = new Set();
+      for (let i = 0; i < W.buildings.length; i++) {
+        const b = W.buildings[i];
+        skipRoot.add(b.group);
+        const occSet = new Set(b.occluders);
+        b.occluders.length = 0;
+        mergeSubtreeByMaterial(b.group, { target: b.group, occSet, outOccluders: b.occluders });
+      }
+      const baseOccSet = new Set(W.baseOccluders);
+      W.baseOccluders.length = 0;
+      mergeSubtreeByMaterial(W.root, {
+        target: W.root,
+        skipSet: skipRoot,
+        occSet: baseOccSet,
+        outOccluders: W.baseOccluders,
+        cellSize: 96,
+      });
+
+      // Safely dispose geometries that are no longer referenced anywhere in the static world or shared kits
+      const keepGeos = new Set([pineTrunkGeo, pineCrownGeo, deadTreeGeo, fenceGeo, wingFenceGeo25, wingFenceGeo06, _debrisGeo, _plankGeo]);
+      if (KIT) Object.values(KIT).forEach(v => { if (v && v.isBufferGeometry) keepGeos.add(v); });
+      W.root.traverse(o => { if (o.geometry) keepGeos.add(o.geometry); });
+      W._keepStaticGeos = keepGeos;
+      _discardedGeos.forEach(g => { if (g && !keepGeos.has(g) && g.dispose) g.dispose(); });
+      _discardedGeos.clear();
+    }
+
     W.placeEvidence();
 
     // Freeze static world matrices once after assembly to eliminate redundant per-frame matrixWorld walks on low-end CPUs

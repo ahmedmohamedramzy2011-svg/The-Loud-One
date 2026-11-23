@@ -43,7 +43,7 @@
     </nav>
   </div>
   <div class="title-footer">
-    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.7.6</button>
+    <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.7.7</button>
     <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
     <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
@@ -106,117 +106,89 @@
       <button type="button" class="panel-close" data-action="back" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
-      <div class="upd" data-ver="2.7.6"><h3>v2.7.6 <span>current</span></h3><ul>
-        <li>Added 6 environmental hazards across Hollow Creek and the outer woods: Downed Power Lines, Bear Traps, Pressurized Steam Leaks, Broken Window Glass, Creaking Floorboards, and Loose Tin Debris</li>
-        <li>Added dedicated CRT VHS death tapes, Death Room notebook sketches, and survival tips for lethal hazards; crouch-walking bypasses noise hazards and thrown rocks disarm bear traps</li>
-        <li>Reduced render draw calls and eliminated line-of-sight frame drops via geometry batching, O(1) spatial occluder/tree grids, and pooled smash debris</li>
-        <li>Expanded the Testing Admin Panel with a dedicated Hazards tab, hazard debug beacons, and live draw-call/part telemetry</li>
+      <div class="upd" data-ver="2.7.7"><h3>v2.7.7 <span>current</span></h3><ul>
+        <li>Bug fixes</li>
+      </ul></div>
+      <div class="upd" data-ver="2.7.6"><h3>v2.7.6</h3><ul>
+        <li>Added 6 environmental hazards (Power Lines, Bear Traps, Steam Leaks, Broken Glass, Creaking Floorboards, Loose Tin)</li>
+        <li>Added hazard death tapes &amp; survival tips; expanded Admin Panel &amp; optimized draw calls / FPS</li>
       </ul></div>
       <div class="upd" data-ver="2.7.5"><h3>v2.7.5</h3><ul>
-        <li>Added a brief, frame-rate-synchronized white camera strobe flash overlay when snapping photos</li>
-        <li>Added 3 possible wall spawn locations for the Town Survey Map inside the left entrance building (original spot, next to locker, next to shelf)</li>
+        <li>Added camera strobe flash &amp; 3 Town Map spawn spots</li>
       </ul></div>
       <div class="upd" data-ver="2.7.4"><h3>v2.7.4</h3><ul>
-        <li>Added dynamic viewfinder lens flare reacting to the flashlight, camera flash, streetlamps, and moonlight</li>
-        <li>Restored player exhaustion panting audio using the 0–12s breathing clip</li>
-        <li>Fixed ending cutscene camera angles and added building clearance checks so Siren Head's takedown and fall stay unobstructed</li>
+        <li>Added viewfinder lens flare, restored 12s panting audio &amp; bug fixes</li>
       </ul></div>
       <div class="upd" data-ver="2.7.3"><h3>v2.7.3</h3><ul>
-        <li>Added an accelerating heartbeat pulse animation to the Health bar below 30% HP</li>
-        <li>Fixed Moth leg joints so thighs, knees, shins, and feet connect cleanly</li>
-        <li>Combined Graphics, Audio, and Controls into a unified Settings menu and added a Credits screen</li>
-        <li>Standardized Update Log entries for concise readability</li>
+        <li>Added low-HP Health pulse, unified Settings menu, Credits screen &amp; bug fixes</li>
       </ul></div>
       <div class="upd" data-ver="2.7.2"><h3>v2.7.2</h3><ul>
-        <li>Added Survey Map POI labels for town buildings, Sheriff HQ, trail gates, and Lookout Tower</li>
-        <li>Locked Town Survey Map spawn inside the left entrance building</li>
-        <li>Sealed perimeter fence corner seams and the entrance roadblock shoulder gap</li>
-        <li>Increased forest tree density and optimized rendering, collisions, and HUD updates for low-end devices</li>
+        <li>Added map POI labels, left-building map spawn, denser forest, perimeter fixes &amp; optimization</li>
       </ul></div>
       <div class="upd" data-ver="2.7.1"><h3>v2.7.1</h3><ul>
-        <li>Added collectible Town Survey Map mounted inside a building ([E] to take, [M] / [Tab] to view)</li>
-        <li>Added live player tracking, building layouts, woodland trails, evidence markers, and Fast One breaches to the map</li>
+        <li>Added collectible Town Survey Map ([E] take, [M] / [Tab] toggle)</li>
       </ul></div>
       <div class="upd" data-ver="2.7"><h3>v2.7</h3><ul>
-        <li>Opened a playable Woodland Perimeter Ring with timber gates, dirt trails, and outskirt structures</li>
-        <li>Added the Fire Lookout Tower landmark and optional Wrecked Ranger Truck evidence</li>
-        <li>Added threat-reactive bird flock scattering, wind-scaled forest audio, and louder woodland footsteps</li>
-        <li>Reset and paused Siren Head echolocation timer within 50m; adjusted Siren Head and Fast One forest behavior</li>
-        <li>Fixed missing chair legs across building interiors</li>
+        <li>Added Woodland Perimeter Ring, Fire Lookout Tower, forest birds &amp; AI updates</li>
+        <li>Bug fixes</li>
       </ul></div>
       <div class="upd" data-ver="2.6.3"><h3>v2.6.3</h3><ul>
-        <li>Added animated 3D forest birds perching and flying along the perimeter</li>
-        <li>Updated ambient birdsong to fade out during loud player movement</li>
+        <li>Added 3D forest birds &amp; noise-reactive birdsong</li>
       </ul></div>
       <div class="upd" data-ver="2.6.2"><h3>v2.6.2</h3><ul>
-        <li>Fixed interior geometry seams, stairwell blockages, and prop placement bugs</li>
-        <li>Corrected the title screen Hollow Creek sign camera angle</li>
-        <li>Added randomized exterior birdsong and proximity camera shake near heavy machinery</li>
+        <li>Added machinery camera shake, birdsong &amp; bug fixes</li>
       </ul></div>
       <div class="upd" data-ver="2.6.1"><h3>v2.6.1</h3><ul>
-        <li>Added 10 structured building interior presets across 1-story, 2-story, and rooftop layouts</li>
-        <li>Added an exclusive two-story Sheriff HQ with holding cell and rooftop radio mast</li>
-        <li>Updated stamina bar with green-to-yellow-to-red exhaustion color transitions</li>
-        <li>Removed max-noise screen static and player panting audio</li>
+        <li>Added 10 interior presets, Sheriff HQ &amp; stamina color gradient</li>
       </ul></div>
       <div class="upd" data-ver="2.6"><h3>v2.6</h3><ul>
-        <li>Added multi-story interiors, stairwell blockades, and improved prop placement</li>
-        <li>Added proximity-reactive forest ambiance and updated wood-break, footstep, and hurt audio</li>
-        <li>Streamlined subtitles and eliminated Fast One spawn stutter</li>
+        <li>Added multi-floor interiors, forest ambiance, SFX overhaul &amp; performance pass</li>
       </ul></div>
       <div class="upd" data-ver="2.5.1"><h3>v2.5.1</h3><ul>
-        <li>Added dynamic handheld flashlight sway and color-coded adaptive subtitles</li>
-        <li>Refined title screen camera sequence and ending credits</li>
+        <li>Added flashlight sway, colored subtitles &amp; title polish</li>
       </ul></div>
       <div class="upd" data-ver="2.5"><h3>v2.5</h3><ul>
-        <li>Re-voiced police dispatcher lines and added realistic locker slit visibility</li>
-        <li>Doubled sprint stamina duration, remodeled forest foliage, and improved frame rate</li>
+        <li>Re-voiced dispatcher audio, locker slits, 2x stamina &amp; tree remodel</li>
       </ul></div>
       <div class="upd" data-ver="2.4.5"><h3>v2.4.5</h3><ul>
-        <li>Remodeled roadblocks, highway signage, and intro barricade ramming</li>
-        <li>Added solid perimeter fence collisions with wood debris on breach</li>
+        <li>Remodeled roadblocks, intro ramming, highway signs &amp; fence collisions</li>
       </ul></div>
       <div class="upd" data-ver="2.4.4"><h3>v2.4.4</h3><ul>
-        <li>Improved Giant Footprint visibility and randomized Sheriff&#39;s Station location</li>
-        <li>Added a 60-second post-attack cooldown for Phenomenon-242</li>
+        <li>Randomized Sheriff&#39;s Station, Fast One cooldown &amp; clearer footprint</li>
       </ul></div>
       <div class="upd" data-ver="2.4.3"><h3>v2.4.3</h3><ul>
-        <li>Added Fast One breach telegraph, rebalanced adrenaline recovery, and placed exterior dumpsters</li>
-        <li>Updated Siren Head to investigate perimeter fence breaches</li>
+        <li>Added Fast One breach telegraph, exterior dumpsters &amp; adrenaline balance</li>
       </ul></div>
       <div class="upd" data-ver="2.4.2"><h3>v2.4.2</h3><ul>
-        <li>Added playable Version Switcher, death room sketches, CRT tape effects, and mobile scroll support</li>
+        <li>Added Version Switcher, death sketches &amp; CRT effects</li>
       </ul></div>
       <div class="upd" data-ver="2.4.1"><h3>v2.4.1</h3><ul>
-        <li>Enabled Siren Head demolition of non-evidence buildings with impact camera shake</li>
-        <li>Cleaned up town prop geometry and floating-plank defects</li>
+        <li>Added Siren Head building destruction &amp; bug fixes</li>
       </ul></div>
       <div class="upd" data-ver="2.4"><h3>v2.4</h3><ul>
-        <li>Added entity: The Fast One (Phenomenon-242) with afterimages, highlighted safe spots, and adrenaline surge</li>
-        <li>Fixed The Sneaky One death screen trigger; adjusted Silent One damage (10) and Tenant blind cost (90%)</li>
+        <li>Added entity: The Fast One (Phenomenon-242) &amp; balance changes</li>
       </ul></div>
       <div class="upd" data-ver="2.3"><h3>v2.3</h3><ul>
-        <li>Remodeled buildings, props, vehicles, Moths, helicopter, and power winches</li>
-        <li>Added locker and dumpster animations and updated dispatcher voice lines</li>
+        <li>Remodeled buildings, props, vehicles, Moths &amp; hiding animations</li>
       </ul></div>
       <div class="upd" data-ver="2.2"><h3>v2.2</h3><ul>
-        <li>Added entity: The Sneaky One; increased Moth count and reaction speed</li>
+        <li>Added entity: The Sneaky One; updated Moth count &amp; speed</li>
       </ul></div>
       <div class="upd" data-ver="2.1"><h3>v2.1</h3><ul>
-        <li>Added recorded voice lines, TV-static death sequence, death music, Fast Death option, and Tenant rework</li>
+        <li>Added Death Room TV, voice lines, Fast Death &amp; Tenant rework</li>
       </ul></div>
       <div class="upd" data-ver="2.0"><h3>v2.0</h3><ul>
-        <li>Added entity: The Exposure, 3D Death Room, Sheriff&#39;s Station, randomized evidence, and Siren Head overhaul</li>
+        <li>Added entity: The Exposure, 3D Death Room, Sheriff&#39;s Station &amp; randomized evidence</li>
       </ul></div>
       <div class="upd" data-ver="1.9"><h3>v1.9</h3><ul><li>Added entity: The Moths</li></ul></div>
-      <div class="upd" data-ver="1.8"><h3>v1.8</h3><ul><li>Added echolocation, throwable rocks, and silence mechanic</li></ul></div>
-      <div class="upd" data-ver="1.7"><h3>v1.7</h3><ul><li>Update log and version compatibility fixes</li></ul></div>
+      <div class="upd" data-ver="1.8"><h3>v1.8</h3><ul><li>Added echolocation, throwable rocks &amp; silence mechanic</li></ul></div>
+      <div class="upd" data-ver="1.7"><h3>v1.7</h3><ul><li>Bug fixes</li></ul></div>
       <div class="upd" data-ver="1.6"><h3>v1.6</h3><ul><li>Added dynamic wind system</li></ul></div>
-      <div class="upd" data-ver="1.5"><h3>v1.5</h3><ul><li>Added Health bar and entity: The Silent One</li></ul></div>
-      <div class="upd" data-ver="1.4"><h3>v1.4</h3><ul><li>Increased Siren Head speed; added entity: The Tenant</li></ul></div>
-      <div class="upd" data-ver="1.3"><h3>v1.3</h3><ul><li>Added hint system and darker night lighting</li></ul></div>
-      <div class="upd" data-ver="1.2"><h3>v1.2</h3><ul><li>Added touch controls for mobile devices</li></ul></div>
-      <div class="upd" data-ver="1.1"><h3>v1.1</h3><ul><li>General bug fixes</li></ul></div>
+      <div class="upd" data-ver="1.5"><h3>v1.5</h3><ul><li>Added Health bar &amp; entity: The Silent One</li></ul></div>
+      <div class="upd" data-ver="1.4"><h3>v1.4</h3><ul><li>Added entity: The Tenant &amp; faster Siren Head</li></ul></div>
+      <div class="upd" data-ver="1.3"><h3>v1.3</h3><ul><li>Added hint system &amp; darker lighting</li></ul></div>
+      <div class="upd" data-ver="1.2"><h3>v1.2</h3><ul><li>Added mobile touch controls</li></ul></div>
+      <div class="upd" data-ver="1.1"><h3>v1.1</h3><ul><li>Bug fixes</li></ul></div>
       <div class="upd" data-ver="1.0"><h3>v1.0</h3><ul><li>Initial release</li></ul></div>
     </div>
   </div>

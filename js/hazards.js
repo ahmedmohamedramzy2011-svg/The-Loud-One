@@ -530,14 +530,21 @@ window.LO = window.LO || {};
       if (siren && siren.hearNoise && !(LO.admin && LO.admin.zeroNoise)) siren.hearNoise(player.pos, radius);
     };
 
+    const vd = (LO.settings && LO.settings.viewDistance) || 'medium';
+    const noFog = !!(LO.admin && LO.admin.noFog);
+    const hazCullR = (!pPos || noFog) ? 9999 : (vd === 'near' ? 85 : vd === 'far' ? 165 : 115);
+    const hazCullR2 = hazCullR * hazCullR;
+
     for (let i = 0; i < this.list.length; i++) {
       const h = this.list[i];
-      const allowed = this._isAllowed(h);
-      if (h.group.visible !== allowed) h.group.visible = allowed;
-      if (!allowed) continue;
-
       if (h.hitCd > 0) h.hitCd = Math.max(0, h.hitCd - dt);
       if (h.stepCd > 0) h.stepCd = Math.max(0, h.stepCd - dt);
+      const allowed = this._isAllowed(h);
+      const inRange = !allowed || !pPos || noFog ||
+        ((h.pos.x - pPos.x) * (h.pos.x - pPos.x) + (h.pos.z - pPos.z) * (h.pos.z - pPos.z) <= hazCullR2);
+      const vis = allowed && inRange;
+      if (h.group.visible !== vis) h.group.visible = vis;
+      if (!vis) continue;
 
       if (h.type === 'powerline') {
         const cyc = (time + h.phase) % h.cycleLen;

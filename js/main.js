@@ -257,6 +257,20 @@
     parkedCar = null;
     worldDirty = false;
     applyDisplay();
+    let _prevMothRootVis = false, _prevMoth0Vis = false, _prevSneakyVis = false;
+    if (moths) {
+      _prevMothRootVis = moths.root.visible;
+      moths.root.visible = true;
+      if (moths.moths && moths.moths[0]) {
+        _prevMoth0Vis = moths.moths[0].g.visible;
+        moths.moths[0].g.visible = true;
+      }
+    }
+    if (sneaky && sneaky.root) {
+      _prevSneakyVis = sneaky.root.visible;
+      sneaky.root.visible = true;
+    }
+    if (hazards && hazards.setCompileWarmup) hazards.setCompileWarmup(true);
     if (fastone) {
       fastone.getWalkGrid && fastone.getWalkGrid();
       fastone.root.visible = true;
@@ -276,6 +290,12 @@
       if (world && world.hideSpots && world.hideSpots[0] && world.hideSpots[0]._hlGroup) {
         world.hideSpots[0]._hlGroup.visible = false;
       }
+    }
+    if (hazards && hazards.setCompileWarmup) hazards.setCompileWarmup(false);
+    if (sneaky && sneaky.root) sneaky.root.visible = _prevSneakyVis;
+    if (moths) {
+      moths.root.visible = _prevMothRootVis;
+      if (moths.moths && moths.moths[0]) moths.moths[0].g.visible = _prevMoth0Vis;
     }
   }
 
@@ -1509,9 +1529,7 @@
     const vfEl = hudEl('viewfinder', () => $('viewfinder'));
     vfEl.style.opacity = glitch ? (Math.random() < 0.4 ? 0.15 : 1) : '';
     const rootEl = hudEl('gameRoot', () => document.getElementById('game-root'));
-    const nextFilter = (glitch && Math.random() < 0.3)
-      ? 'brightness(0.15) contrast(1.6)'
-      : (player.dizzy > 0.04 ? `blur(${(Math.round(Math.min(1, player.dizzy) * 10) * 0.25).toFixed(2)}px)` : '');
+    const nextFilter = (glitch && Math.random() < 0.3) ? 'brightness(0.15) contrast(1.6)' : '';
     if (nextFilter !== lastRootFilter) {
       lastRootFilter = nextFilter;
       rootEl.style.filter = nextFilter;
@@ -1543,19 +1561,52 @@
     }
   }
 
-  function capturePhoto() {
-    if (!pendingCapture) return;
-    const { ev } = pendingCapture;
-    pendingCapture = null;
-    let url = '';
-    try { url = renderer.domElement.toDataURL('image/jpeg', 0.75); } catch (e) { /* ignore */ }
-    $('photo-img').src = url;
+  let _photoCapCanvas = null, _photoCapCtx = null, _photoBlobUrl = '';
+  function showCapturedPhoto(url, ev) {
+    const img = $('photo-img');
+    if (img) img.src = url || '';
     $('photo-caption').textContent = ev ? ev.name : 'Nothing useful...';
     const pop = $('photo-pop');
     pop.classList.add('show');
     clearTimeout(pop._t);
     pop._t = setTimeout(() => pop.classList.remove('show'), ev ? 3200 : 1800);
     if (!ev) hintOnce('nothing', 'Nothing useful in that shot.', 3000);
+  }
+  function capturePhoto() {
+    if (!pendingCapture) return;
+    const { ev } = pendingCapture;
+    pendingCapture = null;
+    try {
+      const src = renderer && renderer.domElement;
+      if (!src) { showCapturedPhoto('', ev); return; }
+      if (!_photoCapCanvas) {
+        _photoCapCanvas = document.createElement('canvas');
+        _photoCapCanvas.width = 320;
+        _photoCapCanvas.height = 200;
+        _photoCapCtx = _photoCapCanvas.getContext('2d');
+      }
+      if (_photoCapCtx) {
+        _photoCapCtx.drawImage(src, 0, 0, _photoCapCanvas.width, _photoCapCanvas.height);
+        if (_photoCapCanvas.toBlob && typeof URL !== 'undefined' && URL.createObjectURL) {
+          _photoCapCanvas.toBlob(blob => {
+            if (_photoBlobUrl && URL.revokeObjectURL) {
+              try { URL.revokeObjectURL(_photoBlobUrl); } catch (e) { /* ignore */ }
+              _photoBlobUrl = '';
+            }
+            if (blob) {
+              _photoBlobUrl = URL.createObjectURL(blob);
+              showCapturedPhoto(_photoBlobUrl, ev);
+            } else {
+              showCapturedPhoto('', ev);
+            }
+          }, 'image/jpeg', 0.76);
+          return;
+        }
+        showCapturedPhoto(_photoCapCanvas.toDataURL('image/jpeg', 0.76), ev);
+        return;
+      }
+    } catch (e) { /* ignore */ }
+    showCapturedPhoto('', ev);
   }
 
   // ============================================================

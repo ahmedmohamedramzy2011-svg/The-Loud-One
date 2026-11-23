@@ -325,13 +325,16 @@
     }
     const BEAM_COS = Math.cos(BEAM_ANGLE);
     const BEAM_RANGE_SQ = BEAM_RANGE * BEAM_RANGE;
+    const MOTH_VIS_R2 = (LO.admin && LO.admin.fullbright) ? 1e9 : 60 * 60;
     const beamActive = player.flashOn && player.flash.intensity > 0.5 && !player.hidden;
     this._frame = (this._frame + 1) | 0;
     const camP = camera.position;
     for (let idx = 0; idx < this.moths.length; idx++) {
       const m = this.moths[idx];
       if (idx >= activeLimit) { m.g.visible = false; continue; }
-      m.g.visible = m.active && show;
+      const mdx = m.g.position.x - camP.x, mdz = m.g.position.z - camP.z;
+      const md2 = mdx * mdx + mdz * mdz;
+      m.g.visible = m.active && show && md2 <= MOTH_VIS_R2;
       if (!m.active) {
         m.cooldown -= dt;
         if (m.cooldown <= 0) this.place(m);   // it settles somewhere else

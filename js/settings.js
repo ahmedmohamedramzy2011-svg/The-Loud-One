@@ -27,41 +27,42 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.7.6',
-    autoLatest: '2.7.6',
+    gameVersion: '2.7.7',
+    autoLatest: '2.7.7',
   }, PRESETS.medium);
 
   const VERSIONS = [
-    { id: '2.7.6', label: 'v2.7.6', era: '6 environmental hazards, 3 hazard death tapes, draw-call/FPS optimization & expanded Admin Panel' },
-    { id: '2.7.5', label: 'v2.7.5', era: 'Frame-synced camera strobe flash & 3 randomized Town Map wall locations' },
-    { id: '2.7.4', label: 'v2.7.4', era: 'Dynamic viewfinder lens flare, 12s panting audio restoration & ending cutscene camera fix' },
-    { id: '2.7.3', label: 'v2.7.3', era: 'Health heartbeat pulse below 30% HP, Moth leg joint fix, unified Settings menu, Credits screen & streamlined changelog' },
-    { id: '2.7.2', label: 'v2.7.2', era: 'Map POI labels, fixed left-building map spawn, sealed perimeter seams, denser forest & low-end optimization' },
-    { id: '2.7.1', label: 'v2.7.1', era: 'Collectible Town Survey Map (E to take, M / Tab to toggle) with live tracking & breaches' },
-    { id: '2.7',   label: 'v2.7',   era: 'Woodland Perimeter Ring, Lookout Tower, forest trails, bird alarm, and forest Siren Head / Fast One AI' },
-    { id: '2.6.3', label: 'v2.6.3', era: '3D forest birds with noise-reactive ambient birdsong' },
-    { id: '2.6.2', label: 'v2.6.2', era: 'Interior layout fixes, title sign camera fix, forest birdsong & machinery shake' },
-    { id: '2.6.1', label: 'v2.6.1', era: '10 building presets, unique Sheriff HQ, stamina gradient & audio/visual cleanup' },
-    { id: '2.6',   label: 'v2.6',   era: 'Multi-floor interiors, proximity forest audio, sound effects overhaul, spawn & performance fixes' },
-    { id: '2.5.1', label: 'v2.5.1', era: 'Dynamic flashlight sway, color-coded subtitles, refined title screen & credits' },
-    { id: '2.5',   label: 'v2.5',   era: 'Re-voiced dispatcher audio, locker slit visibility, 2x stamina, remodeled trees & optimization' },
-    { id: '2.4.5', label: 'v2.4.5', era: 'Remodeled roadblocks, intro barricade ramming, highway signage & fence debris' },
-    { id: '2.4.4', label: 'v2.4.4', era: 'Clearer footprint evidence, Fast One attack cooldown, randomized Sheriff\'s Station' },
-    { id: '2.4.3', label: 'v2.4.3', era: 'Fast One breach telegraph, adrenaline recovery balance & exterior dumpsters' },
-    { id: '2.4.2', label: 'v2.4.2', era: 'Version switcher, death screen sketches, CRT tape upgrade & mobile UI fixes' },
-    { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building destruction, evidence pathing & low-poly geometry pass' },
-    { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-242), Sneaky fix, Silent 10 dmg, Tenant 90% blind' },
-    { id: '2.3',   label: 'v2.3',   era: 'Remodeled props & hiding animations (before The Fast One)' },
-    { id: '2.2',   label: 'v2.2',   era: 'The Sneaky One + 24 faster Moths (1s stare limit)' },
-    { id: '2.1',   label: 'v2.1',   era: 'Tenant 1-eye rework & blind, Fast Death option, 12 slower Moths' },
-    { id: '2.0',   label: 'v2.0',   era: 'The Exposure & 3D Death Room (before Tenant blind & voice lines)' },
-    { id: '1.9',   label: 'v1.9',   era: 'The Moths added; classic game-over screen' },
-    { id: '1.8',   label: 'v1.8',   era: 'Echolocation, throwable rocks, wind-stop silence mechanic' },
-    { id: '1.6',   label: 'v1.6',   era: 'Wind atmosphere (before echolocation & rocks)' },
-    { id: '1.5',   label: 'v1.5',   era: '100 HP Health bar & The Silent One' },
-    { id: '1.4',   label: 'v1.4',   era: 'The Tenant hiding danger & faster Siren Head' },
-    { id: '1.3',   label: 'v1.3',   era: 'Hint system & darker lighting (safe lockers)' },
-    { id: '1.0',   label: 'v1.0',   era: 'Original base game — Siren Head only, brighter night, no hints' },
+    { id: '2.7.7', label: 'v2.7.7', era: 'Bug fixes' },
+    { id: '2.7.6', label: 'v2.7.6', era: '6 hazards, hazard death tapes, FPS optimization & Admin Panel' },
+    { id: '2.7.5', label: 'v2.7.5', era: 'Camera strobe flash & 3 Town Map wall locations' },
+    { id: '2.7.4', label: 'v2.7.4', era: 'Viewfinder lens flare, 12s panting audio & ending camera fix' },
+    { id: '2.7.3', label: 'v2.7.3', era: 'Low-HP heartbeat pulse, Moth legs fix, Settings menu & Credits' },
+    { id: '2.7.2', label: 'v2.7.2', era: 'Map POI labels, left-building map spawn, sealed seams & optimization' },
+    { id: '2.7.1', label: 'v2.7.1', era: 'Collectible Town Survey Map with live tracking & breaches' },
+    { id: '2.7',   label: 'v2.7',   era: 'Woodland Perimeter Ring, Lookout Tower & forest AI' },
+    { id: '2.6.3', label: 'v2.6.3', era: '3D forest birds & reactive birdsong' },
+    { id: '2.6.2', label: 'v2.6.2', era: 'Interior/camera bug fixes & machinery shake' },
+    { id: '2.6.1', label: 'v2.6.1', era: '10 building presets, Sheriff HQ & stamina gradient' },
+    { id: '2.6',   label: 'v2.6',   era: 'Multi-floor interiors, forest audio & performance pass' },
+    { id: '2.5.1', label: 'v2.5.1', era: 'Flashlight sway, color-coded subtitles & title polish' },
+    { id: '2.5',   label: 'v2.5',   era: 'Dispatcher audio, locker slits, 2x stamina & foliage' },
+    { id: '2.4.5', label: 'v2.4.5', era: 'Roadblocks, intro barricade ramming & fence collisions' },
+    { id: '2.4.4', label: 'v2.4.4', era: 'Clearer footprint, Fast One cooldown & random Sheriff HQ' },
+    { id: '2.4.3', label: 'v2.4.3', era: 'Fast One breach telegraph, adrenaline & dumpsters' },
+    { id: '2.4.2', label: 'v2.4.2', era: 'Version switcher, death room sketches & CRT upgrade' },
+    { id: '2.4.1', label: 'v2.4.1', era: 'Siren Head building demolition & geometry pass' },
+    { id: '2.4',   label: 'v2.4',   era: 'The Fast One (Phenomenon-242) & balance changes' },
+    { id: '2.3',   label: 'v2.3',   era: 'Remodeled props, vehicles & hiding animations' },
+    { id: '2.2',   label: 'v2.2',   era: 'The Sneaky One & 24 faster Moths' },
+    { id: '2.1',   label: 'v2.1',   era: 'Death Room TV, voice lines & Tenant rework' },
+    { id: '2.0',   label: 'v2.0',   era: 'The Exposure & 3D Death Room' },
+    { id: '1.9',   label: 'v1.9',   era: 'The Moths' },
+    { id: '1.8',   label: 'v1.8',   era: 'Echolocation, throwable rocks & wind stillness' },
+    { id: '1.6',   label: 'v1.6',   era: 'Wind atmosphere' },
+    { id: '1.5',   label: 'v1.5',   era: 'Health bar & The Silent One' },
+    { id: '1.4',   label: 'v1.4',   era: 'The Tenant & faster Siren Head' },
+    { id: '1.3',   label: 'v1.3',   era: 'Hint system & darker lighting' },
+    { id: '1.0',   label: 'v1.0',   era: 'Original release (Siren Head only)' },
   ];
 
   function verNum(id) {
@@ -135,7 +136,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === '2.7.6' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }
