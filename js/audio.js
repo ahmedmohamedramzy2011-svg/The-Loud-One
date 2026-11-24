@@ -68,6 +68,7 @@
   // ---------- recorded sounds: death screen music, Tenant ringing ----------
   const samples = {};
   const voiceSamples = {};   // the player's recorded lines, keyed by subtitle text
+  const voicePending = {};   // in-flight fetch/decode promises keyed by subtitle text
   function decodeB64(b64, cb) {
     try {
       const bin = atob(b64);
@@ -75,6 +76,31 @@
       for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
       ctx.decodeAudioData(buf.buffer, cb, () => {});
     } catch (e) { /* missing sound is not fatal */ }
+  }
+  function loadVoiceClip(text, val) {
+    if (!val || !ctx) return;
+    if (typeof val === 'string' && (val.startsWith('/') || val.startsWith('assets/') || val.startsWith('http'))) {
+      if (typeof fetch !== 'function') return;
+      const p = fetch(val)
+        .then(r => (r && r.ok) ? r.arrayBuffer() : null)
+        .then(ab => new Promise(resolve => {
+          if (!ab || !ctx) { resolve(null); return; }
+          try {
+            ctx.decodeAudioData(ab, buf => {
+              if (buf) voiceSamples[text] = buf;
+              resolve(buf || null);
+            }, () => resolve(null));
+          } catch (e) { resolve(null); }
+        }))
+        .catch(() => null)
+        .then(buf => {
+          delete voicePending[text];
+          return buf;
+        });
+      voicePending[text] = p;
+      return;
+    }
+    decodeB64(val, b => { voiceSamples[text] = b; });
   }
   const BREATH_MAX_SEC = 12.0;
   A.BREATH_MAX_SEC = BREATH_MAX_SEC;
@@ -112,7 +138,7 @@
   }
   function loadSamples() {
     const V = LO.VOICE_DATA;
-    if (V) Object.keys(V).forEach(text => decodeB64(V[text], b => { voiceSamples[text] = b; }));
+    if (V) Object.keys(V).forEach(text => loadVoiceClip(text, V[text]));
     loadBreathingClip();
     const D = LO.SOUND_DATA;
     if (!D) return;
@@ -1739,6 +1765,7 @@
   A.clearSubs = function () { const el = subsEl(); if (el) el.innerHTML = ''; };
 
   let speaking = false;
+  let voiceGen = 0;
   const queue = [];
   // say(role, text, opts) — role: player | radio | siren
   // returns a promise that resolves when the line is done
@@ -1757,6 +1784,7 @@
   }
   function speakNow(item, overlay) {
     const { role, text, opts, resolve } = item;
+    const gen = voiceGen;
     const dyn = !LO.ver || LO.ver().dynamicSubs;
     const meta = SUB_ROLES[role] || { name: '???', cls: role || '' };
     const legacyNames = { player: 'You', radio: 'Dispatch', siren: '???' };
@@ -1769,74 +1797,92 @@
       if (!overlay) { speaking = false; setTimeout(pump, 250); }
       resolve();
     };
+    const cancel = () => {
+      if (done) return; done = true;
+      resolve();
+    };
     if (!overlay) speaking = true;
 
-    if (role === 'radio') { A.radioIn(); }
-    if (A.still) { setTimeout(finish, 50); return; } // the world is silent
-    // recorded voice lines (player & dispatch), when there is a take for this line
-    const rec = (role === 'player' || role === 'radio') && voiceSamples[text];
-    if (rec && S.tts && S.voice > 0 && ctx) {
-      showSub(who, text, cls, rec.duration * 1000 + 900, opts);
-      const src = ctx.createBufferSource(); src.buffer = rec;
-      if (role === 'radio') {
-        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
-        const warm = ctx.createBiquadFilter(); warm.type = 'peaking'; warm.frequency.value = 150; warm.Q.value = 0.9; warm.gain.value = 3.5;
-        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4600;
-        const g = ctx.createGain(); g.gain.value = 1.25;
-        src.connect(hp); hp.connect(warm); warm.connect(lp); lp.connect(g); g.connect(voiceBus);
-      } else {
-        src.connect(voiceBus);
+    const playItem = () => {
+      if (gen !== voiceGen) { cancel(); return; }
+      if (role === 'radio') { A.radioIn(); }
+      if (A.still) { setTimeout(finish, 50); return; } // the world is silent
+      // recorded voice lines (player & dispatch), when there is a take for this line
+      const rec = (role === 'player' || role === 'radio') && voiceSamples[text];
+      if (rec && S.tts && S.voice > 0 && ctx) {
+        showSub(who, text, cls, rec.duration * 1000 + 900, opts);
+        const src = ctx.createBufferSource(); src.buffer = rec;
+        if (role === 'radio') {
+          const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
+          const warm = ctx.createBiquadFilter(); warm.type = 'peaking'; warm.frequency.value = 150; warm.Q.value = 0.9; warm.gain.value = 3.5;
+          const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4600;
+          const g = ctx.createGain(); g.gain.value = 1.25;
+          src.connect(hp); hp.connect(warm); warm.connect(lp); lp.connect(g); g.connect(voiceBus);
+        } else {
+          src.connect(voiceBus);
+        }
+        let finished = false;
+        const doneRec = (quiet) => {
+          if (finished) return; finished = true;
+          if (currentRec === src) currentRec = null;
+          if (role === 'radio' && !quiet) A.radioOut();
+          finish();
+        };
+        src.onended = () => doneRec(!!src._stopped);
+        src.start();
+        currentRec = src;
+        setTimeout(() => doneRec(false), rec.duration * 1000 + 1500);  // safety net
+        return;
       }
-      let finished = false;
-      const doneRec = (quiet) => {
-        if (finished) return; finished = true;
-        if (currentRec === src) currentRec = null;
-        if (role === 'radio' && !quiet) A.radioOut();
-        finish();
-      };
-      src.onended = () => doneRec(!!src._stopped);
-      src.start();
-      currentRec = src;
-      setTimeout(() => doneRec(false), rec.duration * 1000 + 1500);  // safety net
+      const canSpeak = synth && S.tts && S.voice > 0 && (!overlay || !synth.speaking);
+      showSub(who, text, cls, est + 1200, opts);
+      if (canSpeak) {
+        try {
+          const u = new SpeechSynthesisUtterance(text);
+          const v = pickVoice(role); if (v) u.voice = v;
+          if (role === 'player') { u.pitch = 0.9; u.rate = 0.98; }
+          if (role === 'radio') { u.pitch = 0.78; u.rate = 0.96; }
+          if (role === 'siren') { u.pitch = 0.05; u.rate = 0.55; }
+          if (opts.rate) u.rate *= opts.rate;
+          u.volume = Math.max(0, Math.min(1, S.voice * S.master * (opts.volume === undefined ? 1 : opts.volume)));
+          if (role === 'radio') {
+            const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+            let i = 0;
+            const next = () => {
+              if (i >= parts.length) { A.radioOut(); finish(); return; }
+              const pu = new SpeechSynthesisUtterance(parts[i++]);
+              pu.voice = u.voice; pu.pitch = u.pitch * (0.97 + Math.random() * 0.06); pu.rate = u.rate * (0.95 + Math.random() * 0.08); pu.volume = u.volume;
+              pu.onend = () => setTimeout(next, 140 + Math.random() * 160); pu.onerror = () => { A.radioOut(); finish(); };
+              synth.speak(pu);
+            };
+            next();
+          } else {
+            u.onend = finish; u.onerror = finish;
+            synth.speak(u);
+          }
+          // safety net in case onend never fires
+          setTimeout(finish, est * 2.2 + 2500);
+        } catch (e) { setTimeout(finish, est); }
+      } else {
+        setTimeout(finish, est);
+      }
+    };
+
+    if (A.still) { setTimeout(finish, 50); return; } // the world is silent
+    if ((role === 'player' || role === 'radio') && !voiceSamples[text] && voicePending[text] && S.tts && S.voice > 0 && ctx) {
+      Promise.race([
+        voicePending[text],
+        new Promise(r => setTimeout(r, 1500))
+      ]).then(playItem);
       return;
     }
-    const canSpeak = synth && S.tts && S.voice > 0 && (!overlay || !synth.speaking);
-    showSub(who, text, cls, est + 1200, opts);
-    if (canSpeak) {
-      try {
-        const u = new SpeechSynthesisUtterance(text);
-        const v = pickVoice(role); if (v) u.voice = v;
-        if (role === 'player') { u.pitch = 0.9; u.rate = 0.98; }
-        if (role === 'radio') { u.pitch = 0.78; u.rate = 0.96; }
-        if (role === 'siren') { u.pitch = 0.05; u.rate = 0.55; }
-        if (opts.rate) u.rate *= opts.rate;
-        u.volume = Math.max(0, Math.min(1, S.voice * S.master * (opts.volume === undefined ? 1 : opts.volume)));
-        if (role === 'radio') {
-          const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
-          let i = 0;
-          const next = () => {
-            if (i >= parts.length) { A.radioOut(); finish(); return; }
-            const pu = new SpeechSynthesisUtterance(parts[i++]);
-            pu.voice = u.voice; pu.pitch = u.pitch * (0.97 + Math.random() * 0.06); pu.rate = u.rate * (0.95 + Math.random() * 0.08); pu.volume = u.volume;
-            pu.onend = () => setTimeout(next, 140 + Math.random() * 160); pu.onerror = () => { A.radioOut(); finish(); };
-            synth.speak(pu);
-          };
-          next();
-        } else {
-          u.onend = finish; u.onerror = finish;
-          synth.speak(u);
-        }
-        // safety net in case onend never fires
-        setTimeout(finish, est * 2.2 + 2500);
-      } catch (e) { setTimeout(finish, est); }
-    } else {
-      setTimeout(finish, est);
-    }
+    playItem();
   }
   let currentRec = null;
   A.recordedLines = () => Object.keys(voiceSamples).length;
   A.isPlayingRecording = () => !!currentRec;
   A.stopVoices = function () {
+    voiceGen++;
     queue.length = 0;
     if (currentRec) { try { currentRec._stopped = true; currentRec.stop(); } catch (e) {} currentRec = null; }
     if (synth) try { synth.cancel(); } catch (e) {}
