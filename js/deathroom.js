@@ -70,10 +70,10 @@
       'Listen for the warning hiss and wait out the burst',
     ] },
     fall: { name: 'THE DROP', label: 'HAZARD — GRAVITY', tips: [
-      'Building rooftops & fire towers sit high above the street',
-      'Unfenced roof edges drop straight to concrete below',
-      'Stepping or leaping from upper heights cripples or kills you',
-      'Turn around and take the interior stairs down safely',
+      'Unfenced rooftops & towers sit high above town',
+      '1F drops deal ~15 HP; 2F (~68 HP) & towers kill',
+      'Heavy landings draw Siren Head toward the sound',
+      'Watch for wind rush and take the stairs down',
     ] },
   };
   LO.DEATH_ENTRIES = ENTRIES;
@@ -377,7 +377,7 @@
       pencil(g, [[w * 0.26, h * 0.24], [w * 0.21, h * 0.28], [w * 0.27, h * 0.32]], 2, 1.5);
       g.fillStyle = '#9e1c16'; g.font = `26px ${HAND}`; g.fillText('no railing!', w * 0.54, h * 0.28);
       g.fillStyle = '#1f5b99'; g.font = `24px ${HAND}`; g.fillText('take stairs', w * 0.14, h * 0.19);
-      g.fillStyle = '#333'; g.font = `22px ${HAND}`; g.fillText('7.5m drop...', w * 0.59, h * 0.57);
+      g.fillStyle = '#333'; g.font = `22px ${HAND}`; g.fillText('>2.5m hurts!', w * 0.57, h * 0.57);
       g.restore();
     },
   };
@@ -854,17 +854,28 @@
     g.save(); g.translate(26, 60); (SKETCH[this.cause] || SKETCH.siren)(g, 460, 560); g.restore();
     g.fillStyle = '#333'; g.font = `34px ${HAND}`; g.fillText('fig. 1', 30, 650);
     this.sketchTex.needsUpdate = true;
-    // tips page
+    // tips page (auto-fit font size so long tip blocks never clip past bottom margin)
     g = this.tipsCanvas.getContext('2d');
     paper(g, 512, 680);
     g.fillStyle = '#1b1b1b'; g.font = `bold 58px ${HAND}`; g.fillText(E.name, 34, 92);
     g.strokeStyle = '#1b1b1b'; g.lineWidth = 3; g.beginPath(); g.moveTo(34, 104); g.lineTo(34 + g.measureText(E.name).width, 106); g.stroke();
-    g.font = `bold 44px ${HAND}`;
+    let tipSize = 44, lineH = 44, paraGap = 18, tipBlocks = null;
+    while (tipSize >= 32) {
+      g.font = `bold ${tipSize}px ${HAND}`;
+      lineH = tipSize;
+      paraGap = Math.round(tipSize * 0.41);
+      tipBlocks = E.tips.map(t => wrap(g, '- ' + t, 440));
+      let totalLines = 0;
+      for (let i = 0; i < tipBlocks.length; i++) totalLines += tipBlocks[i].length;
+      const endY = 175 + totalLines * lineH + Math.max(0, tipBlocks.length - 1) * paraGap;
+      if (endY <= 644) break;
+      tipSize -= 2;
+    }
+    g.font = `bold ${tipSize}px ${HAND}`;
     let y = 175;
-    E.tips.forEach(t => {
-      const lines = wrap(g, '- ' + t, 440);
-      lines.forEach((l, i) => { g.fillText(l, i ? 58 : 34, y); y += 44; });
-      y += 18;
+    tipBlocks.forEach(lines => {
+      lines.forEach((l, i) => { g.fillText(l, i ? 58 : 34, y); y += lineH; });
+      y += paraGap;
     });
     this.tipsTex.needsUpdate = true;
   };

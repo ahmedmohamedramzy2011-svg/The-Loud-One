@@ -188,8 +188,9 @@
       const gr = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.15, W / 2, H / 2, Math.max(W, H) * 0.7);
       gr.addColorStop(0, 'rgba(200,20,10,0.15)'); gr.addColorStop(1, `rgba(40,0,0,${0.7 * red})`);
       g.fillStyle = gr; g.fillRect(0, 0, W, H);
-      // 2) the thing that got you, burned into the red
-      if (k > P.silIn && k < P.silGone) {
+      // 2) the thing that got you, burned into the red (entities only — hazards have no creature burn-in)
+      const noBurn = cause === 'powerline' || cause === 'beartrap' || cause === 'steam' || cause === 'fall';
+      if (!noBurn && k > P.silIn && k < P.silGone) {
         const a = Math.min(1, (k - P.silIn) / 0.12) * (k > P.silFade ? Math.max(0, 1 - (k - P.silFade) / (P.silGone - P.silFade)) : 1);
         const jx = (Math.random() - 0.5) * W * 0.012, jy = (Math.random() - 0.5) * H * 0.012;
         const sc = Math.min(W, H) * (0.9 + (k - P.silIn) / (P.silGone - P.silIn) * 0.25);

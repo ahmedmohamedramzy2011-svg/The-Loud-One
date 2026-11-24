@@ -66,6 +66,8 @@
     this.yaw = yaw || 0; this.pitch = 0;
     this.onGround = true;
     this.fallPeakY = spawn.y || 0;
+    this.fallAir = 0;
+    this.fallImpact = 0;
     this.crouch = 0;
     this.stamina = 100;
     this.exhausted = false;
@@ -262,6 +264,8 @@
       this.pos.set(sp.pos.x, sp.baseY || 0, sp.pos.z);
       this.vel.set(0, 0, 0);
       this.fallPeakY = sp.baseY || 0;
+      this.fallAir = 0;
+      this.fallImpact = 0;
       let d = this.yaw - (sp.yaw + Math.PI);
       while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
       d = Math.max(-0.9, Math.min(0.9, d));
@@ -347,6 +351,8 @@
         if (this.pos.y < 0.1) this.pos.y = 0.1;
         this.onGround = this.pos.y <= 0.11;
         this.fallPeakY = this.pos.y;
+        this.fallAir = 0;
+        this.fallImpact = 0;
       } else {
         const accel = this.onGround ? 12 : 3;
         this.vel.x += (mx * speed * (moving ? 1 : 0) - this.vel.x) * Math.min(1, accel * dt);
@@ -373,22 +379,34 @@
           if (!wasOnGround && this.pos.y <= floorY) {
             const drop = Math.max(0, this.fallPeakY - floorY);
             const Vfd = LO.ver ? LO.ver() : { fallDamage: true };
-            const dmg = (Vfd.fallDamage && drop > 2.4 && this.vel.y < -7.5)
-              ? (drop >= 6.8 ? 100 : Math.min(95, Math.round(16 + (drop - 2.4) * 18.5)))
+            const safeHeight = 2.5;
+            const damagePerMeter = 15;
+            const dmg = (Vfd.fallDamage && drop > safeHeight && this.vel.y < -7.5)
+              ? Math.max(0, Math.round((drop - safeHeight) * damagePerMeter))
               : 0;
             const hard = dmg > 0 || this.vel.y < -4;
             LO.audio.land(hard);
-            this.spike = Math.max(this.spike, dmg > 0 ? Math.min(48, NOISE.land + 8) : NOISE.land * (hard ? 1 : 0.6));
-            this.shake = Math.max(this.shake, dmg > 0 ? Math.min(0.95, 0.35 + dmg * 0.008) : 0.15);
+            this.spike = Math.max(this.spike, dmg > 0 ? Math.min(48, NOISE.land + 10) : NOISE.land * (hard ? 1 : 0.6));
+            this.shake = Math.max(this.shake, dmg > 0 ? Math.min(0.95, 0.32 + dmg * 0.008) : 0.15);
             if (dmg > 0) {
-              this.triggerDizzy(Math.min(1.0, dmg / 80));
+              this.fallImpact = Math.min(1, 0.45 + dmg / 80);
+              this.triggerDizzy(Math.min(1.0, dmg / 85));
               this.damage(dmg, 'fall');
             }
           }
           this.pos.y = floorY; this.vel.y = 0; this.onGround = true;
           this.fallPeakY = floorY;
+          this.fallAir = 0;
         } else {
           this.onGround = false;
+          const curDrop = Math.max(0, this.fallPeakY - this.pos.y);
+          const Vfa = LO.ver ? LO.ver() : { fallDamage: true };
+          if (Vfa.fallDamage && this.vel.y < -5.8 && curDrop > 1.35) {
+            const targetAir = Math.min(1, Math.max(0, (curDrop - 1.35) / 3.8) * Math.min(1, (-this.vel.y - 5.5) / 5.5));
+            this.fallAir += (targetAir - (this.fallAir || 0)) * Math.min(1, dt * 10);
+          } else {
+            this.fallAir = Math.max(0, (this.fallAir || 0) - dt * 8);
+          }
         }
         this.collide();
       }
@@ -552,6 +570,8 @@
     }
     this.onGround = true;
     this.fallPeakY = this.pos.y;
+    this.fallAir = 0;
+    this.fallImpact = 0;
   };
 
   Player.prototype.applyCamera = function (dt, time) {
@@ -589,17 +609,23 @@
     const ey = esh > 0.002 ? esh * (Math.cos(tt * 37.9) * 0.013 + Math.sin(tt * 53.1) * 0.005) : 0;
     const ez = esh > 0.002 ? esh * (Math.sin(tt * 29.1) * 0.011 + Math.cos(tt * 43.3) * 0.006) : 0;
     const eroll = esh > 0.002 ? esh * (Math.sin(tt * 34.7) * 0.0038 + Math.cos(tt * 51.9) * 0.0018) : 0;
+    this.fallImpact = Math.max(0, (this.fallImpact || 0) - (dt || 0.016) * 3.2);
+    const fa = this.hidden ? 0 : (this.fallAir || 0);
+    const fi = this.hidden ? 0 : (this.fallImpact || 0);
+    const fallJit = fa * 0.022;
+    const fallRoll = fa > 0.01 ? fa * Math.sin(tt * 41.3) * 0.012 : 0;
+    const impactDip = -fi * 0.14;
     cam.position.set(
-      this.pos.x + (Math.random() - 0.5) * sh + ex,
-      this.pos.y + eye + this.bob * 0.05 * bobAmt + (Math.random() - 0.5) * sh + ey,
-      this.pos.z + (Math.random() - 0.5) * sh + ez,
+      this.pos.x + (Math.random() - 0.5) * (sh + fallJit) + ex,
+      this.pos.y + eye + this.bob * 0.05 * bobAmt + (Math.random() - 0.5) * (sh + fallJit) + ey + impactDip,
+      this.pos.z + (Math.random() - 0.5) * (sh + fallJit) + ez,
     );
     cam.rotation.order = 'YXZ';
     cam.rotation.y = this.yaw + dz * Math.cos(dtz * 2.1) * 0.055;
-    cam.rotation.x = this.pitch + dz * Math.sin(dtz * 3.1) * 0.045;
+    cam.rotation.x = this.pitch + dz * Math.sin(dtz * 3.1) * 0.045 + fi * 0.06;
     cam.rotation.z = Math.sin(this.stepPhase * Math.PI * 0.5) * 0.006 * bobAmt * (this.moving ? 1 : 0)
-      + dz * (Math.sin(dtz * 2.5) * 0.14 + Math.sin(dtz * 5.2) * 0.045) + eroll;
-    const fov = LO.settings.fov * (1 - this.zoom * 0.35) + dz * Math.sin(dtz * 3.7) * 5.5;
+      + dz * (Math.sin(dtz * 2.5) * 0.14 + Math.sin(dtz * 5.2) * 0.045) + eroll + fallRoll;
+    const fov = LO.settings.fov * (1 - this.zoom * 0.35) + dz * Math.sin(dtz * 3.7) * 5.5 + fa * 6.5 - fi * 3.5;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
 
     // dynamic handheld flashlight sway (gait figure-8 + turn inertia + idle breathing)
@@ -854,6 +880,8 @@
         this.yaw = sp.yaw + Math.PI;
         this.spike = Math.max(this.spike, NOISE.hide);
         this.fallPeakY = this.pos.y;
+        this.fallAir = 0;
+        this.fallImpact = 0;
       }
     }
   };

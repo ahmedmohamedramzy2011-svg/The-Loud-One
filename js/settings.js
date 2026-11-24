@@ -27,11 +27,12 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.8',
-    autoLatest: '2.8',
+    gameVersion: '2.8.1',
+    autoLatest: '2.8.1',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.8.1', label: 'v2.8.1', era: 'Rebalanced fall damage, falling HUD/camera telegraph & hazard death transition' },
     { id: '2.8',   label: 'v2.8',   era: 'Fall damage, open rooftops & clipping fixes' },
     { id: '2.7.7', label: 'v2.7.7', era: 'Bug fixes' },
     { id: '2.7.6', label: 'v2.7.6', era: '6 hazards, hazard death tapes, FPS optimization & Admin Panel' },
@@ -138,7 +139,7 @@ window.LO = window.LO || {};
       Object.assign(S, parsed);
     }
   } catch (e) { /* storage unavailable — defaults are fine */ }
-  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === '2.7.6' || S.gameVersion === '2.7.7' || S.gameVersion === loadedAuto)) {
+  if (loadedAuto !== 'pinned' && (S.gameVersion === '2.4.3' || S.gameVersion === '2.4.4' || S.gameVersion === '2.4.5' || S.gameVersion === '2.5' || S.gameVersion === '2.5.1' || S.gameVersion === '2.6' || S.gameVersion === '2.6.1' || S.gameVersion === '2.6.2' || S.gameVersion === '2.6.3' || S.gameVersion === '2.7' || S.gameVersion === '2.7.1' || S.gameVersion === '2.7.2' || S.gameVersion === '2.7.3' || S.gameVersion === '2.7.4' || S.gameVersion === '2.7.5' || S.gameVersion === '2.7.6' || S.gameVersion === '2.7.7' || S.gameVersion === '2.8' || S.gameVersion === loadedAuto)) {
     S.gameVersion = LATEST_VER;
     S.autoLatest = LATEST_VER;
   }

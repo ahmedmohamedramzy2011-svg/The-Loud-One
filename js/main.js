@@ -770,6 +770,7 @@
     if (sneaky && sneaky.pause) sneaky.pause();
     clearGlitch();
     clearFlashStrobe();
+    clearFallFx();
     show('pause');
     if (window.speechSynthesis) try { speechSynthesis.pause(); } catch (e) {}
     A.setFlashlightBuzz(false); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
@@ -854,6 +855,7 @@
     if (document.pointerLockElement) document.exitPointerLock();
     clearGlitch();
     clearFlashStrobe();
+    clearFallFx();
     A.setFlashlightBuzz(false); A.setHeartbeat(0);
     A.setBreathing && A.setBreathing(0);
     A.setProximityAmbient && A.setProximityAmbient(0);
@@ -935,8 +937,8 @@
       'Pressurized alley pipes hiss softly before erupting with boiling steam. Hold back for 3 seconds until the vent clears.',
     ] },
     fall: { title: 'FELL TO YOUR DEATH', tips: [
-      'Building rooftops have open edges with no guardrails. Watch your footing near the drop.',
-      'Use interior stairwells to climb down safely instead of stepping or jumping off high roofs.',
+      'Drops over 2.5m hurt — 1F roofs bruise (~15 HP), while 2F roofs strip ~68 HP and towers are lethal.',
+      'Use interior stairwells to climb down safely instead of leaping off high rooftops.',
     ] },
   };
   // death by damage (the Silent One / the Tenant)
@@ -947,9 +949,19 @@
     if (vf) vf.style.opacity = '';
     lastRootFilter = '';
   }
+  function clearFallFx() {
+    _hc.fallOp = '';
+    _hc.fallScale = '';
+    const el = hudEl('fallFx', () => $('fall-fx'));
+    if (el) {
+      el.style.opacity = '0';
+      el.style.transform = '';
+    }
+  }
   function dieBy(cause) {
     clearGlitch();
     clearFlashStrobe();
+    clearFallFx();
     if (state === 'play') A.silenceWorld(true);
     if (sneaky && cause !== 'sneaky' && sneaky.attacking) sneaky.vanish(player, false);
     if (fastone) { fastone.clearHighlight(); if (cause !== 'fastone') fastone.reset(); }
@@ -975,6 +987,7 @@
   function onCaught() {
     clearGlitch();
     clearFlashStrobe();
+    clearFallFx();
     if (sneaky && sneaky.attacking) sneaky.vanish(player, false);
     if (fastone) fastone.reset();
     if (state === 'play' && !siren.catchDisabled) A.silenceWorld(true);
@@ -1116,7 +1129,7 @@
     hasMap: null, mapOpen: null, noiseW: '', markLeft: '', stamW: '',
     stamTired: null, stamCrit: null, stamLow: null, batW: '', batLow: null,
     prompt: null, crossDisp: '', hpW: '', hpNum: '', hpLow: null, hpBeat: null,
-    vfOpen: null, vfLocked: null, vfInfo: '', vfFilm: '', vfFlareVis: null, subMode: ''
+    vfOpen: null, vfLocked: null, vfInfo: '', vfFilm: '', vfFlareVis: null, subMode: '', fallOp: '', fallScale: ''
   };
   const _flPos = new THREE.Vector3(), _flDir = new THREE.Vector3(), _flCamDir = new THREE.Vector3();
   const _flProj = new THREE.Vector3(), _flBounceHit = new THREE.Vector3();
@@ -1362,10 +1375,11 @@
   function hudEl(key, getter) { return _hud[key] || (_hud[key] = getter()); }
   function resetHudCache() {
     for (const k in _hc) _hc[k] = null;
-    _hc.noiseW = _hc.markLeft = _hc.stamW = _hc.batW = _hc.crossDisp = _hc.hpW = _hc.hpNum = _hc.vfInfo = _hc.vfFilm = _hc.subMode = '';
+    _hc.noiseW = _hc.markLeft = _hc.stamW = _hc.batW = _hc.crossDisp = _hc.hpW = _hc.hpNum = _hc.vfInfo = _hc.vfFilm = _hc.subMode = _hc.fallOp = _hc.fallScale = '';
     lastStatus = ''; lastHideType = '';
     resetFlareState();
     clearFlashStrobe();
+    clearFallFx();
     const hpBar = $('health-fill') && $('health-fill').parentNode;
     if (hpBar) {
       hpBar.classList.remove('low');
@@ -1562,6 +1576,16 @@
       if (intense) mode += 'mode-intense';
       const trimmed = mode.trim();
       if (trimmed !== _hc.subMode) { _hc.subMode = trimmed; A.setSubMode(trimmed); }
+    }
+    const fallEl = hudEl('fallFx', () => $('fall-fx'));
+    if (fallEl) {
+      const fAir = player.hidden ? 0 : (player.fallAir || 0);
+      const fImp = player.hidden ? 0 : (player.fallImpact || 0);
+      const fInt = Math.min(1, Math.max(fAir * 0.85, fImp * 0.9));
+      const fOp = fInt > 0.015 ? fInt.toFixed(2) : '0';
+      const fSc = fInt > 0.015 ? `scale(${(1.06 - fInt * 0.06).toFixed(3)})` : '';
+      if (fOp !== _hc.fallOp) { _hc.fallOp = fOp; fallEl.style.opacity = fOp; }
+      if (fSc !== _hc.fallScale) { _hc.fallScale = fSc; fallEl.style.transform = fSc; }
     }
   }
 

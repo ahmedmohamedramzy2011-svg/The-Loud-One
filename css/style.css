@@ -43,6 +43,15 @@ body.pixelated #game-root canvas { image-rendering: pixelated; }
   background: radial-gradient(ellipse at center, rgba(120,0,0,0) 30%, rgba(160,0,0,0.75) 100%);
   transition: opacity 0.2s;
 }
+#fall-fx {
+  position: fixed; inset: 0; pointer-events: none; z-index: 8; opacity: 0;
+  will-change: opacity, transform;
+  background:
+    radial-gradient(ellipse at center, rgba(0,0,0,0) 48%, rgba(215,225,235,0.16) 80%, rgba(0,0,0,0.72) 100%),
+    repeating-conic-gradient(from 0deg at 50% 50%, rgba(255,255,255,0.04) 0deg 2deg, rgba(255,255,255,0) 2deg 9deg);
+  mask-image: radial-gradient(ellipse at center, transparent 42%, black 92%);
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent 42%, black 92%);
+}
 #fade {
   position: fixed; inset: 0; background: #000; z-index: 40; pointer-events: none;
   opacity: 1; transition: opacity 1.2s ease;
