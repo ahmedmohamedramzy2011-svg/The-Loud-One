@@ -38,6 +38,8 @@
     <div class="subtitle-line">Hollow Creek went quiet. Something made it that way.</div>
     <nav class="menu" id="main-menu">
       <button data-action="play">PLAY</button>
+      <button data-action="coop-host">HOST CO-OP</button>
+      <button data-action="coop-join">JOIN CO-OP</button>
       <button data-action="settings">SETTINGS</button>
       <button data-action="updates">UPDATE LOG</button>
       <button data-action="credits-panel">CREDITS</button>
@@ -49,6 +51,63 @@
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
     <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
     <span class="testing-badge admin-only">TESTING</span>
+  </div>
+</div>
+
+<!-- Co-op Join Room -->
+<div id="coop-join" class="screen panel-screen">
+  <div class="panel small">
+    <div class="panel-head coop-head">
+      <h2>JOIN CO-OP</h2>
+      <button type="button" class="panel-close" data-action="coop-cancel" aria-label="Close">✕</button>
+    </div>
+    <div class="coop-form">
+      <label class="coop-label" for="coop-name-join">CALLSIGN</label>
+      <input type="text" id="coop-name-join" class="coop-input" maxlength="16" placeholder="Investigator">
+      <label class="coop-label" for="coop-code-input">5-CHARACTER ROOM CODE</label>
+      <input type="text" id="coop-code-input" class="coop-input coop-code-in" maxlength="5" placeholder="XXXXX" autocomplete="off" spellcheck="false">
+      <div id="coop-join-status" class="coop-status"></div>
+      <div class="coop-actions">
+        <button type="button" id="coop-connect-btn" class="coop-btn primary" data-action="coop-connect">CONNECT</button>
+        <button type="button" class="coop-btn" data-action="coop-cancel">BACK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Co-op Lobby -->
+<div id="coop-lobby" class="screen panel-screen">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>CO-OP LOBBY</h2>
+      <button type="button" class="panel-close" data-action="coop-leave" aria-label="Leave Lobby">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="coop-code-bar">
+        <div>
+          <div class="coop-label">ROOM CODE</div>
+          <div id="coop-room-code" class="coop-code-val">-----</div>
+        </div>
+        <button type="button" id="coop-copy-btn" class="coop-btn">COPY CODE</button>
+      </div>
+      <div class="coop-meta-row">
+        <div class="coop-name-wrap">
+          <label class="coop-label" for="coop-name-lobby">YOUR CALLSIGN</label>
+          <input type="text" id="coop-name-lobby" class="coop-input" maxlength="16" placeholder="Investigator">
+        </div>
+        <div class="coop-ver-wrap">
+          <div class="coop-label">BUILD VERSION</div>
+          <div id="coop-ver-badge" class="coop-ver-pill">v2.8.1</div>
+        </div>
+      </div>
+      <div class="coop-label" style="margin-top:14px">INVESTIGATORS (MAX 4)</div>
+      <div id="coop-roster" class="coop-roster"></div>
+      <div id="coop-lobby-status" class="coop-status"></div>
+      <div class="coop-actions">
+        <button type="button" id="coop-start-btn" class="coop-btn primary" data-action="coop-start">START RUN</button>
+        <button type="button" class="coop-btn" data-action="coop-leave">LEAVE LOBBY</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -269,6 +328,7 @@
     <div class="obj-title">EVIDENCE</div>
     <div class="obj-count"><span id="ev-count">0</span> / <span id="ev-need">4</span></div>
     <div class="obj-list" id="ev-list"></div>
+    <div id="coop-team-hud"></div>
   </div>
   <div id="status-box">
     <div id="sh-status" class="calm">
@@ -299,6 +359,10 @@
   <button id="hint-btn" type="button">HINT 3:00</button>
   <button id="map-hud-badge" type="button">[M] TOWN MAP</button>
   <div id="hint-arrow"><div id="hint-needle">▲</div><div id="hint-label"></div></div>
+  <div id="spectate-bar">
+    <div class="spec-title" id="spec-target">SPECTATING</div>
+    <div class="spec-hint">[A / D] or [← / →] Switch Teammate &nbsp;·&nbsp; [V] 1st/3rd Person &nbsp;·&nbsp; [ESC] Menu</div>
+  </div>
   <!-- Touch controls (shown on phones / tablets) -->
   <div id="touch">
     <div id="t-look"></div>
@@ -489,7 +553,10 @@
 <div id="fps"></div>
 
 <script src="js/lib/three.min.js"></script>
+<script src="js/lib/peerjs.min.js"></script>
 <script src="js/settings.js?v=75"></script>
+<script src="js/net.js?v=1"></script>
+<script src="js/remoteplayer.js?v=1"></script>
 <script src="audio/sounds.js?v=27"></script>
 <script src="audio/voice.js?v=18"></script>
 <script src="js/audio.js?v=61"></script>

@@ -35,9 +35,10 @@
 
   LO.World = { STREETS, BLOCK_C, HALF, build };
 
-  function build(scene) {
+  function build(scene, opts) {
+    opts = opts || {};
     const S = LO.settings;
-    const rand = mulberry(1337);
+    const rand = mulberry(opts.seed !== undefined ? (opts.seed >>> 0) : 1337);
     const R = (a, b) => a + rand() * (b - a);
     const pick = arr => arr[(rand() * arr.length) | 0];
     const shadows = S.shadows !== 'off';
@@ -2602,7 +2603,10 @@
           if (!SPECIAL[k]) candidates.push(k);
         }
       }
-      if (candidates.length) sheriffKey = candidates[(Math.random() * candidates.length) | 0];
+      if (candidates.length) {
+        const skPick = opts.seed !== undefined ? rand : Math.random;
+        sheriffKey = candidates[(skPick() * candidates.length) | 0];
+      }
     }
 
     let enterCount = 0;
@@ -4513,7 +4517,8 @@
     W.fenceDebrisGroup.userData.keepDynamic = true;
     W.evGroup.userData.keepDynamic = true;
 
-    W.placeWallMap = function (preferEnterable) {
+    W.placeWallMap = function (preferEnterable, randFn) {
+      const rf = randFn || Math.random;
       const wm = W.wallMap;
       if (!wm) return null;
       W.buildings.forEach(b => { b.hasMap = false; });
@@ -4541,7 +4546,7 @@
         wm.mesh.visible = false;
         return null;
       }
-      const chosen = candidates[(Math.random() * candidates.length) | 0];
+      const chosen = candidates[(rf() * candidates.length) | 0];
       const useThreeSpots = !LO.ver || LO.ver().mapThreeSpots;
       const mapSpots = (useThreeSpots && chosen.building.mapWallSpots && chosen.building.mapWallSpots.length)
         ? chosen.building.mapWallSpots : null;
@@ -4554,7 +4559,7 @@
       );
       const cleanPool = pool.filter(clearWallSpot);
       const pickFrom = cleanPool.length ? cleanPool : pool;
-      const spot = pickFrom[(Math.random() * pickFrom.length) | 0] || chosen.building.safeWallSpots[0];
+      const spot = pickFrom[(rf() * pickFrom.length) | 0] || chosen.building.safeWallSpots[0];
       const baseY = spot.y !== undefined ? spot.y : 0.14;
       const nx = Math.sin(spot.yaw), nz = Math.cos(spot.yaw);
       wm.pos.set(spot.p.x + nx * 0.035, baseY + 1.54, spot.p.z + nz * 0.035);
@@ -4572,7 +4577,7 @@
     };
 
     W._evOwnedGeos = W._evOwnedGeos || [];
-    W.placeEvidence = function () {
+    W.placeEvidence = function (evSeed) {
       for (let i = 0; i < W._evOwnedGeos.length; i++) {
         const g = W._evOwnedGeos[i];
         if (g && g.dispose) g.dispose();
@@ -4589,7 +4594,7 @@
         b.hasMap = !!(W.wallMap && !W.wallMap.taken && W.wallMap.building === b);
       });
       W.repairFences();
-      const r = Math.random, pk = a => a[(r() * a.length) | 0];
+      const r = evSeed !== undefined ? mulberry(evSeed >>> 0) : Math.random, pk = a => a[(r() * a.length) | 0];
       const leftB = (!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null;
       const used = new Set();
       const hasRichDesks = W.enterables.some(e => !e.sheriff && e.building && e.building.safeDeskSpots && e.building.safeDeskSpots.length > 0);
@@ -4805,7 +4810,7 @@
       }
       // 8. the sheriff's tape — always in the sheriff's station
       W.fixedEvidence.forEach(e => { e.found = false; W.evidence.push(e); });
-      W.placeWallMap((!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null);
+      W.placeWallMap((!LO.ver || LO.ver().leftBuildingMap) ? W.spawnLeftBuilding : null, r);
       if (shadows) W.evGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       {
         const evOccSet = new Set(W.evOccluders);
@@ -4862,7 +4867,10 @@
       _discardedGeos.clear();
     }
 
-    W.placeEvidence();
+    W.placeEvidence(opts.evSeed);
+    for (let i = 0; i < W.fences.length; i++) W.fences[i].idx = i;
+    for (let i = 0; i < W.hideSpots.length; i++) W.hideSpots[i].idx = i;
+    for (let i = 0; i < W.pickups.length; i++) W.pickups[i].idx = i;
 
     // Freeze static world matrices once after assembly to eliminate redundant per-frame matrixWorld walks on low-end CPUs
     W.root.updateMatrixWorld(true);

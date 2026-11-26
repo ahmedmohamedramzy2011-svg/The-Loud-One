@@ -40,6 +40,9 @@
     this.clones = [];
     this.highlightedSpot = null;
     this.onBreach = null;
+    this.onEvent = null;
+    this.onKillPlayer = null;
+    this.targetPlayerId = null;
 
     // pre-allocate ONE PointLight and lightweight shared highlight materials (avoids runtime GLSL shader recompiles!)
     this.highlightLight = new THREE.PointLight(0x38aaff, 0, 10, 1.5);
@@ -624,6 +627,7 @@
   // ---------------- reset ----------------
   FastOne.prototype.reset = function () {
     this.state = 'idle';          // idle | telegraph | chase | slam | exit
+    this.targetPlayerId = null;
     this.cooldown = 0;
     this.timer = nextTime();
     this.telegraphT = 0;
@@ -665,9 +669,16 @@
     this.dust.length = 0;
     if (LO.ambush.active === 'fastone') LO.ambush.active = null;
   };
-
+FastOne.prototype.triggerLocalAttack = function (localPlayer, time) {
+  if (!localPlayer || !localPlayer.alive || localPlayer.calm || this.state !== 'idle') return;
+  this.targetPlayerId = null;
+  const inForest = !(LO.ver && !LO.ver().forestRing) && this.world.isForest && this.world.isForest(localPlayer.pos);
+  if (inForest) this.startForestStalk(localPlayer, time);
+  else this.spawnBreach(localPlayer, time, true);
+};
   // ---------------- spawn breach ----------------
-  FastOne.prototype.spawnBreach = function (player, time) {
+  FastOne.prototype.spawnBreach = function (player, time, isLocalTarget) {
+    const localT = isLocalTarget !== undefined ? isLocalTarget : true;
     const fence = this.farthestFence(player.pos);
     let sx = 0, sz = this.world.HALF + 2;
     if (fence) { sx = fence.pos.x; sz = fence.pos.z; }
@@ -694,16 +705,20 @@
     LO.ambush.active = 'fastone';
 
     const nearest = this.findClosestHideSpot(player, v2);
+    let needAdrenaline = false;
     if (nearest.spot) {
-      this.setHighlight(nearest.spot, time);
+      if (localT) this.setHighlight(nearest.spot, time);
+      else this.highlightedSpot = nearest.spot;
       if (v2) {
         const estSeconds = nearest.pathDist / NORMAL_SPRINT_SPEED;
-        if (estSeconds > ADRENALINE_TIME_THRESHOLD && player.triggerAdrenaline && player.triggerAdrenaline(BREACH_DELAY + KILL_TIME + 0.5)) {
+        needAdrenaline = estSeconds > ADRENALINE_TIME_THRESHOLD;
+        if (localT && needAdrenaline && player.triggerAdrenaline && player.triggerAdrenaline(BREACH_DELAY + KILL_TIME + 0.5)) {
           LO.audio.adrenaline();
         }
       } else {
         const estSeconds = nearest.dist / LEGACY_WALK_SPEED;
-        if (estSeconds > LEGACY_THRESHOLD) {
+        needAdrenaline = estSeconds > LEGACY_THRESHOLD;
+        if (localT && needAdrenaline) {
           player.adrenaline = 8.0;
           player.stamina = 100;
           player.exhausted = false;
@@ -711,6 +726,15 @@
         }
       }
     }
+    this.onEvent && this.onEvent({
+      kind: 'breach',
+      targetId: player.id || 'host',
+      fenceIdx: fence && fence.idx !== undefined ? fence.idx : -1,
+      dx: inward.x, dz: inward.z,
+      hlSpotIdx: nearest.spot && nearest.spot.idx !== undefined ? nearest.spot.idx : -1,
+      adrenaline: needAdrenaline,
+      dur: v2 ? (BREACH_DELAY + KILL_TIME + 0.5) : 8.0,
+    });
   };
 
   // ---------------- forest stalk spawn (no town breach, no locker highlight) ----------------
@@ -788,6 +812,7 @@
     this.trailFade = 0.65;
     LO.ambush.active = 'fastone';
     LO.audio.fastHowl(this.pos);
+    this.onEvent && this.onEvent({ kind: 'howl', x: this.pos.x, z: this.pos.z });
   };
 
   // ---------------- breach telegraph & gallop animation helpers ----------------
@@ -850,25 +875,44 @@
     return true;
   };
 
-  FastOne.prototype.update = function (dt, player, camera, siren, time) {
+  FastOne.prototype.update = function (dt, playerOrList, camera, siren, time) {
     this.updateSplinters(dt);
+    const isMulti = Array.isArray(playerOrList);
+    const allPlayers = isMulti ? playerOrList : [playerOrList];
+    const localPlayer = allPlayers[0];
+
     if ((LO.ver && !LO.ver().fastone) || (LO.admin && LO.admin.noFastOne)) {
       if (this.state !== 'idle') this.finishEncounter();
       this.updateAfterimages(dt, false);
       return;
     }
 
-    if (player.calm || !player.alive) {
-      if (this.state !== 'idle') {
-        this.clearHighlight();
-        if (this.state === 'chase' || this.state === 'telegraph') this.startExit(player);
-        else if (this.state === 'forest_stalk') {
-          this.state = 'forest_retreat';
-          this.forestT = 0;
-          this.retreatDir = new V3(this.pos.x - player.pos.x, 0, this.pos.z - player.pos.z).normalize();
-        }
+    const resolveTarget = () => {
+      if (!isMulti) return localPlayer;
+      return allPlayers.find(p => p && p.id === this.targetPlayerId) || null;
+    };
+    const isTargetLocal = t => !isMulti || (t && t === localPlayer);
+    const getHidingSpot = t => {
+      if (!t) return null;
+      if (t.hidden && typeof t.hidden === 'object') return t.hidden;
+      if (t.hideAnim && t.hideAnim.dir === 'in' && t.hideAnim.t >= 0.45) return t.hideAnim.spot;
+      if (t.hidden && t.hideSpotIdx >= 0 && this.world && this.world.hideSpots) {
+        return this.world.hideSpots[t.hideSpotIdx] || { pos: t.pos, exit: t.pos, baseY: t.pos.y || 0 };
       }
-      if (this.state === 'idle') { this.updateAfterimages(dt, false); return; }
+      return null;
+    };
+
+    let player = resolveTarget();
+
+    if (this.state !== 'idle' && (!player || player.calm || !player.alive)) {
+      this.clearHighlight();
+      if (this.state === 'chase' || this.state === 'telegraph') this.startExit(player);
+      else if (this.state === 'forest_stalk') {
+        this.state = 'forest_retreat';
+        this.forestT = 0;
+        const rp = (player && player.pos) || { x: 0, z: 0 };
+        this.retreatDir = new V3(this.pos.x - rp.x, 0, this.pos.z - rp.z).normalize();
+      }
     }
 
     if (this.state === 'idle') {
@@ -877,26 +921,36 @@
         this.cooldown = Math.max(0, this.cooldown - dt);
         return;
       }
-      const hearFlash = LO.NOISE.flashlight * 1.3 * (player.indoor ? 0.6 : 1);
-      const sirenNear = siren && siren.distToPlayer !== undefined && siren.distToPlayer < hearFlash + 4;
-      // spawn timer pauses when hiding or when Siren Head is close
-      if (sirenNear || player.hidden || player.hideAnim) return;
-      this.timer -= dt;
-      if (this.timer > 0) return;
-      // mandatory 10-20s minimum gap from The Sneaky One
-      if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {
-        this.timer = 0;
-        return;
-      }
-      const inForest = (!LO.ver || LO.ver().forestRing) && this.world.isForest && this.world.isForest(player.pos);
-      if (inForest) this.startForestStalk(player, time);
-      else this.spawnBreach(player, time);
+      // Pick eligible targets (alive, not calm, not hiding, not near Siren Head)
+      const eligible = allPlayers.filter(p => {
+        if (!p || !p.alive || p.calm || p.hidden || p.hideAnim) return false;
+        const hearFlash = LO.NOISE.flashlight * 1.3 * (p.indoor ? 0.6 : 1);
+        const dSiren = siren && siren.pos ? Math.hypot(p.pos.x - siren.pos.x, p.pos.z - siren.pos.z) : 999;
+        return dSiren >= hearFlash + 4;
+      });
+      const isCoopClient = window.LO && LO.Net && LO.Net.isCoop && LO.Net.isCoop() && LO.Net.isClient && LO.Net.isClient();
+    const isCoopHost = window.LO && LO.Net && LO.Net.isCoop && LO.Net.isCoop() && LO.Net.isHost && LO.Net.isHost();
+    if (isCoopClient) return;
+    // spawn timer pauses when no player is eligible
+    if (!eligible.length) return;
+    this.timer -= dt;
+    if (this.timer > 0) return;
+    // mandatory 18-20s minimum gap from The Sneaky One
+    if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {
+      this.timer = 0;
       return;
+    }
+    if (isCoopHost && LO.Net.broadcast) {
+      LO.Net.broadcast({ type: 'fast_wave' });
+    }
+    this.triggerLocalAttack(localPlayer, time);
+    return;
     }
 
     if (this.state === 'forest_stalk') {
       this.forestT += dt;
       this.clearHighlight();
+      if (!player) { this.finishEncounter(); return; }
       if (this.world.isForest && !this.world.isForest(player.pos)) {
         this.state = 'forest_retreat';
         this.forestT = 0;
@@ -918,7 +972,7 @@
       this.slideForest(this.pos.x + (dx / dist) * step, this.pos.z + (dz / dist) * step);
       this.pos.y = 0;
 
-      if (dist < 24) {
+      if (isTargetLocal(player) && dist < 24) {
         player.shake = Math.max(player.shake, Math.pow(1 - dist / 24, 1.5) * 0.26);
       }
 
@@ -926,32 +980,43 @@
       this.updateAfterimages(dt, true);
 
       // Look directly at The Fast One when it gets close (<= 18m) to drive it back into the trees
-      if (dist <= 18 && camera) {
-        camera.getWorldDirection(_fFwd);
+      if (dist <= 18) {
+        let eyePos;
+        if (isTargetLocal(player) && camera) {
+          camera.getWorldDirection(_fFwd);
+          eyePos = camera.position;
+        } else {
+          const cp = Math.cos(player.pitch || 0);
+          _fFwd.set(-Math.sin(player.yaw || 0) * cp, Math.sin(player.pitch || 0), -Math.cos(player.yaw || 0) * cp).normalize();
+          this._remoteEye = this._remoteEye || new V3();
+          this._remoteEye.set(player.pos.x, (player.pos.y || 0) + 1.62 - (player.crouch || 0) * 0.67, player.pos.z);
+          eyePos = this._remoteEye;
+        }
         _fTarget.set(this.pos.x, 0.85, this.pos.z);
-        _fTo.copy(_fTarget).sub(camera.position);
+        _fTo.copy(_fTarget).sub(eyePos);
         const camDist = _fTo.length() || 0.001;
         _fTo.divideScalar(camDist);
         let clearLOS = _fTo.dot(_fFwd) > 0.76;
-        if (clearLOS && this.world.segmentHitsTree && this.world.segmentHitsTree(camera.position.x, camera.position.z, _fTarget.x, _fTarget.z)) {
+        if (clearLOS && this.world.segmentHitsTree && this.world.segmentHitsTree(eyePos.x, eyePos.z, _fTarget.x, _fTarget.z)) {
           clearLOS = false;
         }
         if (clearLOS && this.world.occluders && this.world.occluders.length) {
           this._losRay = this._losRay || new THREE.Raycaster();
-          this._losRay.set(camera.position, _fTo);
+          this._losRay.set(eyePos, _fTo);
           this._losRay.far = camDist;
           const occl = this.world.queryOccluders
-            ? this.world.queryOccluders(camera.position.x, camera.position.z, _fTarget.x, _fTarget.z)
+            ? this.world.queryOccluders(eyePos.x, eyePos.z, _fTarget.x, _fTarget.z)
             : this.world.occluders;
           const hits = occl.length ? this._losRay.intersectObjects(occl, false) : [];
           if (hits.length && hits[0].distance < camDist - 0.9) clearLOS = false;
         }
         if (clearLOS) {
           this.stareTime += dt * (player.flashOn ? 1.55 : 1.0);
-          player.shake = Math.max(player.shake, 0.14);
+          if (isTargetLocal(player)) player.shake = Math.max(player.shake, 0.14);
           if (this.stareTime >= 0.42) {
             LO.audio.fastHowl(this.pos);
-            player.shake = Math.max(player.shake, 0.35);
+            this.onEvent && this.onEvent({ kind: 'howl', x: this.pos.x, z: this.pos.z });
+            if (isTargetLocal(player)) player.shake = Math.max(player.shake, 0.35);
             this.state = 'forest_retreat';
             this.forestT = 0;
             this.retreatDir = new V3(this.pos.x - player.pos.x, 0, this.pos.z - player.pos.z).normalize();
@@ -965,7 +1030,9 @@
       }
 
       if (dist < 2.05 || this.forestT >= 11.0) {
+        const killed = player;
         this.finishEncounter();
+        if (this.onKillPlayer) { this.onKillPlayer(killed); return; }
         return 'kill';
       }
       return;
@@ -986,28 +1053,31 @@
 
     if (this.state === 'telegraph') {
       this.telegraphT += dt;
-      this.animateTelegraph(dt, player);
+      this.animateTelegraph(dt, player || localPlayer);
       this.updateAfterimages(dt, false);
-      const hidingSpot = player.hidden || (player.hideAnim && player.hideAnim.dir === 'in' && player.hideAnim.t >= 0.45 ? player.hideAnim.spot : null);
-      if (!hidingSpot) {
-        const nearest = this.findClosestHideSpot(player);
-        this.setHighlight(nearest.spot, time);
-      } else {
-        this.clearHighlight();
+      const hidingSpot = getHidingSpot(player);
+      if (isTargetLocal(player)) {
+        if (!hidingSpot) {
+          const nearest = this.findClosestHideSpot(player);
+          this.setHighlight(nearest.spot, time);
+        } else {
+          this.clearHighlight();
+        }
       }
       if (this.telegraphT >= BREACH_DELAY) {
         this.state = 'chase';
         this.chaseT = 0;
         this.trailFade = 1;
         LO.audio.fastHowl(this.pos);
+        this.onEvent && this.onEvent({ kind: 'howl', x: this.pos.x, z: this.pos.z });
       }
       return;
     }
 
     if (this.state === 'chase') {
       this.chaseT += dt;
-      // did the player make it into a hiding spot?
-      const hidingSpot = player.hidden || (player.hideAnim && player.hideAnim.dir === 'in' && player.hideAnim.t >= 0.45 ? player.hideAnim.spot : null);
+      // did the target player make it into a hiding spot?
+      const hidingSpot = getHidingSpot(player);
       if (hidingSpot) {
         this.clearHighlight();
         this.state = 'slam';
@@ -1018,11 +1088,13 @@
         return;
       }
 
-      // keep the closest hiding spot highlighted in blue
-      const nearest = this.findClosestHideSpot(player);
-      this.setHighlight(nearest.spot, time);
+      // keep the closest hiding spot highlighted in blue for local target
+      if (isTargetLocal(player)) {
+        const nearest = this.findClosestHideSpot(player);
+        this.setHighlight(nearest.spot, time);
+      }
 
-      // steer straight toward player so it arrives at ~6 seconds
+      // steer straight toward target player so it arrives at ~6 seconds
       const dx = player.pos.x - this.pos.x;
       const dz = player.pos.z - this.pos.z;
       const dist = Math.hypot(dx, dz) || 0.001;
@@ -1039,14 +1111,15 @@
       this.pos.x += (dx / dist) * step;
       this.pos.z += (dz / dist) * step;
 
-      if (dist < 32) {
+      if (isTargetLocal(player) && dist < 32) {
         player.shake = Math.max(player.shake, Math.pow(1 - dist / 32, 1.5) * 0.45);
       }
 
       this.animateRun(dt, speed, time);
       this.updateAfterimages(dt, true);
 
-      if (this.chaseT >= KILL_TIME && !player.hidden && !(player.hideAnim && player.hideAnim.dir === 'in')) {
+      if (this.chaseT >= KILL_TIME && !hidingSpot) {
+        const killed = player;
         this.clearHighlight();
         this.root.visible = false;
         this.updateAfterimages(dt, false);
@@ -1056,8 +1129,10 @@
           LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;
         }
         this.state = 'idle';
+        this.targetPlayerId = null;
         this.cooldown = (!LO.ver || LO.ver().fastoneCooldown) ? COOLDOWN_T : 0;
         this.timer = nextTime();
+        if (this.onKillPlayer) { this.onKillPlayer(killed); return; }
         return 'kill';
       }
       return;
@@ -1067,7 +1142,7 @@
       const sp = this.slamSpot;
       if (!sp || sp.disabled) { this.startExit(player); return; }
       if (this.slamPhase === 'approach') {
-        const tx = sp.exit.x, tz = sp.exit.z;
+        const tx = sp.exit ? sp.exit.x : sp.pos.x, tz = sp.exit ? sp.exit.z : sp.pos.z;
         const dx = tx - this.pos.x, dz = tz - this.pos.z;
         const dist = Math.hypot(dx, dz);
         if (dist <= 1.2) {
@@ -1076,6 +1151,7 @@
           this.slamPhase = 'rear';
           this.slamT = 0;
           LO.audio.fastHowl(this.pos);
+          this.onEvent && this.onEvent({ kind: 'howl', x: this.pos.x, z: this.pos.z });
         } else {
           const speed = 32;
           const step = Math.min(dist, speed * dt);
@@ -1130,7 +1206,10 @@
         if (!this.slamImpacted && t >= 0.56) {
           this.slamImpacted = true;
           LO.audio.fastSlam(sp.pos);
-          player.shake = Math.max(player.shake, 1.0);
+          this.onEvent && this.onEvent({ kind: 'slam', x: sp.pos.x, y: sp.baseY || 0, z: sp.pos.z });
+          if (localPlayer && Math.hypot(localPlayer.pos.x - sp.pos.x, localPlayer.pos.z - sp.pos.z) < 25) {
+            localPlayer.shake = Math.max(localPlayer.shake, 1.0);
+          }
         }
       } else if (t < 1.35) {
         // rattle door briefly & recoil back to all fours
@@ -1142,11 +1221,11 @@
           L.hip.rotation.x *= (1 - k);
           L.knee.rotation.x *= (1 - k);
         });
-        if (!player.hideAnim && sp.setOpen) {
+        if ((!player || !player.hideAnim) && sp.setOpen) {
           sp.setOpen(t < 0.92 ? Math.max(0, Math.sin((t - 0.65) * 45) * 0.06) : 0);
         }
       } else {
-        if (!player.hideAnim && sp.setOpen) sp.setOpen(0);
+        if ((!player || !player.hideAnim) && sp.setOpen) sp.setOpen(0);
         this.startExit(player);
       }
       return;
@@ -1177,6 +1256,11 @@
           const outDir = new V3(dx / dist, 0, dz / dist);
           this.exitDir = outDir;
           const exitPos = this.breachFence(f, outDir);
+          this.onEvent && this.onEvent({
+            kind: 'exit_breach',
+            fenceIdx: f && f.idx !== undefined ? f.idx : -1,
+            dx: outDir.x, dz: outDir.z,
+          });
           if (v2 && this.onBreach) {
             this.onBreach(exitPos, 'exit');
           }
@@ -1196,6 +1280,58 @@
     }
   };
 
+  FastOne.prototype.getNetState = function () {
+    return {
+      state: this.state,
+      vis: !!this.root.visible,
+      x: +this.pos.x.toFixed(2),
+      y: +this.pos.y.toFixed(2),
+      z: +this.pos.z.toFixed(2),
+      yaw: +this.root.rotation.y.toFixed(3),
+      targetId: this.targetPlayerId || null,
+      hlSpotIdx: (this.highlightedSpot && this.highlightedSpot.idx !== undefined) ? this.highlightedSpot.idx : -1,
+    };
+  };
+
+  FastOne.prototype.applyNetState = function (snap, dt, localId, localPlayer, time) {
+    this.updateSplinters(dt);
+    if (!snap || snap.state === 'idle' || !snap.vis) {
+      this.state = 'idle';
+      this.root.visible = false;
+      this.clearHighlight();
+      this.updateAfterimages(dt, false);
+      return;
+    }
+    this.state = snap.state;
+    this.root.visible = true;
+    const k = Math.min(1, 1 - Math.exp(-18 * (dt || 0.016)));
+    this.pos.x += (snap.x - this.pos.x) * k;
+    this.pos.y += (snap.y - this.pos.y) * k;
+    this.pos.z += (snap.z - this.pos.z) * k;
+    let dYaw = snap.yaw - this.root.rotation.y;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    this.root.rotation.y += dYaw * k;
+
+    if (snap.targetId === localId && localPlayer && !localPlayer.hidden && (this.state === 'telegraph' || this.state === 'chase')) {
+      const sp = snap.hlSpotIdx >= 0 && this.world && this.world.hideSpots ? this.world.hideSpots[snap.hlSpotIdx] : this.findClosestHideSpot(localPlayer).spot;
+      this.setHighlight(sp, time);
+    } else {
+      this.clearHighlight();
+    }
+
+    if (this.state === 'telegraph') {
+      this.telegraphT = (this.telegraphT || 0) + dt;
+      this.animateTelegraph(dt, localPlayer || { pos: this.pos });
+      this.updateAfterimages(dt, false);
+    } else if (this.state === 'slam') {
+      this.updateAfterimages(dt, false);
+    } else {
+      this.animateRun(dt, 24, time);
+      this.updateAfterimages(dt, true);
+    }
+  };
+
   FastOne.prototype.startExit = function (player) {
     this.clearHighlight();
     this.state = 'exit';
@@ -1211,6 +1347,7 @@
 
   FastOne.prototype.finishEncounter = function () {
     this.state = 'idle';
+    this.targetPlayerId = null;
     this.root.visible = false;
     this.clones.forEach(c => { c.g.visible = false; });
     this.trail = [];

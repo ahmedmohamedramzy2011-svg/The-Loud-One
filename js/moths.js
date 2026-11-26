@@ -301,8 +301,8 @@
     this.maxLit = 0;
   };
 
-  const _fwd = new V3(), _to = new V3(), _chest = new V3();
-  Moths.prototype.update = function (dt, player, camera, time) {
+  const _fwd = new V3(), _to = new V3(), _chest = new V3(), _pFwd = new V3(), _pEye = new V3();
+  Moths.prototype.update = function (dt, playerOrList, camera, time) {
     const V = LO.ver ? LO.ver() : { moths: true, mothCount: COUNT, mothLimit: LIGHT_LIMIT, mothDamage: DAMAGE };
     if (!V.moths) {
       this.root.visible = false;
@@ -313,12 +313,14 @@
     const activeLimit = V.mothCount || COUNT;
     const stareLimit = V.mothLimit || LIGHT_LIMIT;
     const W = this.world;
+    const isMulti = Array.isArray(playerOrList);
+    const allPlayers = isMulti ? playerOrList : [playerOrList];
+    const localPlayer = allPlayers[0];
     camera.getWorldDirection(_fwd);
     this.maxLit = 0;
     this.nearestLit = null;
-    // they can only be seen in flashlight — with it off, they're simply not there
-    const show = player.flashOn && player.flash.intensity > 0.5 && !player.calm;
-    if (player.calm) {
+
+    if (localPlayer && localPlayer.calm) {
       this.moths.forEach(m => { m.g.visible = false; m.lit = 0; });
       LO.audio.setMothFlutter(0);
       return;
@@ -326,54 +328,78 @@
     const BEAM_COS = Math.cos(BEAM_ANGLE);
     const BEAM_RANGE_SQ = BEAM_RANGE * BEAM_RANGE;
     const MOTH_VIS_R2 = (LO.admin && LO.admin.fullbright) ? 1e9 : 60 * 60;
-    const beamActive = player.flashOn && player.flash.intensity > 0.5 && !player.hidden;
     this._frame = (this._frame + 1) | 0;
     const camP = camera.position;
+
+    // Gather all active flashlights (local + remote players in co-op)
+    const beams = [];
+    for (let pi = 0; pi < allPlayers.length; pi++) {
+      const p = allPlayers[pi];
+      if (!p || !p.alive || p.calm || p.hidden || !p.flashOn) continue;
+      if (pi === 0 && p.flash && p.flash.intensity <= 0.5) continue;
+      if (pi === 0 && camera) {
+        beams.push({ p, origin: camP, dir: _fwd.clone(), isLocal: true });
+      } else {
+        const cp = Math.cos(p.pitch || 0);
+        const d = new V3(-Math.sin(p.yaw || 0) * cp, Math.sin(p.pitch || 0), -Math.cos(p.yaw || 0) * cp).normalize();
+        const o = new V3(p.pos.x, (p.pos.y || 0) + 1.62 - (p.crouch || 0) * 0.67, p.pos.z);
+        beams.push({ p, origin: o, dir: d, isLocal: false });
+      }
+    }
+
     for (let idx = 0; idx < this.moths.length; idx++) {
       const m = this.moths[idx];
       if (idx >= activeLimit) { m.g.visible = false; continue; }
       const mdx = m.g.position.x - camP.x, mdz = m.g.position.z - camP.z;
       const md2 = mdx * mdx + mdz * mdz;
-      m.g.visible = m.active && show && md2 <= MOTH_VIS_R2;
       if (!m.active) {
+        m.g.visible = false;
         m.cooldown -= dt;
         if (m.cooldown <= 0) this.place(m);   // it settles somewhere else
         continue;
       }
+
       let inBeam = false;
-      if (beamActive) {
+      let litBy = null;
+      let anyLightNear = false;
+      if (!(LO.admin && LO.admin.noMoths)) {
         _chest.copy(m.g.position); _chest.y += 1.7;
-        _to.copy(_chest).sub(camP);
-        const d2 = _to.lengthSq();
-        if (d2 < BEAM_RANGE_SQ && d2 > 1e-6) {
+        for (let bi = 0; bi < beams.length; bi++) {
+          const b = beams[bi];
+          _to.copy(_chest).sub(b.origin);
+          const d2 = _to.lengthSq();
+          if (d2 >= BEAM_RANGE_SQ || d2 <= 1e-6) continue;
           const d = Math.sqrt(d2);
           _to.multiplyScalar(1 / d);
-          if (_to.dot(_fwd) > BEAM_COS) {
-            // Stagger distant unlit checks across alternate frames to avoid raycast spikes
-            if (d2 > 196 && m.lit === 0 && ((idx + this._frame) & 1) === 1) {
-              inBeam = false;
-            } else if (W.segmentHitsTree && W.segmentHitsTree(camP.x, camP.z, _chest.x, _chest.z)) {
-              inBeam = false;
-            } else {
-              this.raycaster.set(camP, _to);
-              this.raycaster.far = d;
-              const occl = W.queryOccluders ? W.queryOccluders(camP.x, camP.z, _chest.x, _chest.z) : W.occluders;
-              const hits = this.raycaster.intersectObjects(occl, false);
-              inBeam = !hits.length || hits[0].distance > d - 0.6;
-            }
+          if (_to.dot(b.dir) <= BEAM_COS) continue;
+          if (d2 > 196 && m.lit === 0 && ((idx + this._frame) & 1) === 1) continue;
+          if (W.segmentHitsTree && W.segmentHitsTree(b.origin.x, b.origin.z, _chest.x, _chest.z)) continue;
+          this.raycaster.set(b.origin, _to);
+          this.raycaster.far = d;
+          const occl = W.queryOccluders ? W.queryOccluders(b.origin.x, b.origin.z, _chest.x, _chest.z) : W.occluders;
+          const hits = this.raycaster.intersectObjects(occl, false);
+          if (!hits.length || hits[0].distance > d - 0.6) {
+            inBeam = true;
+            litBy = b.p;
+            anyLightNear = true;
+            break;
           }
         }
       }
-      if (LO.admin && LO.admin.noMoths) inBeam = false;
+
+      const localShow = !!(localPlayer && localPlayer.flashOn && localPlayer.flash.intensity > 0.5 && !localPlayer.calm);
+      m.g.visible = m.active && (localShow || anyLightNear) && md2 <= MOTH_VIS_R2;
+
       if (inBeam) m.lit += dt; else m.lit = Math.max(0, m.lit - dt * 0.7);
       const k = m.lit / stareLimit;
       if (k > this.maxLit) { this.maxLit = k; this.nearestLit = m; }
 
       if (!m.g.visible && m.lit <= 0) continue;
 
-      // reacts to the light: turns its faceless head to you, wings start to quiver
+      // reacts to the light: turns its faceless head to whoever lit it, wings start to quiver
       if (m.lit > 0.05) {
-        const want = Math.atan2(camera.position.x - m.g.position.x, camera.position.z - m.g.position.z);
+        const lookAtPos = (litBy && litBy.pos) ? litBy.pos : camera.position;
+        const want = Math.atan2(lookAtPos.x - m.g.position.x, lookAtPos.z - m.g.position.z);
         let diff = want - m.g.rotation.y;
         while (diff > Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
         m.g.rotation.y += diff * Math.min(1, dt * (1 + k * 6));
@@ -385,19 +411,70 @@
       }
       m.head.rotation.z = quiver > 0.2 ? Math.sin(time * 23) * 0.25 * quiver : 0;
 
-      if (m.lit >= stareLimit) this.shriek(m, player);
+      if (m.lit >= stareLimit) this.shriek(m, litBy || localPlayer, idx);
     }
     LO.audio.setMothFlutter(Math.min(1, this.maxLit));
   };
 
-  Moths.prototype.shriek = function (m, player) {
+  Moths.prototype.shriek = function (m, player, idx) {
     const V = LO.ver ? LO.ver() : { mothDamage: DAMAGE };
     const pos = m.g.position.clone(); pos.y = 2;
     LO.audio.mothShriek(pos);
     m.active = false; m.g.visible = false;
+    m.lit = 0;
     m.cooldown = 50 + Math.random() * 30;
-    this.onShriek && this.onShriek(pos);
-    player.damage(V.mothDamage || DAMAGE, 'moth');
+    this.onShriek && this.onShriek(pos, player, idx);
+    if (player && player.damage) player.damage(V.mothDamage || DAMAGE, 'moth');
+  };
+
+  Moths.prototype.getNetSync = function () {
+    const out = [];
+    for (let i = 0; i < this.moths.length; i++) {
+      const m = this.moths[i];
+      out.push(m.active ? [1, +m.g.position.x.toFixed(1), +m.g.position.z.toFixed(1), +m.g.rotation.y.toFixed(2), +m.lit.toFixed(2)] : [0]);
+    }
+    return out;
+  };
+
+  Moths.prototype.applyNetSync = function (arr, player, allBeams, camera, time) {
+    const V = LO.ver ? LO.ver() : { moths: true, mothCount: COUNT, mothLimit: LIGHT_LIMIT };
+    if (!V.moths || !arr) {
+      this.root.visible = false;
+      LO.audio.setMothFlutter(0);
+      return;
+    }
+    this.root.visible = true;
+    const stareLimit = V.mothLimit || LIGHT_LIMIT;
+    const camP = camera.position;
+    const MOTH_VIS_R2 = (LO.admin && LO.admin.fullbright) ? 1e9 : 60 * 60;
+    const localShow = !!(player && player.flashOn && player.flash && player.flash.intensity > 0.5 && !player.calm);
+    this.maxLit = 0;
+    for (let i = 0; i < this.moths.length && i < arr.length; i++) {
+      const m = this.moths[i], d = arr[i];
+      if (!d || !d[0]) {
+        m.active = false; m.g.visible = false; m.lit = 0;
+        continue;
+      }
+      m.active = true;
+      m.g.position.set(d[1], 0.12, d[2]);
+      m.g.rotation.y = d[3];
+      m.lit = d[4] || 0;
+      const k = m.lit / stareLimit;
+      if (k > this.maxLit) this.maxLit = k;
+      const mdx = m.g.position.x - camP.x, mdz = m.g.position.z - camP.z;
+      const md2 = mdx * mdx + mdz * mdz;
+      let anyRemoteBeam = false;
+      if (!localShow && allBeams && m.lit > 0.05) anyRemoteBeam = true;
+      m.g.visible = (localShow || anyRemoteBeam) && md2 <= MOTH_VIS_R2;
+      if (!m.g.visible) continue;
+      const quiver = k * k;
+      for (let wi = 0; wi < m.wings.length; wi++) {
+        const w = m.wings[wi];
+        w.mesh.rotation.y = w.side * (0.5 + quiver * 0.9 + Math.sin(time * 40 + w.side) * quiver * 0.35);
+      }
+      m.head.rotation.z = quiver > 0.2 ? Math.sin(time * 23) * 0.25 * quiver : 0;
+    }
+    LO.audio.setMothFlutter(Math.min(1, this.maxLit));
   };
 
   Moths.prototype.dispose = function () {

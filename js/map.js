@@ -401,6 +401,49 @@ window.LO = window.LO || {};
       g.fillText('?', hx, hy + 4);
     }
 
+    // Remote teammates on the survey map
+    const remotes = opts.remotePlayers || [];
+    for (let ri = 0; ri < remotes.length; ri++) {
+      const rp = remotes[ri];
+      if (!rp || !rp.pos) continue;
+      const rx = toX(rp.pos.x), ry = toY(rp.pos.z);
+      if (!rp.alive) {
+        g.strokeStyle = rp.color || '#888';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(rx - 4, ry - 4); g.lineTo(rx + 4, ry + 4);
+        g.moveTo(rx + 4, ry - 4); g.lineTo(rx - 4, ry + 4);
+        g.stroke();
+        continue;
+      }
+      g.save();
+      g.translate(rx, ry);
+      g.rotate(-(rp.yaw || 0));
+      if (rp.flashOn) {
+        const rCone = g.createRadialGradient(0, 0, 2, 0, 0, 28);
+        rCone.addColorStop(0, 'rgba(255, 232, 160, 0.40)');
+        rCone.addColorStop(1, 'rgba(255, 232, 160, 0)');
+        g.fillStyle = rCone;
+        g.beginPath();
+        g.moveTo(0, 0);
+        g.arc(0, 0, 28, -Math.PI / 2 - 0.38, -Math.PI / 2 + 0.38);
+        g.closePath();
+        g.fill();
+      }
+      g.fillStyle = rp.color || '#4a78a8';
+      g.strokeStyle = '#fffaf0';
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.moveTo(0, -9);
+      g.lineTo(6, 6);
+      g.lineTo(0, 2.5);
+      g.lineTo(-6, 6);
+      g.closePath();
+      g.fill();
+      g.stroke();
+      g.restore();
+    }
+
     // Player view cone + live directional chevron (at yaw=0, fwd=-Z => -Y on canvas; rotate by -player.yaw)
     const px = toX(player.pos.x), py = toY(player.pos.z);
     g.save();

@@ -280,27 +280,59 @@
     LO.audio.staticBurst(this.voice, 0.5, 0.25);
     LO.audio.radioGarble(this.voice, 1.6 + line.length * 0.03, 0.35);
     LO.audio.say('siren', line, { volume: vol, pos: this.pos, urgent: kind === 'hunt' || dist < 45 });
+    this.onAudioEvent && this.onAudioEvent({ kind: 'say', lineKind: kind, line });
   };
 
   // ------------------------------------------------------------
-  //  AI update. `player` exposes: pos, noiseRadius, hidden, alive
+  //  AI update. `playerOrList` accepts a Player or an array of Players (Co-op)
   // ------------------------------------------------------------
-  SirenHead.prototype.update = function (dt, player, time) {
-    if (this.scripted || !player) { this.animate(dt); return; }
+  SirenHead.prototype.update = function (dt, playerOrList, time) {
+    if (this.scripted || !playerOrList) { this.animate(dt); return; }
     if (LO.admin && LO.admin.sirenFreeze) { this.speedNow = 0; this.animate(dt); return; }
+    const allPlayers = Array.isArray(playerOrList) ? playerOrList : [playerOrList];
+    const players = allPlayers.filter(p => p && p.alive !== false);
+    const player = players[0] || allPlayers[0];
+    if (!player) { this.animate(dt); return; }
+
     this.stateTime += dt;
     this.lastTime = time;
     const W = this.world;
-    const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    this.distToPlayer = dist;
+    const sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw);
 
     const V = LO.ver ? LO.ver() : { echo: true, sirenFast: true, sirenSmash: true, fastoneV2: true };
     const adminIgnore = !!(LO.admin && LO.admin.sirenIgnore);
     const fastActive = !!(LO.ambush && LO.ambush.active === 'fastone');
-    // Direct close-range spot check (only possible AFTER The Fast One has finished its encounter)
-    const dirDot = dist > 0.01 ? ((dx / dist) * Math.sin(this.yaw) + (dz / dist) * Math.cos(this.yaw)) : 1;
-    const directSpotClose = !adminIgnore && !fastActive && !player.hidden && dist < 8.5 && dirDot > 0.4 && player.noiseRadius > 0;
+
+    // Nearest living player (plus local host distance for HUD/music)
+    let nearestP = player, minDist = Infinity, localDist = Infinity;
+    let directSpotClose = false, directP = null;
+    const HEAR = 1.3;
+    let heard = false, strength = 0, heardP = null;
+
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      const pdx = p.pos.x - this.pos.x, pdz = p.pos.z - this.pos.z;
+      const pd = Math.sqrt(pdx * pdx + pdz * pdz);
+      if (i === 0) localDist = pd;
+      if (pd < minDist) { minDist = pd; nearestP = p; }
+      const dot = pd > 0.01 ? ((pdx / pd) * sinY + (pdz / pd) * cosY) : 1;
+      if (!adminIgnore && !fastActive && !p.hidden && pd < 8.5 && dot > 0.4 && p.noiseRadius > 0) {
+        directSpotClose = true;
+        directP = p;
+      }
+      const pRad = (p.noiseRadius || 0) * HEAR;
+      if (!adminIgnore && !p.hidden && pRad > 0 && pd < pRad) {
+        const st = 1 - pd / pRad;
+        if (!heard || st > strength) {
+          heard = true;
+          strength = st;
+          heardP = p;
+        }
+      }
+    }
+    const dist = minDist === Infinity ? 999 : minDist;
+    this.distToPlayer = localDist === Infinity ? dist : localDist;
+
     if (directSpotClose && this.state === 'investigate_breach') {
       this.fenceLockPos = null;
       this.ignorePlayerUntil = 0;
@@ -312,14 +344,7 @@
     }
 
     // ---------- HEARING ----------
-    // he hears a little further than the raw noise radius (disabled while distracted by a Fast One fence breach)
-    const HEAR = 1.3;
-    let heard = false, strength = 0;
-    const radius = player.noiseRadius * HEAR;
-    if (!adminIgnore && !fenceLocked && !player.hidden && radius > 0 && dist < radius) {
-      heard = true;
-      strength = 1 - dist / radius;
-    }
+    if (fenceLocked) heard = false;
     this.heardNow = heard;
     if (fenceLocked) {
       this.anger = Math.max(0, this.anger - 35 * dt);
@@ -331,13 +356,16 @@
         this.reached = false;
         this.setState('investigate_breach');
       }
-    } else if (heard) {
-      const err = Math.min(6, dist * 0.07);
+    } else if (heard && heardP) {
+      const hpDist = Math.hypot(heardP.pos.x - this.pos.x, heardP.pos.z - this.pos.z);
+      const err = Math.min(6, hpDist * 0.07);
       // while hunting he leads his target, aiming where you are running to
       const lead = this.state === 'hunt' ? 1.2 : 0.4;
+      const vx = heardP.vel ? heardP.vel.x : 0;
+      const vz = heardP.vel ? heardP.vel.z : 0;
       this.lastHeard.set(
-        player.pos.x + player.vel.x * lead + (Math.random() - 0.5) * err, 0,
-        player.pos.z + player.vel.z * lead + (Math.random() - 0.5) * err);
+        heardP.pos.x + vx * lead + (Math.random() - 0.5) * err, 0,
+        heardP.pos.z + vz * lead + (Math.random() - 0.5) * err);
       this.lastHeardTime = time;
       this.stalkTimer = 0;
       const rate = (26 + 115 * strength) * (this.state === 'hunt' ? 1.5 : this.state === 'search' ? 1.3 : 1);
@@ -352,7 +380,7 @@
     // ---------- ECHOLOCATION ----------
     // roughly once a minute he pings the town. It finds you even if you are
     // silent or hidden, and every ping narrows down where you are.
-    // v2.7+: within 50m of the player, echolocation resets to 1 min and pauses until >50m away.
+    // v2.7+: within 50m of any player, echolocation resets to 1 min and pauses until >50m away.
     if (V.echo && !adminIgnore) {
       if (V.echoClosePause && dist <= 50) {
         this.echoTimer = 60;
@@ -362,13 +390,16 @@
           this.echoTimer = 52 + Math.random() * 16;
           this.echoCount++;
           LO.audio.echoPing(this.voice);
-          const err = Math.max(6, Math.min(45, dist * 0.45) * Math.pow(0.8, this.echoCount - 1));
+          const echoTarget = players.length ? players[(Math.random() * players.length) | 0] : nearestP;
+          const eDist = Math.hypot(echoTarget.pos.x - this.pos.x, echoTarget.pos.z - this.pos.z);
+          const err = Math.max(6, Math.min(45, eDist * 0.45) * Math.pow(0.8, this.echoCount - 1));
           const a = Math.random() * Math.PI * 2, r = Math.random() * err;
-          this.lastHeard.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
+          this.lastHeard.set(echoTarget.pos.x + Math.cos(a) * r, 0, echoTarget.pos.z + Math.sin(a) * r);
           this.lastHeardTime = time;
           this.echoApproach = true;
           this.setState('investigate');
-          this.onEcho && this.onEcho(dist);
+          this.onEcho && this.onEcho(eDist);
+          this.onAudioEvent && this.onAudioEvent({ kind: 'echo' });
         } else if (fenceLocked && this.echoTimer <= 0) {
           this.echoTimer = 10; // defer echo until fence distraction finishes
         }
@@ -384,12 +415,13 @@
     switch (this.state) {
       case 'wander':
         this.speed = V.sirenFast ? 3.1 : 2.6;
-        if (heard) { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); break; }
-        // he "senses" the living: every so often he heads straight for your area
+        if (heard) { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); this.onAudioEvent && this.onAudioEvent({ kind: 'siren', sirenKind: 'short', loud: 0.8 }); break; }
+        // he "senses" the living: every so often he heads straight for a player's area
         if (!adminIgnore && !fenceLocked && this.stalkTimer > 40) {
           this.stalkTimer = 0;
+          const stalkTarget = players.length ? players[(Math.random() * players.length) | 0] : nearestP;
           const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 18;
-          const p = W.projectToStreet({ x: player.pos.x + Math.cos(a) * r, z: player.pos.z + Math.sin(a) * r });
+          const p = W.projectToStreet({ x: stalkTarget.pos.x + Math.cos(a) * r, z: stalkTarget.pos.z + Math.sin(a) * r });
           this.path = this.buildSafeStreetPath(this.pos, p);
           break;
         }
@@ -397,7 +429,7 @@
           const nodes = W.nodes;
           let n = nodes[(Math.random() * nodes.length) | 0];
           if (Math.random() < 0.7) {
-            const near = W.nearestNode(player.pos);
+            const near = W.nearestNode(nearestP.pos);
             const i = Math.max(0, Math.min(4, near.i + ((Math.random() * 3) | 0) - 1));
             const j = Math.max(0, Math.min(4, near.j + ((Math.random() * 3) | 0) - 1));
             n = W.nodeAt(i, j);
@@ -408,15 +440,15 @@
       case 'investigate_breach': {
         // High-priority fence breach response: 1.5x investigate speed to cover Hollow Creek quickly
         this.speed = (V.sirenFast ? 5.0 : 4.2) * 1.5;
-        if (directSpotClose) {
+        if (directSpotClose && directP) {
           this.setState('investigate');
-          this.lastHeard.set(player.pos.x, 0, player.pos.z);
+          this.lastHeard.set(directP.pos.x, 0, directP.pos.z);
           this.anger = Math.max(this.anger, 75);
           break;
         }
         if (!fenceLocked && heard) {
           if (this.anger >= 100) this.startHunt(dist);
-          else { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); }
+          else { this.setState('investigate'); this.say('heard', dist); LO.audio.siren(this.voice, 'short', 0.8); this.onAudioEvent && this.onAudioEvent({ kind: 'siren', sirenKind: 'short', loud: 0.8 }); }
           break;
         }
         const target = this.fenceLockPos || this.lastHeard;
@@ -453,12 +485,20 @@
         if (sinceHeard > 9 && this.anger < 60 && this.stateTime > 6) {
           this.setState('search');
           LO.audio.siren(this.voice, 'short', 0.7);
+          this.onAudioEvent && this.onAudioEvent({ kind: 'siren', sirenKind: 'short', loud: 0.7 });
           this.hunting = false;
         }
-        // CATCH — only possible while he is angry AND you are making noise (never during Fast One fence distraction or admin god/ignore)
-        if (!adminIgnore && !(LO.admin && LO.admin.god) && !fenceLocked && dist < 7 && player.noiseRadius > 0 && !player.hidden && this.stateTime > 0.6) {
-          this.onCatch && this.onCatch();
-          return;
+        // CATCH — check any living, noisy, unhidden player within 7m
+        if (!adminIgnore && !(LO.admin && LO.admin.god) && !fenceLocked && this.stateTime > 0.6) {
+          for (let i = 0; i < players.length; i++) {
+            const p = players[i];
+            if (p.hidden || (p.noiseRadius || 0) <= 0) continue;
+            const pd = Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
+            if (pd < 7) {
+              this.onCatch && this.onCatch(p);
+              return;
+            }
+          }
         }
         break;
       case 'search':
@@ -497,17 +537,17 @@
     this.callTimer -= dt;
     this.lineTimer -= dt;
     if (this.state === 'hunt') {
-      if (this.callTimer <= 0) { LO.audio.siren(this.voice, 'blare', 1.3); this.callTimer = 3.5 + Math.random() * 2; }
+      if (this.callTimer <= 0) { LO.audio.siren(this.voice, 'blare', 1.3); this.onAudioEvent && this.onAudioEvent({ kind: 'siren', sirenKind: 'blare', loud: 1.3 }); this.callTimer = 3.5 + Math.random() * 2; }
       if (this.lineTimer <= 0 && !heard) { this.say('hunt', dist); this.lineTimer = 7 + Math.random() * 5; }
     } else if (this.state === 'search') {
       if (this.lineTimer <= 0) { this.say('search', dist); this.lineTimer = 9 + Math.random() * 6; }
-      if (this.callTimer <= 0) { LO.audio.staticBurst(this.voice, 1.4, 0.3); this.callTimer = 4 + Math.random() * 3; }
+      if (this.callTimer <= 0) { LO.audio.staticBurst(this.voice, 1.4, 0.3); this.onAudioEvent && this.onAudioEvent({ kind: 'static', dur: 1.4, vol: 0.3 }); this.callTimer = 4 + Math.random() * 3; }
     } else if (this.state === 'wander') {
-      if (this.callTimer <= 0) { LO.audio.siren(this.voice, 'call', 1); this.callTimer = 22 + Math.random() * 20; }
+      if (this.callTimer <= 0) { LO.audio.siren(this.voice, 'call', 1); this.onAudioEvent && this.onAudioEvent({ kind: 'siren', sirenKind: 'call', loud: 1 }); this.callTimer = 22 + Math.random() * 20; }
       if (this.lineTimer <= 0) { this.say('wander', dist); this.lineTimer = 26 + Math.random() * 20; }
     }
     this.creakTimer -= dt;
-    if (this.creakTimer <= 0) { LO.audio.creak(this.voice); this.creakTimer = 5 + Math.random() * 8; }
+    if (this.creakTimer <= 0) { LO.audio.creak(this.voice); this.onAudioEvent && this.onAudioEvent({ kind: 'creak' }); this.creakTimer = 5 + Math.random() * 8; }
 
     // ---------- MOVEMENT ----------
     if (this.state === 'wander') this.followPath(dt);
@@ -562,6 +602,7 @@
     this.setState('hunt');
     this.hunting = true;
     LO.audio.siren(this.voice, 'blare', 1.5);
+    this.onAudioEvent && this.onAudioEvent({ kind: 'siren', sirenKind: 'blare', loud: 1.5 });
     this.callTimer = 3;
     this.lineTimer = 2;
     this.say('hunt', dist);
@@ -833,6 +874,42 @@
     }
   };
   const tmp = new V3();
+
+  SirenHead.prototype.getNetState = function () {
+    return {
+      x: +this.pos.x.toFixed(2),
+      z: +this.pos.z.toFixed(2),
+      yaw: +this.yaw.toFixed(3),
+      state: this.state,
+      speedNow: +(this.speedNow || 0).toFixed(2),
+      anger: Math.round(this.anger || 0),
+      hunting: !!this.hunting,
+      reached: !!this.reached,
+      smashPulse: +(this.smashPulse || 0).toFixed(2),
+    };
+  };
+
+  SirenHead.prototype.applyNetState = function (snap, dt, refPos) {
+    if (!snap) { this.animate(dt); return; }
+    const k = Math.min(1, 1 - Math.exp(-14 * (dt || 0.016)));
+    this.pos.x += (snap.x - this.pos.x) * k;
+    this.pos.z += (snap.z - this.pos.z) * k;
+    let dYaw = snap.yaw - this.yaw;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    this.yaw += dYaw * k;
+    if (snap.state && snap.state !== this.state) {
+      this.state = snap.state;
+      this.stateTime = 0;
+    }
+    this.speedNow = snap.speedNow || 0;
+    this.anger = snap.anger || 0;
+    this.hunting = !!snap.hunting;
+    this.reached = !!snap.reached;
+    if (snap.smashPulse > (this.smashPulse || 0)) this.smashPulse = snap.smashPulse;
+    this.distToPlayer = refPos ? Math.hypot(this.pos.x - refPos.x, this.pos.z - refPos.z) : 999;
+    this.animate(dt);
+  };
 
   SirenHead.prototype.status = function (player) {
     if (player.hidden && this.state !== 'wander') return 'hidden';

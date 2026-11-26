@@ -60,9 +60,13 @@
   Sneaky.prototype.reset = function () {
     this.lastReal = performance.now();
     this.timer = nextTime();
-    this.attacking = false;
-    this.t = 0;
+   this.attacking = false;
+  this.t = 0;
+  this.waveActive = false;
     this.root.visible = false;
+    this.hostPendingTarget = null;
+    this.hostPendingTimeout = 0;
+    this.onResult = null;
     if (this.breath) { this.breath.stop(); this.breath = null; }
     if (LO.ambush.active === 'sneaky') LO.ambush.active = null;
   };
@@ -119,14 +123,24 @@
       // it won't come while Siren Head is close enough to hear the flashlight
       const hearFlash = LO.NOISE.flashlight * 1.3 * (player.indoor ? 0.6 : 1);
       const sirenNear = siren && siren.distToPlayer !== undefined && siren.distToPlayer < hearFlash + 4;
-      if (sirenNear || player.hidden || player.hideAnim) return;
-      this.timer -= dt;
-      if (this.timer > 0) return;
-      // mandatory 10-20s minimum gap from The Fast One (and never overlap)
-      if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {
-        this.timer = 0;
-        return;
-      }
+     if (sirenNear || player.hidden || player.hideAnim) return;
+    const isCoopClient = window.LO && LO.Net && LO.Net.isCoop && LO.Net.isCoop() && LO.Net.isClient && LO.Net.isClient();
+    const isCoopHost = window.LO && LO.Net && LO.Net.isCoop && LO.Net.isCoop() && LO.Net.isHost && LO.Net.isHost();
+    if (isCoopClient && !this.waveActive) return;
+    this.timer -= dt;
+    if (this.timer > 0) return;
+    // mandatory 18-20s minimum gap from The Fast One (and never overlap)
+    if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {
+      this.timer = 0;
+      return;
+    }
+    if (isCoopHost && !this.waveActive) {
+      this.waveActive = true;
+      this.timer = Math.random() * 10;
+      if (LO.Net.broadcast) LO.Net.broadcast({ type: 'sneaky_wave' });
+      return;
+    }
+    this.waveActive = false;
       // creep up right behind you
       this.attacking = true; this.t = 0;
       LO.ambush.active = 'sneaky';
@@ -173,6 +187,44 @@
     player.flickerForce = false;
     if (this.breath) { this.breath.stop(); this.breath = null; }
     if (seen) LO.audio.staticBurst(null, 0.35, 0.35);
+    if (LO.ambush.active === 'sneaky') {
+      LO.ambush.active = null;
+      LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;
+    }
+    this.timer = nextTime();
+    this.onResult && this.onResult(!!seen);
+  };
+
+  // Host-authoritative shared 3m timer + 10-20s ambush cooldown across all players
+  Sneaky.prototype.updateHostTimer = function (dt, players, siren) {
+    dt = this.realDt(dt);
+    if (dt <= 0) return null;
+    if ((LO.ver && !LO.ver().sneaky) || (LO.admin && LO.admin.noSneaky)) return null;
+    if (this.hostPendingTarget) {
+      this.hostPendingTimeout -= dt;
+      if (this.hostPendingTimeout <= 0) this.finishHostAmbush();
+      return null;
+    }
+    if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) return null;
+    const eligible = (players || []).filter(p => {
+      if (!p || !p.alive || p.calm || p.hidden || p.hideAnim) return false;
+      const hearFlash = LO.NOISE.flashlight * 1.3 * (p.indoor ? 0.6 : 1);
+      const dSiren = siren && siren.pos ? Math.hypot(p.pos.x - siren.pos.x, p.pos.z - siren.pos.z) : 999;
+      return dSiren >= hearFlash + 4;
+    });
+    if (!eligible.length) return null;
+    this.timer -= dt;
+    if (this.timer > 0) return null;
+    const target = eligible[(Math.random() * eligible.length) | 0];
+    LO.ambush.active = 'sneaky';
+    this.hostPendingTarget = target.id;
+    this.hostPendingTimeout = 7.5;
+    return target.id;
+  };
+
+  Sneaky.prototype.finishHostAmbush = function () {
+    this.hostPendingTarget = null;
+    this.hostPendingTimeout = 0;
     if (LO.ambush.active === 'sneaky') {
       LO.ambush.active = null;
       LO.ambush.gapUntil = LO.ambush.now + 10 + Math.random() * 10;

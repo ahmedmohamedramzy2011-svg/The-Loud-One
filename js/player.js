@@ -124,10 +124,31 @@
     this.mapOpen = false;
   };
 
-  Player.prototype.addNoise = function (radius) {
+  Player.prototype.addNoise = function (radius, kind) {
     if (LO.admin && LO.admin.zeroNoise) return;
     this.spike = Math.max(this.spike || 0, radius || 0);
     this.noiseRadius = Math.max(this.noiseRadius || 0, this.spike);
+    if (kind && this.onDiscreteNoise) this.onDiscreteNoise(this.pos, radius, kind);
+  };
+
+  Player.prototype.getNetState = function () {
+    return {
+      x: +this.pos.x.toFixed(3),
+      y: +this.pos.y.toFixed(3),
+      z: +this.pos.z.toFixed(3),
+      yaw: +this.yaw.toFixed(3),
+      pitch: +this.pitch.toFixed(3),
+      crouch: +this.crouch.toFixed(2),
+      flashOn: !!this.flashOn,
+      cameraUp: !!this.cameraUp,
+      hidden: !!(this.hidden || this.hideAnim),
+      hideSpotIdx: this.hidden && this.hidden.idx !== undefined ? this.hidden.idx : -1,
+      alive: !!this.alive,
+      moving: !!this.moving,
+      sprinting: !!this.sprinting,
+      noiseRadius: +(this.noiseRadius || 0).toFixed(1),
+      health: Math.round(this.health || 0),
+    };
   };
 
   Player.prototype.triggerAdrenaline = function (duration) {
@@ -364,6 +385,7 @@
           this.fallPeakY = this.pos.y;
           if (!adm.infStamina) this.stamina -= 12;
           this.spike = Math.max(this.spike, NOISE.jump);
+          this.onDiscreteNoise && this.onDiscreteNoise(this.pos, NOISE.jump, 'jump');
           LO.audio.jumpGrunt();
           k.Space = false;
         }
@@ -386,7 +408,9 @@
               : 0;
             const hard = dmg > 0 || this.vel.y < -4;
             LO.audio.land(hard);
-            this.spike = Math.max(this.spike, dmg > 0 ? Math.min(48, NOISE.land + 10) : NOISE.land * (hard ? 1 : 0.6));
+            const landRad = dmg > 0 ? Math.min(48, NOISE.land + 10) : NOISE.land * (hard ? 1 : 0.6);
+            this.spike = Math.max(this.spike, landRad);
+            if (hard || dmg > 0) this.onDiscreteNoise && this.onDiscreteNoise(this.pos, landRad, 'land');
             this.shake = Math.max(this.shake, dmg > 0 ? Math.min(0.95, 0.32 + dmg * 0.008) : 0.15);
             if (dmg > 0) {
               this.fallImpact = Math.min(1, 0.45 + dmg / 80);
@@ -510,12 +534,14 @@
           p.taken = true; p.mesh.visible = false;
           this.rocks++;
           LO.audio.click(false);
+          this.onPickup && this.onPickup(pi, 'rock');
           this.hint && this.hint(`Rock picked up (${this.rocks}/${MAX_ROCKS}). ${LO.isTouch ? 'Tap THROW' : 'Press G'} to throw and distract it.`);
           continue;
         }
         p.taken = true; p.mesh.visible = false;
         this.battery = Math.min(100, this.battery + 45);
         LO.audio.pickup();
+        this.onPickup && this.onPickup(pi, 'battery');
         this.hint && this.hint('Battery found (+45%)');
       }
     }
@@ -530,7 +556,7 @@
       const wm = this.nearestWallMap();
       const sp = this.nearestHideSpot();
       if (wm) this.prompt = '<kbd>E</kbd>Take Town Map';
-      else if (sp) this.prompt = sp.lockedUntil > performance.now() / 1000 ? 'Something is moving inside...' : `<kbd>E</kbd>Hide in ${sp.type}`;
+      else if (sp) this.prompt = sp._occupiedBy ? 'Someone is hiding inside...' : (sp.lockedUntil > performance.now() / 1000 ? 'Something is moving inside...' : `<kbd>E</kbd>Hide in ${sp.type}`);
     }
 
     // ---------- camera zoom & viewfinder ----------
@@ -724,6 +750,7 @@
     this.vel.set(dir.x * 7, 3, dir.z * 7);
     this.onGround = false;
     this.spike = Math.max(this.spike, NOISE.kicked);
+    this.onDiscreteNoise && this.onDiscreteNoise(this.pos, NOISE.kicked, 'kicked');
     this.shake = Math.max(this.shake, 0.9);
     this.hideTime = TENANT_LIMIT * 0.6;              // still restless if you dive straight back in
     this.damage(TENANT_DAMAGE, 'tenant');
@@ -747,6 +774,7 @@
     this.scene.add(mesh);
     const vel = dir.multiplyScalar(17); vel.y += 4.5;
     this.projectiles.push({ mesh, vel, spin: new V3(Math.random() * 9, Math.random() * 9, 0) });
+    this.onRockThrow && this.onRockThrow(mesh.position, vel);
     this.spike = Math.max(this.spike, 3);   // the throw itself is quiet
     LO.audio.jumpGrunt();
   };
@@ -908,10 +936,16 @@
       this.cameraUp = false;
       this.mapOpen = true;
       LO.audio.pickup();
+      this.onMapTaken && this.onMapTaken();
       this.hint && this.hint(`Town Map collected! Press ${LO.isTouch ? 'MAP' : 'M or Tab'} anytime to view.`, 5500);
       return;
     }
     const s = this.nearestHideSpot();
+    if (s && s._occupiedBy) {
+      LO.audio.knock && LO.audio.knock();
+      this.hint && this.hint('Someone is already hiding inside.');
+      return;
+    }
     if (s && s.lockedUntil && s.lockedUntil > performance.now() / 1000) {
       LO.audio.knock && LO.audio.knock();
       this.hint && this.hint('It won\'t let you in.');
@@ -970,6 +1004,7 @@
     LO.audio.shutter();
     this.burst.intensity = 14;
     this.spike = Math.max(this.spike, NOISE.shutter);
+    this.onDiscreteNoise && this.onDiscreteNoise(this.pos, NOISE.shutter, 'shutter');
     const res = this.findEvidence();
     const ev = res && res.ok ? res.ev : null;
     const Vp = LO.ver ? LO.ver() : { exposure: true };

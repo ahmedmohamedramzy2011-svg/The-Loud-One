@@ -16,15 +16,17 @@ window.LO = window.LO || {};
     };
   }
 
-  function Hazards(scene, world) {
+  function Hazards(scene, world, seed) {
     this.scene = scene;
     this.world = world;
     this.root = new THREE.Group();
     scene.add(this.root);
     this.list = [];
     this._stepTick = 0;
+    this.onNoise = null;
+    this.onStateChange = null;
     this._initShared();
-    this._populate();
+    this._populate(seed);
     this.reset();
   }
   LO.Hazards = Hazards;
@@ -351,10 +353,10 @@ window.LO = window.LO || {};
     });
   };
 
-  Hazards.prototype._populate = function () {
+  Hazards.prototype._populate = function (seed) {
     const W = this.world;
     if (!W) return;
-    const rand = rng32(20260276);
+    const rand = rng32(seed !== undefined ? ((seed ^ 0x517cc1b7) >>> 0) : 20260276);
     const spawn = W.spawn || { x: 1.2, z: -138 };
     const farFromSpawn = (x, z, minD) => Math.hypot(x - spawn.x, z - spawn.z) >= minD;
 
@@ -559,6 +561,7 @@ window.LO = window.LO || {};
         if (LO.audio && LO.audio.hazardTrapSnap) LO.audio.hazardTrapSnap(h.pos);
         if (this.world && this.world.scatterBirdsAt) this.world.scatterBirdsAt(h.pos, 24, 0);
         if (onHint) onHint('The rock snapped a bear trap open.');
+        if (this.onStateChange) this.onStateChange(i, 'disarmed');
         triggered = true;
       } else if (h.type === 'tindebris' && !h.toppled && d2 <= 2.2 * 2.2) {
         h.toppled = true;
@@ -568,6 +571,7 @@ window.LO = window.LO || {};
         }
         if (LO.audio && LO.audio.hazardTinClatter) LO.audio.hazardTinClatter(h.pos);
         if (this.world && this.world.scatterBirdsAt) this.world.scatterBirdsAt(h.pos, 26, 0);
+        if (this.onStateChange) this.onStateChange(i, 'toppled');
         triggered = true;
       }
     }
@@ -584,7 +588,7 @@ window.LO = window.LO || {};
     const crouching = !!(player && (player.crouching || player.crouch > 0.5));
     const moving = !!(player && !player.hidden && (player.moving || player.speedNow > 0.45 || (player.vel && Math.hypot(player.vel.x, player.vel.z) > 0.45)));
     const invuln = !!(LO.admin && (LO.admin.god || LO.admin.godMode));
-    const addPlayerNoise = radius => {
+    const addPlayerNoise = (radius, kind) => {
       if (!player) return;
       if (player.addNoise) player.addNoise(radius);
       else if (!(LO.admin && LO.admin.zeroNoise)) {
@@ -592,6 +596,7 @@ window.LO = window.LO || {};
         player.noiseRadius = Math.max(player.noiseRadius || 0, player.spike);
       }
       if (siren && siren.hearNoise && !(LO.admin && LO.admin.zeroNoise)) siren.hearNoise(player.pos, radius);
+      if (this.onNoise && !(LO.admin && LO.admin.zeroNoise)) this.onNoise(player.pos, radius, kind || 'hazard');
     };
 
     const vd = (LO.settings && LO.settings.viewDistance) || 'medium';
@@ -632,7 +637,7 @@ window.LO = window.LO || {};
             if (LO.audio && LO.audio.hazardZap) LO.audio.hazardZap(h.pos);
             if (this.world && this.world.scatterBirdsAt) this.world.scatterBirdsAt(h.pos, 26, time);
             if (!invuln) {
-              addPlayerNoise(36);
+              addPlayerNoise(36, 'powerline');
               player.damage(42, 'powerline');
             }
           }
@@ -646,9 +651,10 @@ window.LO = window.LO || {};
             h.jawR.rotation.x = Math.PI - 0.02;
             if (LO.audio && LO.audio.hazardTrapSnap) LO.audio.hazardTrapSnap(h.pos);
             if (this.world && this.world.scatterBirdsAt) this.world.scatterBirdsAt(h.pos, 28, time);
+            if (this.onStateChange) this.onStateChange(i, 'disarmed');
             if (!invuln) {
               player.trapSlowTimer = 4.0;
-              addPlayerNoise(34);
+              addPlayerNoise(34, 'beartrap');
               player.damage(38, 'beartrap');
             }
           }
@@ -678,7 +684,7 @@ window.LO = window.LO || {};
             h.hitCd = 1.15;
             if (LO.audio && LO.audio.hazardSteamBurn) LO.audio.hazardSteamBurn(hp);
             if (!invuln) {
-              addPlayerNoise(24);
+              addPlayerNoise(24, 'steam');
               player.damage(24, 'steam');
             }
           }
@@ -689,7 +695,7 @@ window.LO = window.LO || {};
           if (dy < 0.9 && dx * dx + dz * dz <= h.radius * h.radius) {
             h.stepCd = 0.48;
             if (LO.audio && LO.audio.hazardGlass) LO.audio.hazardGlass(h.pos);
-            addPlayerNoise(28);
+            addPlayerNoise(28, 'glass');
           }
         }
       } else if (h.type === 'floorboard') {
@@ -705,7 +711,7 @@ window.LO = window.LO || {};
             h.stepCd = 0.55;
             h.wobble = 1;
             if (LO.audio && LO.audio.hazardCreak) LO.audio.hazardCreak(h.pos);
-            addPlayerNoise(30);
+            addPlayerNoise(30, 'floorboard');
           }
         }
       } else if (h.type === 'tindebris') {
@@ -719,10 +725,29 @@ window.LO = window.LO || {};
             }
             if (LO.audio && LO.audio.hazardTinClatter) LO.audio.hazardTinClatter(h.pos);
             if (this.world && this.world.scatterBirdsAt) this.world.scatterBirdsAt(h.pos, 26, time);
-            addPlayerNoise(44);
+            if (this.onStateChange) this.onStateChange(i, 'toppled');
+            addPlayerNoise(44, 'tindebris');
           }
         }
       }
+    }
+  };
+
+  Hazards.prototype.applyRemoteState = function (idx, state) {
+    const h = this.list[idx];
+    if (!h) return;
+    if (state === 'disarmed' && h.type === 'beartrap' && !h.disarmed) {
+      h.disarmed = true;
+      h.jawL.rotation.x = 0.02;
+      h.jawR.rotation.x = Math.PI - 0.02;
+      if (LO.audio && LO.audio.hazardTrapSnap) LO.audio.hazardTrapSnap(h.pos);
+    } else if (state === 'toppled' && h.type === 'tindebris' && !h.toppled) {
+      h.toppled = true;
+      for (let s = 0; s < h.sheets.length; s++) {
+        h.sheets[s].position.set((s - 1) * 0.55, 0.05 + s * 0.02, (s - 1) * 0.3);
+        h.sheets[s].rotation.set(Math.PI * 0.48, (s - 1) * 0.6, 0.1 * s);
+      }
+      if (LO.audio && LO.audio.hazardTinClatter) LO.audio.hazardTinClatter(h.pos);
     }
   };
 

@@ -197,6 +197,78 @@ body.pixelated #game-root canvas { image-rendering: pixelated; }
 .keys td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .keys td:first-child { color: var(--red); width: 40%; }
 
+/* ---------- co-op lobby & hud ---------- */
+.panel.small .panel-head.coop-head { padding: 0 0 12px; margin-bottom: 16px; }
+.coop-form { display: flex; flex-direction: column; gap: 10px; }
+.coop-label { font-size: 11px; letter-spacing: 2px; color: var(--ink-dim); margin-bottom: 4px; display: block; }
+.coop-input {
+  width: 100%; background: rgba(0,0,0,0.55); border: 1px solid var(--line);
+  color: var(--ink); font-family: var(--font-body); font-size: 16px; padding: 9px 12px;
+  outline: none; transition: border-color 0.15s;
+}
+.coop-input:focus { border-color: var(--red); }
+.coop-code-in {
+  font-family: var(--font-title); font-size: 28px; letter-spacing: 8px;
+  text-align: center; text-transform: uppercase;
+}
+.coop-code-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 16px; border: 1px solid var(--line); background: rgba(0,0,0,0.45);
+  margin-bottom: 14px;
+}
+.coop-code-val {
+  font-family: var(--font-title); font-size: 36px; letter-spacing: 8px; color: var(--ink);
+  line-height: 1.05; text-shadow: 0 0 14px rgba(209,26,26,0.35);
+}
+.coop-meta-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+.coop-name-wrap { flex: 1 1 220px; }
+.coop-ver-wrap { flex: 0 0 auto; }
+.coop-ver-pill {
+  padding: 9px 12px; border: 1px solid var(--line); background: rgba(255,255,255,0.04);
+  font-size: 14px; color: var(--ink-dim); letter-spacing: 1px;
+}
+.coop-roster { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.coop-slot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03);
+  font-size: 14px;
+}
+.coop-slot.empty { opacity: 0.42; border-style: dashed; }
+.coop-slot-left { display: flex; align-items: center; gap: 10px; }
+.coop-swatch { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4); flex-shrink: 0; }
+.coop-badge { font-size: 11px; letter-spacing: 1.5px; color: var(--ink-dim); }
+.coop-badge.host { color: var(--red); }
+.coop-status { min-height: 20px; font-size: 13px; color: var(--ink-dim); margin: 8px 0 4px; }
+.coop-status.err { color: #ff6659; }
+.coop-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+.coop-btn {
+  font-family: var(--font-title); font-size: 20px; letter-spacing: 2px;
+  padding: 8px 18px; border: 1px solid var(--line); background: rgba(255,255,255,0.04);
+  color: var(--ink); cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.coop-btn:hover:not(:disabled) { border-color: var(--red); color: var(--red); background: rgba(209,26,26,0.12); }
+.coop-btn.primary { border-color: var(--red); background: rgba(209,26,26,0.22); }
+.coop-btn.primary:hover:not(:disabled) { background: rgba(209,26,26,0.38); color: #fff; }
+.coop-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#coop-team-hud { display: none; flex-direction: column; gap: 4px; margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.12); padding-top: 8px; }
+#coop-team-hud.show { display: flex; }
+.coop-mate { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink); text-shadow: 0 1px 3px #000; }
+.coop-mate.dead { opacity: 0.5; text-decoration: line-through; }
+.coop-mate-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.coop-mate-hp { margin-left: auto; color: var(--ink-dim); font-size: 11px; }
+
+#spectate-bar {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  background: rgba(8, 8, 10, 0.86); border: 1px solid var(--line);
+  padding: 10px 20px; text-align: center; display: none; z-index: 22; pointer-events: none;
+}
+#spectate-bar.show { display: block; }
+.spec-title { font-family: var(--font-title); font-size: 22px; letter-spacing: 3px; color: var(--ink); }
+.spec-hint { font-size: 12px; color: var(--ink-dim); margin-top: 3px; letter-spacing: 1px; }
+body.spectating #bars, body.spectating #crosshair, body.spectating #prompt,
+body.spectating #hint-btn, body.spectating #hint-arrow { display: none !important; }
+
 /* ---------- cutscene ---------- */
 #cutscene { z-index: 15; pointer-events: none; }
 .letterbox { position: absolute; left: 0; right: 0; height: 11vh; background: #000; }

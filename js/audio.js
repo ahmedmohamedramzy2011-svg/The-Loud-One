@@ -379,6 +379,34 @@
     o.connect(g2); g2.connect(sfxBus); o.start(t); o.stop(t + 0.15);
   };
 
+  A.footstepAt = function (pos, kind, indoor, forest) {
+    if (!ctx || !pos) return;
+    const t = ctx.currentTime;
+    const p = panner(pos, 6, 1.15);
+    p.connect(worldBus);
+    const vol = (kind === 'run' ? 0.42 : kind === 'crouch' ? 0.07 : 0.19);
+    const stepBufs = [samples.step1, samples.step2, samples.step3, samples.step4, samples.step5].filter(Boolean);
+    if (stepBufs.length) {
+      const s = ctx.createBufferSource();
+      s.buffer = stepBufs[(Math.random() * stepBufs.length) | 0];
+      s.playbackRate.value = (kind === 'run' ? 1.06 : kind === 'crouch' ? 0.80 : 0.94) + Math.random() * 0.11;
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass';
+      f.frequency.value = kind === 'crouch' ? (indoor ? 900 : 1150) : kind === 'run' ? (indoor ? 2800 : 4200) : (indoor ? 1700 : 2500);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(vol * 0.9, t);
+      s.connect(f); f.connect(g); g.connect(p);
+      s.start(t);
+      return;
+    }
+    const n = noiseSrc(false, false);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+    f.frequency.value = (forest ? 1400 : indoor ? 900 : 600) + Math.random() * 300; f.Q.value = 0.9;
+    const g = ctx.createGain();
+    env(g, t, 0.004, vol, 0.09, 0.0001);
+    n.connect(f); f.connect(g); g.connect(p);
+    n.start(t); n.stop(t + 0.2);
+  };
+
   A.land = function (hard) {
     if (!ctx) return;
     const t = ctx.currentTime;
