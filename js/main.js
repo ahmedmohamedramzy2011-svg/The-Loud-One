@@ -192,11 +192,49 @@
         const pid = slot.getAttribute('data-pid');
         const pill = slot.querySelector('.coop-mic-pill');
         if (!pill || !pid) return;
-        const vs = Net.getVoiceState(pid);
-        pill.className = 'coop-mic-pill' + (vs.speaking ? ' talking' : vs.hasMic ? (vs.muted ? ' muted' : ' live') : '');
-        pill.textContent = vs.speaking ? 'TALKING' : vs.hasMic ? (vs.muted ? 'MUTED' : 'MIC ON') : 'NO MIC';
+        const m = rosterMicMeta(Net.getVoiceState(pid));
+        if (pill.dataset.vstate !== m.state) {
+          pill.dataset.vstate = m.state;
+          pill.className = 'coop-mic-pill ' + m.cls;
+          pill.title = m.title;
+          pill.innerHTML = m.html;
+        }
       });
     }
+  }
+  const MIC_ON_SVG = '<svg class="coop-mic-ico" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/></svg>';
+  const MIC_OFF_SVG = '<svg class="coop-mic-ico" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/><line x1="3" y1="3" x2="21" y2="21" stroke="#0b0b0e" stroke-width="4.2" stroke-linecap="round"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  function rosterMicMeta(vs) {
+    if (!vs || !vs.hasMic) {
+      return {
+        state: 'off',
+        cls: 'off',
+        title: 'Proximity voice disabled',
+        html: MIC_OFF_SVG + '<span>VOICE OFF</span>',
+      };
+    }
+    if (vs.muted) {
+      return {
+        state: 'muted',
+        cls: 'muted',
+        title: 'Microphone muted',
+        html: MIC_OFF_SVG + '<span>MUTED</span>',
+      };
+    }
+    if (vs.speaking) {
+      return {
+        state: 'talking',
+        cls: 'talking',
+        title: 'Speaking',
+        html: MIC_ON_SVG + '<span>TALKING</span>',
+      };
+    }
+    return {
+      state: 'live',
+      cls: 'live',
+      title: 'Proximity voice enabled',
+      html: MIC_ON_SVG + '<span>MIC ON</span>',
+    };
   }
   function syncHideSpotOccupation(id, hidden, hideSpotIdx, rp) {
     const spots = world && world.hideSpots;
@@ -855,7 +893,9 @@
         LO.Settings.set('autoLatest', v.id === latest ? latest : 'pinned');
         LO.Settings.set('gameVersion', v.id);
         syncVersionUI();
+        syncCoopVersionBadge();
         renderVersions();
+        if (Net && Net.isHost && Net.isHost() && Net.setHostVersion) Net.setHostVersion(v.id);
         if (state === 'title') { buildWorld(); setupTitleScene(); }
         else worldDirty = true;
         closePanel();
@@ -869,6 +909,9 @@
     if (!el) return;
     const ver = (Net && Net.isCoop() && Net.hostVersion) ? Net.hostVersion : (S.gameVersion || '2.8.3');
     el.textContent = 'v' + ver;
+    const isClient = !!(Net && Net.isClient && Net.isClient());
+    el.disabled = isClient;
+    el.title = isClient ? 'Build version controlled by host' : 'Click to change build version';
   }
 
   function openPanel(id, from) {
@@ -2946,6 +2989,15 @@
         });
       }
 
+      const verBadge = $('coop-ver-badge');
+      if (verBadge) {
+        verBadge.addEventListener('click', () => {
+          if (LO.Net && LO.Net.isClient && LO.Net.isClient()) return;
+          A.click(true);
+          openPanel('versions', 'lobby');
+        });
+      }
+
       LO.Net.onLobbyUpdate = (players, roomCode) => {
         if (codeDisplay) codeDisplay.textContent = roomCode || '-----';
         if (startBtn) startBtn.style.display = LO.Net.isHost() ? '' : 'none';
@@ -2959,12 +3011,11 @@
             if (p) {
               const role = p.id === 'host' ? 'HOST' : (p.id === LO.Net.localId ? 'YOU' : 'READY');
               const vs = LO.Net.getVoiceState ? LO.Net.getVoiceState(p.id) : { hasMic: !!p.hasMic, muted: !!p.muted, speaking: false };
-              const micCls = vs.speaking ? ' talking' : vs.hasMic ? (vs.muted ? ' muted' : ' live') : '';
-              const micTxt = vs.speaking ? 'TALKING' : vs.hasMic ? (vs.muted ? 'MUTED' : 'MIC ON') : 'NO MIC';
+              const m = rosterMicMeta(vs);
               html += `<div class="coop-slot" data-pid="${escHtml(p.id)}">
                 <span class="coop-slot-left"><i class="coop-swatch" style="background:${escHtml(p.color || '#4a78a8')}"></i><span>${escHtml(p.name)}</span></span>
                 <span class="coop-slot-right">
-                  <span class="coop-mic-pill${micCls}">${micTxt}</span>
+                  <span class="coop-mic-pill ${m.cls}" data-vstate="${m.state}" title="${m.title}">${m.html}</span>
                   <span class="coop-badge ${p.id === 'host' ? 'host' : ''}">${role}</span>
                 </span>
               </div>`;

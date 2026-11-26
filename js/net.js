@@ -146,6 +146,13 @@ window.LO = window.LO || {};
       }
     },
 
+    setHostVersion(ver) {
+      if (!ver || this.mode !== 'host') return;
+      this.hostVersion = ver;
+      this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion });
+      this._emitLobby();
+    },
+
     // ============================================================
     //  TEXT CHAT
     // ============================================================

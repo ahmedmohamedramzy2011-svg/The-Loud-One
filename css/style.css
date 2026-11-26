@@ -224,9 +224,22 @@ body.pixelated #game-root canvas { image-rendering: pixelated; }
 .coop-name-wrap { flex: 1 1 220px; }
 .coop-ver-wrap { flex: 0 0 auto; }
 .coop-ver-pill {
+  display: inline-flex; align-items: center; gap: 6px;
   padding: 9px 12px; border: 1px solid var(--line); background: rgba(255,255,255,0.04);
-  font-size: 14px; color: var(--ink-dim); letter-spacing: 1px;
+  font-family: var(--font-body); font-size: 14px; color: var(--ink); letter-spacing: 1px;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
+.coop-ver-pill::after {
+  content: "▾"; font-size: 11px; color: var(--ink-dim); transition: color 0.15s;
+}
+.coop-ver-pill:hover:not(:disabled) {
+  border-color: var(--red); background: rgba(209,26,26,0.14); color: #fff;
+}
+.coop-ver-pill:hover:not(:disabled)::after { color: var(--red); }
+.coop-ver-pill:disabled {
+  cursor: default; color: var(--ink-dim); opacity: 0.78;
+}
+.coop-ver-pill:disabled::after { display: none; }
 .coop-roster { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .coop-slot {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -1024,9 +1037,12 @@ body.still #map-hud-badge { opacity: 0 !important; pointer-events: none; }
 
 .coop-slot-right { display: flex; align-items: center; gap: 8px; }
 .coop-mic-pill {
-  font-size: 10px; letter-spacing: 1.2px; padding: 2px 6px;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; letter-spacing: 1.2px; padding: 2px 7px;
   border: 1px solid rgba(255,255,255,0.14); color: var(--ink-dim);
 }
+.coop-mic-ico { flex-shrink: 0; display: block; }
+.coop-mic-pill.off { border-color: rgba(255,102,89,0.28); color: #b58480; }
 .coop-mic-pill.live { border-color: rgba(70,196,110,0.55); color: #8ff7b2; }
 .coop-mic-pill.talking {
   border-color: #5ee68a; background: rgba(55,180,95,0.28); color: #eafff0;
