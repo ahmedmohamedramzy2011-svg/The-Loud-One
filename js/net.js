@@ -114,7 +114,7 @@ window.LO = window.LO || {};
       this.localId = 'host';
       this.localSlot = 0;
       this.localName = sanitizeName(name, 0);
-      this.hostVersion = gameVersion || (LO.settings && LO.settings.gameVersion) || '2.8.1';
+      this.hostVersion = gameVersion || (LO.settings && LO.settings.gameVersion) || '2.8.2';
       this.inGame = false;
       this.players = [this._makePlayer('host', 0, this.localName)];
       this.remoteStates.clear();
