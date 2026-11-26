@@ -942,8 +942,9 @@
   }
   function closePanel() {
     hideAllScreens();
-    if (menuReturn === 'pause') { show('pause'); show('hud'); }
+    if (menuReturn === 'pause' || coopMenuOpen || state === 'paused') { show('pause'); show('hud'); }
     else if (menuReturn === 'lobby') { show('coop-lobby'); }
+    else if (state === 'play' || state === 'spectate') { show('hud'); }
     else show('title');
   }
 
@@ -2778,7 +2779,7 @@
       if (!b) return;
       A.click(true);
       const act = b.dataset.action;
-      const inPause = state === 'paused';
+      const inPause = state === 'paused' || coopMenuOpen || !!b.closest('#pause');
       switch (act) {
         case 'play': startGame(false); break;
         case 'multiplayer':
@@ -3368,6 +3369,7 @@ function boot() {
     window.addEventListener('keydown', leaveGate);
     LO.adminHost = {
       getState: () => state,
+      isPaused: () => state === 'paused' || coopMenuOpen,
       getGameTime: () => gameTime,
       getEvidenceCount: () => evidenceCount,
       getWorld: () => world,

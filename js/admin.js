@@ -360,7 +360,7 @@
       H.setPlayEnabled(true);
       H.syncClock();
       H.lockPointer();
-    } else if (admin.returnTo === 'pause' && H.getState() === 'paused') {
+    } else if (admin.returnTo === 'pause' && (H.getState() === 'paused' || (H.isPaused && H.isPaused()))) {
       H.showScreen('pause', true);
       H.showScreen('hud', true);
     } else if (H.getState() === 'title') {
@@ -375,7 +375,9 @@
       return;
     }
     if (currentState === 'gate' || currentState === 'opening' || currentState === 'ending' || currentState === 'credits' || currentState === 'dying') return;
-    const from = currentState === 'paused' ? 'pause' : currentState === 'play' ? 'play' : 'title';
+    const H = host();
+    const paused = currentState === 'paused' || !!(H && H.isPaused && H.isPaused());
+    const from = paused ? 'pause' : currentState === 'play' ? 'play' : 'title';
     admin.openPanel(from);
   };
 
