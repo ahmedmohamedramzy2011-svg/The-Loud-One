@@ -27,11 +27,12 @@ window.LO = window.LO || {};
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
     // playable version
-    gameVersion: '2.8.1',
-    autoLatest: '2.8.1',
+   gameVersion: '2.8.2',
+    autoLatest: '2.8.2',
   }, PRESETS.medium);
 
   const VERSIONS = [
+    { id: '2.8.2', label: 'v2.8.2', era: 'Co-op disconnect/spectate fixes & synchronized Sneaky/Fast One waves' },
     { id: '2.8.1', label: 'v2.8.1', era: 'Rebalanced fall damage, falling HUD/camera telegraph & hazard death transition' },
     { id: '2.8',   label: 'v2.8',   era: 'Fall damage, open rooftops & clipping fixes' },
     { id: '2.7.7', label: 'v2.7.7', era: 'Bug fixes' },
