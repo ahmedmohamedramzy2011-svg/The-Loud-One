@@ -141,6 +141,15 @@
     renderer.domElement.addEventListener('click', () => {
       if (state === 'play' && !document.pointerLockElement) lockPointer();
     });
+    renderer.domElement.addEventListener('webglcontextlost', e => {
+      e.preventDefault();
+    });
+    renderer.domElement.addEventListener('webglcontextrestored', () => {
+      applyDisplay();
+      if ((state === 'title' || state === 'gate') && renderer && scene && camera) {
+        try { renderer.render(scene, camera); } catch (err) {}
+      }
+    });
     applyDisplay();
   }
 
@@ -655,6 +664,7 @@
   // ============================================================
   let titleT = 0;
   function setupTitleScene() {
+    if (!world || !siren) return;
     siren.scripted = true;
     siren.pos.set(world.STREETS[3], 0, world.STREETS[3] + 8);
     siren.yaw = Math.PI * 1.15;
@@ -662,20 +672,21 @@
     siren.forceLean = 0.2;
     siren.neckDip = 0; siren.armRaise = 0;
     siren.root.rotation.x = 0;
-    if (fastone) {
+    if (fastone && fastone.root) {
       fastone.root.visible = false;
-      fastone.head.rotation.y = 0;
-      fastone.jaw.rotation.x = 0;
+      if (fastone.head) fastone.head.rotation.y = 0;
+      if (fastone.jaw) fastone.jaw.rotation.x = 0;
     }
-    if (sneaky) sneaky.root.visible = false;
-    world.hemi.intensity = 0.3; world.moonLight.intensity = 0.35;
+    if (sneaky && sneaky.root) sneaky.root.visible = false;
+    if (world.hemi) world.hemi.intensity = 0.3;
+    if (world.moonLight) world.moonLight.intensity = 0.35;
     titleT = 0;
   }
   // ---- title screen: slow atmospheric shots fading through black ----
   const SHOT_LEN = 6.5;
   const _tv = new THREE.Vector3();
   function titleMoth(i, x, z, faceX, faceZ, t) {
-    const m = moths.moths[i];
+    const m = moths && moths.moths && moths.moths[i];
     if (!m) return;
     m.g.visible = true;
     m.g.position.set(x, 0.12, z);
@@ -700,76 +711,87 @@
     return mothSpotCache;
   }
   function updateTitle(dt) {
+    if (!world || !siren || !camera) return;
     titleT += dt;
     const shot = Math.floor(titleT / SHOT_LEN) % 7, k = (titleT % SHOT_LEN) / SHOT_LEN, lt = titleT % SHOT_LEN;
     // fade to black at the start and end of every shot
     const f = lt < 1.2 ? 1 - lt / 1.2 : lt > SHOT_LEN - 1.2 ? (lt - (SHOT_LEN - 1.2)) / 1.2 : 0;
-    $('title-fade').style.opacity = f;
-    world.updateWind(dt, 0.8, camera.position, titleT);
-    moths.moths.forEach(m => { m.g.visible = false; });
-    if (fastone) {
-      fastone.root.visible = false;
-      fastone.head.rotation.y = 0;
-      fastone.jaw.rotation.x = 0;
+    const tf = $('title-fade');
+    if (tf) tf.style.opacity = f;
+    try {
+      if (world.updateWind) world.updateWind(dt, 0.8, camera.position, titleT);
+      if (moths && moths.moths) moths.moths.forEach(m => { m.g.visible = false; });
+      if (fastone && fastone.root) {
+        fastone.root.visible = false;
+        if (fastone.head) fastone.head.rotation.y = 0;
+        if (fastone.jaw) fastone.jaw.rotation.x = 0;
+      }
+      if (sneaky && sneaky.root) sneaky.root.visible = false;
+      if (titleSpot) titleSpot.intensity = 0;
+      siren.root.visible = true;
+      siren.scripted = true;
+      const S0 = world.STREETS;
+      const ver = V();
+      if (shot === 0) {                                        // looking up at Siren Head in the street
+        siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.35;
+        camera.position.set(S0[3] - 3, 1.3 + k * 0.8, -6 + k * 5);
+        camera.lookAt(S0[3] + 7, 9 + k * 3, 20);
+        if (titleSpot) { titleSpot.position.set(S0[3] - 3, 1, -4); titleSpot.target.position.set(S0[3], 10, 20); titleSpot.intensity = 9; }
+      } else if (shot === 1) {                                 // Hollow Creek highway sign (front face) & dark pine treeline
+        siren.root.visible = false;
+        camera.position.set(-4.8 - k * 2.2, 2.25, -140.5 + k * 1.0);
+        camera.lookAt(-8.0, 3.2, -150.0);
+        if (titleSpot) {
+          titleSpot.position.copy(camera.position);
+          titleSpot.target.position.set(-8.0, 3.3, -150.0);
+          titleSpot.intensity = 6.0;
+        }
+      } else if (shot === 2) {                                 // close on the horns
+        siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.55 + Math.sin(titleT * 2) * 0.1;
+        siren.update(0, null, titleT);
+        siren.root.updateMatrixWorld(true);
+        siren.headWorldPos(_tv);
+        camera.position.set(_tv.x - 6 + k * 2, _tv.y - 1.5, _tv.z - 8 + k);
+        camera.lookAt(_tv.x, _tv.y - 0.3, _tv.z);
+      } else if (shot === 3 && ver.moths && moths && moths.moths) { // a moth at the end of an alley, caught in a torch beam
+        siren.root.visible = false;
+        const spot = titleMothSpot();
+        const mx = spot.x, mz = spot.z;
+        camera.position.set(mx - 8 + k * 2, 1.6, mz);
+        titleMoth(0, mx, mz, camera.position.x, camera.position.z, titleT);
+        camera.lookAt(mx, 1.5, mz - 2.8);
+        if (titleSpot) { titleSpot.position.copy(camera.position); titleSpot.target.position.set(mx, 1.4, mz); titleSpot.intensity = 7; }
+      } else if (shot === 4 || (!ver.moths && shot === 3)) {   // Siren Head stalking between buildings
+        siren.pos.set(S0[2], 0, -40 + k * 14); siren.yaw = 0; siren.speedNow = 2.2; siren.glowOverride = 0.3;
+        camera.position.set(S0[2] - 3.5, 2.2, -72 + k * 3);
+        camera.lookAt(S0[2] + 5, 8, -34 + k * 14);
+        if (titleSpot) { titleSpot.position.set(S0[2] - 3.5, 1.5, -70); titleSpot.target.position.set(S0[2], 9, -34 + k * 14); titleSpot.intensity = 10; }
+      } else if (shot === 5 && ver.moths && world.enterables && world.enterables.length) { // two moths waiting just inside a doorway
+        siren.root.visible = false;
+        const b = world.enterables.find(e => !e.sheriff) || world.enterables[0];
+        const m1 = b.F.point(-0.7, b.hd - 1.6), m2 = b.F.point(0.8, b.hd - 3.2), cp = b.F.point(0.3 * Math.sin(titleT * 0.2), b.hd + 5.5 - k * 1.5);
+        camera.position.set(cp.x, 1.55, cp.z);
+        titleMoth(1, m1.x, m1.z, cp.x, cp.z, titleT);
+        titleMoth(2, m2.x, m2.z, cp.x, cp.z, titleT);
+        const in1 = b.F.point(0, b.hd - 2.2);
+        camera.lookAt(in1.x, 1.5, in1.z);
+        if (titleSpot) { titleSpot.position.copy(camera.position); titleSpot.target.position.set(in1.x, 1.3, in1.z); titleSpot.intensity = 6; }
+      } else {                                                 // Type-III ROAD CLOSED barricades & debris at the town gate
+        siren.root.visible = false;
+        camera.position.set(-6.8 + k * 3.8, 1.55, -124.0 + k * 2.2);
+        camera.lookAt(-1.2, 1.1, -113.5);
+        if (titleSpot) {
+          titleSpot.position.copy(camera.position);
+          titleSpot.target.position.set(0.2, 0.9, -113.5);
+          titleSpot.intensity = 7.5;
+        }
+      }
+      siren.update(dt, null, titleT);
+      if (world.update) world.update(dt, titleT, { still: false, enabled: !!ver.forestBirds });
+    } catch (err) {
+      console.warn('[title] Title scene update error:', err);
+      if (tf) tf.style.opacity = 0;
     }
-    if (sneaky) sneaky.root.visible = false;
-    titleSpot.intensity = 0;
-    siren.root.visible = true;
-    siren.scripted = true;
-    const S0 = world.STREETS;
-    const ver = V();
-    if (shot === 0) {                                        // looking up at Siren Head in the street
-      siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.35;
-      camera.position.set(S0[3] - 3, 1.3 + k * 0.8, -6 + k * 5);
-      camera.lookAt(S0[3] + 7, 9 + k * 3, 20);
-      titleSpot.position.set(S0[3] - 3, 1, -4); titleSpot.target.position.set(S0[3], 10, 20); titleSpot.intensity = 9;
-    } else if (shot === 1) {                                 // Hollow Creek highway sign (front face) & dark pine treeline
-      siren.root.visible = false;
-      camera.position.set(-4.8 - k * 2.2, 2.25, -140.5 + k * 1.0);
-      camera.lookAt(-8.0, 3.2, -150.0);
-      titleSpot.position.copy(camera.position);
-      titleSpot.target.position.set(-8.0, 3.3, -150.0);
-      titleSpot.intensity = 6.0;
-    } else if (shot === 2) {                                 // close on the horns
-      siren.pos.set(S0[3], 0, 20); siren.yaw = Math.PI * 1.1; siren.speedNow = 0; siren.glowOverride = 0.55 + Math.sin(titleT * 2) * 0.1;
-      siren.update(0, null, titleT);
-      siren.root.updateMatrixWorld(true);
-      siren.headWorldPos(_tv);
-      camera.position.set(_tv.x - 6 + k * 2, _tv.y - 1.5, _tv.z - 8 + k);
-      camera.lookAt(_tv.x, _tv.y - 0.3, _tv.z);
-    } else if (shot === 3 && ver.moths) {                    // a moth at the end of an alley, caught in a torch beam
-      siren.root.visible = false;
-      const spot = titleMothSpot();
-      const mx = spot.x, mz = spot.z;
-      camera.position.set(mx - 8 + k * 2, 1.6, mz);
-      titleMoth(0, mx, mz, camera.position.x, camera.position.z, titleT);
-      camera.lookAt(mx, 1.5, mz - 2.8);
-      titleSpot.position.copy(camera.position); titleSpot.target.position.set(mx, 1.4, mz); titleSpot.intensity = 7;
-    } else if (shot === 4 || (!ver.moths && shot === 3)) {   // Siren Head stalking between buildings
-      siren.pos.set(S0[2], 0, -40 + k * 14); siren.yaw = 0; siren.speedNow = 2.2; siren.glowOverride = 0.3;
-      camera.position.set(S0[2] - 3.5, 2.2, -72 + k * 3);
-      camera.lookAt(S0[2] + 5, 8, -34 + k * 14);
-      titleSpot.position.set(S0[2] - 3.5, 1.5, -70); titleSpot.target.position.set(S0[2], 9, -34 + k * 14); titleSpot.intensity = 10;
-    } else if (shot === 5 && ver.moths) {                    // two moths waiting just inside a doorway
-      siren.root.visible = false;
-      const b = world.enterables.find(e => !e.sheriff) || world.enterables[0];
-      const m1 = b.F.point(-0.7, b.hd - 1.6), m2 = b.F.point(0.8, b.hd - 3.2), cp = b.F.point(0.3 * Math.sin(titleT * 0.2), b.hd + 5.5 - k * 1.5);
-      camera.position.set(cp.x, 1.55, cp.z);
-      titleMoth(1, m1.x, m1.z, cp.x, cp.z, titleT);
-      titleMoth(2, m2.x, m2.z, cp.x, cp.z, titleT);
-      const in1 = b.F.point(0, b.hd - 2.2);
-      camera.lookAt(in1.x, 1.5, in1.z);
-      titleSpot.position.copy(camera.position); titleSpot.target.position.set(in1.x, 1.3, in1.z); titleSpot.intensity = 6;
-    } else {                                                 // Type-III ROAD CLOSED barricades & debris at the town gate
-      siren.root.visible = false;
-      camera.position.set(-6.8 + k * 3.8, 1.55, -124.0 + k * 2.2);
-      camera.lookAt(-1.2, 1.1, -113.5);
-      titleSpot.position.copy(camera.position);
-      titleSpot.target.position.set(0.2, 0.9, -113.5);
-      titleSpot.intensity = 7.5;
-    }
-    siren.update(dt, null, titleT);
-    world.update(dt, titleT, { still: false, enabled: !!ver.forestBirds });
   }
 
   function goTitle() {
@@ -2460,14 +2482,23 @@ function loop() {
 function boot() {
     document.body.classList.toggle('testing-build', !!LO.isTesting);
     document.body.classList.toggle('has-touch', !!LO.isTouch);
-    // film grain image
-    const grain = LO.tex.canvas('grainOverlay');
-    $('grain').style.backgroundImage = `url(${grain.toDataURL()})`;
+    try {
+      const grain = LO.tex.canvas('grainOverlay');
+      $('grain').style.backgroundImage = `url(${grain.toDataURL()})`;
+    } catch (e) { /* non-fatal */ }
     createRenderer();
-    deathRoom = new LO.DeathRoom();
+    try { deathRoom = new LO.DeathRoom(); } catch (e) { console.warn('[boot] DeathRoom init error:', e); }
     try { document.fonts && document.fonts.load('40px Caveat'); } catch (e) { /* fallback fonts are fine */ }
-    buildWorld();
-    setupTitleScene();
+    try {
+      buildWorld();
+      setupTitleScene();
+      if (renderer && scene && camera) {
+        updateTitle(0.02);
+        renderer.render(scene, camera);
+      }
+    } catch (e) {
+      console.warn('[boot] Title scene init error:', e);
+    }
     syncVersionUI();
     wireMenus();
     ui.fadeIn(0.1);
@@ -2481,14 +2512,16 @@ setInterval(() => {
     const gate = $('gate');
     const leaveGate = () => {
       if (state !== 'gate') return;
-      A.init();
+      try { A.init(); } catch (e) { console.warn('[audio] Init error:', e); }
       ui.fadeOut(0.01);
       gate.classList.remove('active');
       state = 'title';
       show('title');
       setTimeout(() => ui.fadeIn(2.5), 50);
-      A.playMusic('title', 3);
-      A.setWind(0.12);
+      try {
+        A.playMusic('title', 3);
+        A.setWind(0.12);
+      } catch (e) { /* non-fatal */ }
       window.removeEventListener('keydown', leaveGate);
     };
     gate.addEventListener('click', leaveGate);

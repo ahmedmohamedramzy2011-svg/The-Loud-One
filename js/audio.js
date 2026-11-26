@@ -69,29 +69,92 @@
   const samples = {};
   const voiceSamples = {};   // the player's recorded lines, keyed by subtitle text
   const voicePending = {};   // in-flight fetch/decode promises keyed by subtitle text
-  function decodeB64(b64, cb) {
+  function decodeAudioSafe(arrayBuffer, label) {
+    return new Promise(resolve => {
+      if (!arrayBuffer || !arrayBuffer.byteLength || !ctx) { resolve(null); return; }
+      let settled = false;
+      const ok = buf => {
+        if (settled) return;
+        settled = true;
+        resolve(buf || null);
+      };
+      const fail = err => {
+        if (settled) return;
+        settled = true;
+        console.warn('[audio] Unable to decode audio data:', label || 'unknown', err && err.message ? err.message : err);
+        resolve(null);
+      };
+      try {
+        const ret = ctx.decodeAudioData(arrayBuffer, ok, fail);
+        if (ret && typeof ret.then === 'function') ret.then(ok, fail);
+      } catch (err) {
+        fail(err);
+      }
+    });
+  }
+  function isValidAudioResponse(res) {
+    if (!res || !res.ok) return false;
+    const ct = (res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-type') : '') || '';
+    if (ct && /^(text\/|application\/(json|xhtml|xml|javascript))/i.test(ct)) return false;
+    return true;
+  }
+  function looksLikeNonAudioPayload(ab) {
+    if (!ab || ab.byteLength < 16) return true;
+    const bytes = new Uint8Array(ab, 0, Math.min(48, ab.byteLength));
+    let head = '';
+    for (let i = 0; i < bytes.length; i++) head += String.fromCharCode(bytes[i]);
+    const trimmed = head.trimStart().toLowerCase();
+    return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html') || trimmed.startsWith('<head') || trimmed.startsWith('version https://git-lfs');
+  }
+  function fetchAndDecodeAudio(url) {
+    if (typeof fetch !== 'function' || !ctx || !url) return Promise.resolve(null);
+    const candidates = [url];
+    if (url.startsWith('/assets/')) candidates.push('/public' + url);
+    else if (url.startsWith('assets/')) candidates.push('public/' + url);
+
+    const tryNext = idx => {
+      if (idx >= candidates.length) return Promise.resolve(null);
+      const candidate = candidates[idx];
+      return fetch(candidate)
+        .then(res => isValidAudioResponse(res) ? res.arrayBuffer() : null)
+        .then(ab => {
+          if (!ab || looksLikeNonAudioPayload(ab)) return null;
+          return decodeAudioSafe(ab, candidate);
+        })
+        .catch(err => {
+          console.warn('[audio] Failed to fetch audio file:', candidate, err && err.message ? err.message : err);
+          return null;
+        })
+        .then(buf => {
+          if (buf) return buf;
+          if (idx + 1 < candidates.length) return tryNext(idx + 1);
+          console.warn('[audio] Failed to load or decode audio file:', url);
+          return null;
+        });
+    };
+    return tryNext(0);
+  }
+  function decodeB64(b64, cb, label) {
     try {
       const bin = atob(b64);
       const buf = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-      ctx.decodeAudioData(buf.buffer, cb, () => {});
-    } catch (e) { /* missing sound is not fatal */ }
+      decodeAudioSafe(buf.buffer, label || 'base64').then(decoded => {
+        if (decoded && cb) cb(decoded);
+      });
+    } catch (e) {
+      console.warn('[audio] Failed to parse base64 audio:', label || 'base64', e && e.message ? e.message : e);
+    }
   }
   function loadVoiceClip(text, val) {
     if (!val || !ctx) return;
-    if (typeof val === 'string' && (val.startsWith('/') || val.startsWith('assets/') || val.startsWith('http'))) {
+    if (typeof val === 'string' && (val.startsWith('/') || val.startsWith('assets/') || val.startsWith('public/') || val.startsWith('http'))) {
       if (typeof fetch !== 'function') return;
-      const p = fetch(val)
-        .then(r => (r && r.ok) ? r.arrayBuffer() : null)
-        .then(ab => new Promise(resolve => {
-          if (!ab || !ctx) { resolve(null); return; }
-          try {
-            ctx.decodeAudioData(ab, buf => {
-              if (buf) voiceSamples[text] = buf;
-              resolve(buf || null);
-            }, () => resolve(null));
-          } catch (e) { resolve(null); }
-        }))
+      const p = fetchAndDecodeAudio(val)
+        .then(buf => {
+          if (buf) voiceSamples[text] = buf;
+          return buf || null;
+        })
         .catch(() => null)
         .then(buf => {
           delete voicePending[text];
@@ -100,7 +163,7 @@
       voicePending[text] = p;
       return;
     }
-    decodeB64(val, b => { voiceSamples[text] = b; });
+    decodeB64(val, b => { voiceSamples[text] = b; }, 'voice:' + text.slice(0, 32));
   }
   const BREATH_MAX_SEC = 12.0;
   A.BREATH_MAX_SEC = BREATH_MAX_SEC;
@@ -125,16 +188,11 @@
   function loadBreathingClip() {
     if (typeof fetch !== 'function' || !ctx) return;
     const url = '/assets/aistudio/freesound_community-breathing-6091_970a27c3.mp3';
-    fetch(url)
-      .then(r => (r && r.ok) ? r.arrayBuffer() : null)
-      .then(ab => {
-        if (!ab || !ctx) return;
-        ctx.decodeAudioData(ab, buf => {
-          samples.panting = trimAudioBuffer(buf, BREATH_MAX_SEC);
-          if (breathAmt > 0.02) A.setBreathing(breathAmt);
-        }, () => {});
-      })
-      .catch(() => {});
+    fetchAndDecodeAudio(url).then(buf => {
+      if (!buf || !ctx) return;
+      samples.panting = trimAudioBuffer(buf, BREATH_MAX_SEC);
+      if (breathAmt > 0.02) A.setBreathing(breathAmt);
+    });
   }
   function loadSamples() {
     const V = LO.VOICE_DATA;
@@ -144,12 +202,7 @@
     if (!D) return;
     Object.keys(D).forEach(key => {
       if (key === 'panting') return;
-      try {
-        const bin = atob(D[key]);
-        const buf = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-        ctx.decodeAudioData(buf.buffer, b => { samples[key] = b; }, () => {});
-      } catch (e) { /* missing sound is not fatal */ }
+      decodeB64(D[key], b => { samples[key] = b; }, 'sound:' + key);
     });
   }
   A.getBreathingDuration = () => (samples.panting ? samples.panting.duration : 0);
