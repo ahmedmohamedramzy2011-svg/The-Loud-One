@@ -176,6 +176,8 @@
   Player.prototype.bindInput = function () {
     const self = this;
     window.addEventListener('keydown', e => {
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
       self.keys[e.code] = true;
       if (!self.enabled) return;
       if (e.code === 'KeyF') self.toggleFlash();

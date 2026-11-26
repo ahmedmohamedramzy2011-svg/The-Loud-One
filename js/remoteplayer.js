@@ -322,10 +322,13 @@ window.LO = window.LO || {};
   }
 
   RemotePlayer.prototype.update = function (dt, camPos) {
-    if (this.alive === false || this.firstPersonHidden) {
-  if (this.root) this.root.visible = false;
-  return;
-}
+    if (this.alive === false) {
+      if (this.root) this.root.visible = false;
+      if (this.spot) this.spot.intensity = 0;
+      if (this.cone) this.cone.visible = false;
+      if (this.burst) { this.burstPower = 0; this.burst.intensity = 0; }
+      return;
+    }
     const k = Math.min(1, 1 - Math.exp(-16 * (dt || 0.016)));
     this.pos.lerp(this.targetPos, k);
     this.yaw += angDiff(this.yaw, this.targetYaw) * k;
@@ -338,13 +341,13 @@ window.LO = window.LO || {};
     const visible = this.alive && !this.hidden && !this.firstPersonHidden;
     this.root.visible = visible;
 
-    const lightOn = this.alive && !this.hidden && this.flashOn;
+    const lightOn = this.alive && !this.hidden && !this.firstPersonHidden && this.flashOn;
     const baseInt = (LO.settings && LO.settings.lighting === 'simple') ? 2.2 : 4.8;
     this.spot.intensity = lightOn ? baseInt : 0;
     this.cone.visible = visible && lightOn;
     this.headlampLensMat.color.setHex(lightOn ? 0xfff4cf : 0x2a2a2a);
 
-    if (this.burstPower > 0.05) {
+    if (this.burstPower > 0.05 && !this.firstPersonHidden) {
       this.burstPower *= Math.exp(-dt * 24);
       this.burst.intensity = this.burstPower;
     } else {

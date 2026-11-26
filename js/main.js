@@ -24,18 +24,200 @@
   let skipHeld = 0;
 
   // Co-op runtime state
+  const CALLSIGN_KEY = 'lo_callsign';
   const remotePlayers = new Map(); // id -> LO.RemotePlayer
   const remoteRocks = [];
+  const _coopPlayers = [];
+  const _rpList = [];
+  const _specTarget = new THREE.Vector3();
+  let lastWorldSnap = null;
+  let coopHudAccum = 0;
+  let lastCoopHudHtml = null;
+  let lastSpecLabelText = '';
   let netSyncAccum = 0;
   let coopMenuOpen = false;
   let spectateId = null;
   let spectateFirstPerson = false;
   let savedLocalVersion = null;
-  let coopRunSeed = undefined;
-  let coopEvSeed = undefined;
   let coopTeamWiped = false;
+  let chatOpen = false;
+  let chatFadeTimer = null;
+  let voiceUiAccum = 0;
+  const _voiceRemotePos = new THREE.Vector3();
+
+  function sanitizeCallsign(raw) {
+    return String(raw || '').replace(/[^\w \-\.]/g, '').trim().slice(0, 16);
+  }
+  function loadSavedCallsign() {
+    try { return sanitizeCallsign(localStorage.getItem(CALLSIGN_KEY) || ''); } catch (e) { return ''; }
+  }
+  function saveCallsign(raw) {
+    const clean = sanitizeCallsign(raw);
+    try {
+      if (clean) localStorage.setItem(CALLSIGN_KEY, clean);
+      else localStorage.removeItem(CALLSIGN_KEY);
+    } catch (e) { /* storage unavailable */ }
+    return clean;
+  }
+  function syncCallsignInputs(val, exceptEl) {
+    const clean = sanitizeCallsign(val);
+    const jEl = $('coop-name-join');
+    const lEl = $('coop-name-lobby');
+    if (jEl && jEl !== exceptEl) jEl.value = clean;
+    if (lEl && lEl !== exceptEl) lEl.value = clean;
+  }
+  function escHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function appendChatMessage(msg) {
+    if (!msg || !msg.text) return;
+    const html = `<span class="chat-name" style="color:${escHtml(msg.color || '#4a78a8')}">${escHtml(msg.name || 'Investigator')}${msg.dead ? '<span class="chat-dead-tag">[DEAD]</span>' : ''}:</span> <span class="chat-text">${escHtml(msg.text)}</span>`;
+    ['lobby-chat-log', 'hud-chat-log'].forEach(logId => {
+      const log = $(logId);
+      if (!log) return;
+      const line = document.createElement('div');
+      line.className = 'chat-line' + (msg.dead ? ' dead' : '');
+      line.innerHTML = html;
+      log.appendChild(line);
+      while (log.children.length > 40) log.removeChild(log.firstChild);
+      log.scrollTop = log.scrollHeight;
+    });
+    const hudChat = $('coop-chat');
+    if (hudChat) {
+      hudChat.classList.add('has-new');
+      clearTimeout(chatFadeTimer);
+      chatFadeTimer = setTimeout(() => {
+        const el = $('coop-chat');
+        if (el && !chatOpen) el.classList.remove('has-new');
+      }, 7500);
+    }
+  }
+  function clearChatLogs() {
+    chatOpen = false;
+    clearTimeout(chatFadeTimer);
+    ['lobby-chat-log', 'hud-chat-log'].forEach(logId => {
+      const log = $(logId);
+      if (log) log.innerHTML = '';
+    });
+    const hudChat = $('coop-chat');
+    if (hudChat) hudChat.classList.remove('open', 'has-new');
+    const cBtn = $('hud-chat-btn');
+    if (cBtn) cBtn.classList.remove('active');
+    const hi = $('hud-chat-input');
+    if (hi) { hi.value = ''; hi.blur(); }
+    const li = $('lobby-chat-input');
+    if (li) li.value = '';
+  }
+  function openChat() {
+    if (chatOpen || !Net || !Net.isCoop() || coopMenuOpen || (LO.admin && LO.admin.open)) return;
+    if (state !== 'play' && state !== 'spectate') return;
+    chatOpen = true;
+    if (player && player.keys) {
+      Object.keys(player.keys).forEach(k => { player.keys[k] = false; });
+    }
+    if (player) player.enabled = false;
+    const box = $('coop-chat');
+    if (box) box.classList.add('open', 'has-new');
+    const cBtn = $('hud-chat-btn');
+    if (cBtn) cBtn.classList.add('active');
+    if (document.pointerLockElement) {
+      try { document.exitPointerLock(); } catch (e) {}
+    }
+    const inp = $('hud-chat-input');
+    if (inp) setTimeout(() => { if (chatOpen) inp.focus(); }, 0);
+  }
+  function closeChat(refocusPlay) {
+    if (!chatOpen) return;
+    chatOpen = false;
+    const box = $('coop-chat');
+    if (box) box.classList.remove('open');
+    const cBtn = $('hud-chat-btn');
+    if (cBtn) cBtn.classList.remove('active');
+    const inp = $('hud-chat-input');
+    if (inp && document.activeElement === inp) inp.blur();
+    if (refocusPlay && state === 'play' && !coopMenuOpen && !(LO.admin && LO.admin.open)) {
+      if (player) player.enabled = true;
+      lockPointer();
+    }
+  }
+  function updateVoiceUI() {
+    const inCoop = !!(Net && Net.isCoop());
+    document.body.classList.toggle('in-coop', inCoop);
+    const lBtn = $('lobby-mic-btn');
+    const lStat = $('lobby-mic-status');
+    const hBtn = $('hud-mic-btn');
+    const hChatBtn = $('hud-chat-btn');
+    if (hChatBtn) hChatBtn.textContent = LO.isTouch ? 'CHAT' : '[T] CHAT';
+    if (!inCoop || !Net) return;
+
+    const on = !!Net.voiceEnabled;
+    const muted = !!Net.micMuted;
+    const talking = !!(on && !muted && Net.localSpeaking);
+
+    if (lBtn) {
+      lBtn.textContent = !on ? 'ENABLE MIC' : muted ? 'MIC MUTED' : 'MIC LIVE';
+      lBtn.classList.toggle('live', on && !muted);
+      lBtn.classList.toggle('muted', on && muted);
+      lBtn.classList.toggle('talking', talking);
+    }
+    if (lStat) {
+      if (Net.voiceError) {
+        lStat.textContent = Net.voiceError;
+        lStat.className = 'coop-mic-status err';
+      } else if (!on) {
+        lStat.textContent = 'Voice off — press to test mic & talk in lobby';
+        lStat.className = 'coop-mic-status';
+      } else if (muted) {
+        lStat.textContent = 'Microphone muted — teammates cannot hear you';
+        lStat.className = 'coop-mic-status';
+      } else if (talking) {
+        lStat.textContent = 'Transmitting voice to squad...';
+        lStat.className = 'coop-mic-status talking';
+      } else {
+        lStat.textContent = 'Microphone live — 3D proximity voice active';
+        lStat.className = 'coop-mic-status';
+      }
+    }
+    if (hBtn) {
+      const pfx = LO.isTouch ? '' : '[X] ';
+      hBtn.textContent = !on ? (pfx + 'MIC OFF') : muted ? (pfx + 'MIC MUTED') : (pfx + 'MIC LIVE');
+      hBtn.classList.toggle('live', on && !muted);
+      hBtn.classList.toggle('muted', on && muted);
+      hBtn.classList.toggle('talking', talking);
+    }
+
+    const rosterEl = $('coop-roster');
+    if (rosterEl && Net.getVoiceState) {
+      rosterEl.querySelectorAll('.coop-slot[data-pid]').forEach(slot => {
+        const pid = slot.getAttribute('data-pid');
+        const pill = slot.querySelector('.coop-mic-pill');
+        if (!pill || !pid) return;
+        const vs = Net.getVoiceState(pid);
+        pill.className = 'coop-mic-pill' + (vs.speaking ? ' talking' : vs.hasMic ? (vs.muted ? ' muted' : ' live') : '');
+        pill.textContent = vs.speaking ? 'TALKING' : vs.hasMic ? (vs.muted ? 'MUTED' : 'MIC ON') : 'NO MIC';
+      });
+    }
+  }
+  function syncHideSpotOccupation(id, hidden, hideSpotIdx, rp) {
+    const spots = world && world.hideSpots;
+    if (!spots) return;
+    const prevIdx = rp ? rp._occupiedHideIdx : -1;
+    if (prevIdx !== undefined && prevIdx >= 0 && spots[prevIdx] && spots[prevIdx]._occupiedBy === id) {
+      if (!hidden || prevIdx !== hideSpotIdx) spots[prevIdx]._occupiedBy = null;
+    }
+    const nextIdx = (hidden && hideSpotIdx !== undefined && hideSpotIdx >= 0 && spots[hideSpotIdx]) ? hideSpotIdx : -1;
+    if (nextIdx >= 0) spots[nextIdx]._occupiedBy = id;
+    if (rp) rp._occupiedHideIdx = nextIdx;
+  }
+  function clearAllHideOccupancy() {
+    if (world && world.hideSpots) {
+      for (let i = 0; i < world.hideSpots.length; i++) world.hideSpots[i]._occupiedBy = null;
+    }
+    remotePlayers.forEach(rp => { rp._occupiedHideIdx = -1; });
+  }
+
   window.addEventListener('keydown', (e) => {
-    if (state !== 'spectate' || coopMenuOpen) return;
+    if (state !== 'spectate' || coopMenuOpen || chatOpen) return;
     if (e.code === 'KeyV') {
       spectateFirstPerson = !spectateFirstPerson;
       updateSpectateLabel();
@@ -45,9 +227,9 @@
     }
   });
   const SYNC_INTERVAL = 0.04; // 25 Hz
-  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true, forestRing: true, echoClosePause: true, townMap: true, hazards: true, perfOpt276: true };
+  const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true, forestRing: true, echoClosePause: true, townMap: true, hazards: true, perfOpt276: true, reverb: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
-  const HINT_DELAY = 180, HINT_SHOW = 15;
+  const HINT_DELAY = 180;
   let lastEvidenceTime = 0, hintUntil = 0, hintTarget = null;
   function hintReady() { return V().hint && state === 'play' && !endingQueued && gameTime - lastEvidenceTime >= HINT_DELAY; }
   function useHint() {
@@ -139,7 +321,8 @@
     renderer.shadowMap.type = S.shadows === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     $('game-root').appendChild(renderer.domElement);
     renderer.domElement.addEventListener('click', () => {
-      if (state === 'play' && !document.pointerLockElement) lockPointer();
+      if (chatOpen) { closeChat(state === 'play'); return; }
+      if (state === 'play' && !document.pointerLockElement && !coopMenuOpen) lockPointer();
     });
     renderer.domElement.addEventListener('webglcontextlost', e => {
       e.preventDefault();
@@ -189,7 +372,57 @@
     applyDisplay();
   }
 
+  let _remoteRockGeo = null, _remoteRockMat = null;
+  function spawnRemoteRock(msg) {
+    if (!scene || !world || !msg) return;
+    if (!_remoteRockGeo) _remoteRockGeo = new THREE.IcosahedronGeometry(0.11, 0);
+    if (!_remoteRockMat) _remoteRockMat = new THREE.MeshStandardMaterial({ color: 0x6a645a, roughness: 0.9 });
+    const mesh = new THREE.Mesh(_remoteRockGeo, _remoteRockMat);
+    mesh.position.set(msg.x || 0, msg.y || 1.5, msg.z || 0);
+    scene.add(mesh);
+    remoteRocks.push({
+      mesh,
+      vx: msg.vx || 0,
+      vy: msg.vy || 0,
+      vz: msg.vz || 0,
+      life: 6,
+    });
+  }
+  function hitRockCol(list, py, nx, nz) {
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c.disabled && py < c.maxY && py > (c.minY || 0) && nx > c.minX && nx < c.maxX && nz > c.minZ && nz < c.maxZ) return true;
+    }
+    return false;
+  }
+  function updateRemoteRocks(dt) {
+    if (!remoteRocks.length || !world) return;
+    const W = world;
+    for (let i = remoteRocks.length - 1; i >= 0; i--) {
+      const r = remoteRocks[i], p = r.mesh.position;
+      r.life -= dt;
+      r.vy -= 13 * dt;
+      const nx = p.x + r.vx * dt, nz = p.z + r.vz * dt;
+      const cols = W.queryColliders ? W.queryColliders(nx, nz, 0.5) : W.colliders;
+      const hit = hitRockCol(cols, p.y, nx, nz) || (W.evColliders && W.evColliders.length && hitRockCol(W.evColliders, p.y, nx, nz));
+      if (hit) { r.vx *= -0.15; r.vz *= -0.15; } else { p.x = nx; p.z = nz; }
+      p.y += r.vy * dt;
+      r.mesh.rotation.x += 6 * dt;
+      r.mesh.rotation.y += 5 * dt;
+      const floorY = (W.floorHeightAt ? W.floorHeightAt(p.x, p.z, p.y) : 0) + 0.12;
+      if (p.y <= floorY || r.life <= 0) {
+        if (p.y <= floorY) {
+          p.y = floorY;
+          A.rockClack(p);
+        }
+        if (r.mesh.parent) r.mesh.parent.remove(r.mesh);
+        remoteRocks.splice(i, 1);
+      }
+    }
+  }
+
   function disposeRemotePlayers() {
+    clearAllHideOccupancy();
     remotePlayers.forEach(rp => {
       if (rp && rp.dispose) rp.dispose();
     });
@@ -212,6 +445,7 @@
       let rp = remotePlayers.get(p.id);
       if (!rp) {
         rp = new LO.RemotePlayer(scene, world, p);
+        rp._occupiedHideIdx = -1;
         if (world.spawn) {
           rp.pos.copy(world.spawn);
           rp.targetPos.copy(world.spawn);
@@ -220,10 +454,12 @@
       } else {
         rp.setName(p.name);
       }
-      rp.alive = p.alive !== false;
+      if (p.alive === false) rp.alive = false;
+      else rp.alive = true;
     });
     remotePlayers.forEach((rp, id) => {
       if (!validIds.has(id)) {
+        syncHideSpotOccupation(id, false, -1, rp);
         if (rp && rp.dispose) rp.dispose();
         remotePlayers.delete(id);
       }
@@ -257,11 +493,12 @@
     };
     fastone = new LO.FastOne(scene, world);
     fastone.onBreach = pos => {
-      if (state !== 'play' || !V().fastoneV2) return;
-      siren.investigateFence && siren.investigateFence(pos);
-    };
-    fastone.onEvent = evt => {
-      if (Net && Net.isHost()) Net.broadcast({ type: 'fastone_evt', evt });
+      if ((state !== 'play' && state !== 'spectate') || !V().fastoneV2) return;
+      if (Net && Net.isClient()) {
+        Net.sendToHost({ type: 'fastone_breach', x: pos.x, z: pos.z });
+      } else {
+        siren.investigateFence && siren.investigateFence(pos);
+      }
     };
     fastone.onKillPlayer = target => {
       if (!target || target.id === 'host') dieBy('fastone');
@@ -291,7 +528,7 @@
       if (player && player.alive) player.shake = Math.max(player.shake, 0.5);
       if (Net && Net.isHost()) {
         const targetId = culprit ? (culprit.id || 'host') : null;
-        Net.broadcast({ type: 'moth_shriek', x: pos.x, y: pos.y || 2, z: pos.z, targetId });
+        Net.broadcast({ type: 'moth_shriek', x: pos.x, y: pos.y || 2, z: pos.z, targetId, dmg: V().mothDamage || 20 });
       }
     };
     player = new LO.Player(camera, world, scene);
@@ -451,6 +688,13 @@
     if (moths) {
       moths.root.visible = _prevMothRootVis;
       if (moths.moths && moths.moths[0]) moths.moths[0].g.visible = _prevMoth0Vis;
+    }
+    if (LO.Map && LO.Map.prebuild && world && (!LO.ver || V().townMap)) {
+      LO.Map.prebuild({
+        world,
+        forestRing: !!V().forestRing,
+        hazards: (hazards && V().hazards && !(LO.admin && LO.admin.noHazards)) ? hazards.list : null,
+      });
     }
   }
 
@@ -620,6 +864,13 @@
     });
   }
 
+  function syncCoopVersionBadge() {
+    const el = $('coop-ver-badge');
+    if (!el) return;
+    const ver = (Net && Net.isCoop() && Net.hostVersion) ? Net.hostVersion : (S.gameVersion || '2.8.3');
+    el.textContent = 'v' + ver;
+  }
+
   function openPanel(id, from) {
     menuReturn = from;
     hideAllScreens();
@@ -631,6 +882,19 @@
     }
     if (id === 'versions') renderVersions();
     if (id === 'updates') syncVersionUI();
+    if (id === 'coop-join' || id === 'coop-lobby') {
+      const saved = loadSavedCallsign();
+      const jEl = $('coop-name-join');
+      const lEl = $('coop-name-lobby');
+      if (saved && ((jEl && !jEl.value.trim()) || (lEl && !lEl.value.trim()))) {
+        syncCallsignInputs(saved);
+      }
+      if (id === 'coop-join') {
+        const js = $('coop-join-status');
+        if (js && !(Net && Net.isCoop())) { js.textContent = ''; js.classList.remove('err'); js.style.color = ''; }
+      }
+      syncCoopVersionBadge();
+    }
     show(id);
   }
   function closePanel() {
@@ -645,6 +909,7 @@
       S.gameVersion = savedLocalVersion;
       savedLocalVersion = null;
       syncVersionUI();
+      syncCoopVersionBadge();
       worldDirty = true;
     }
   }
@@ -657,6 +922,7 @@
       syncVersionUI();
       worldDirty = true;
     }
+    syncCoopVersionBadge();
   }
 
   // ============================================================
@@ -802,11 +1068,13 @@
     LO.TVFX.clear();
     A.stopDeathMusic(); A.stopRinging(); clearTimeout(deathTimer);
     A.stopVoices();
+    closeChat(false);
+    clearChatLogs();
     coopMenuOpen = false;
     spectateId = null;
     coopTeamWiped = false;
-    coopRunSeed = undefined;
-    coopEvSeed = undefined;
+    lastWorldSnap = null;
+    lastCoopHudHtml = null;
     if (Net && Net.isCoop()) {
       // Everyone in the roster is leaving with us: treat them all as gone so a
       // stale DEAD/HP status can never linger, and drop their meshes.
@@ -815,7 +1083,8 @@
     }
     disposeRemotePlayers();
     restoreLocalVersion();
-    document.body.classList.remove('spectating');
+    document.body.classList.remove('spectating', 'in-coop');
+    updateVoiceUI();
     const sb = $('spectate-bar'); if (sb) sb.classList.remove('show');
     const th = $('coop-team-hud'); if (th) { th.classList.remove('show'); th.innerHTML = ''; }
     hideAllScreens();
@@ -825,6 +1094,7 @@
     const mb = $('map-hud-badge'); if (mb) mb.classList.remove('show', 'open');
     document.body.classList.remove('map-open', 'has-map');
     resetHudCache();
+    A.setReverbZone && A.setReverbZone(false, false);
     A.setFlashlightBuzz(false); A.setHeartbeat(0); A.setTenant(0); A.setSilentOne(0);
     A.setBreathing && A.setBreathing(0);
     A.setStillness(false); document.body.classList.remove('still'); A.setMothFlutter(0);
@@ -848,19 +1118,22 @@
   //  GAME FLOW
   // ============================================================
   function resetRun(seed, evSeed) {
+    lastWorldSnap = null;
+    lastCoopHudHtml = null;
     if (seed !== undefined) {
       buildWorld(seed, evSeed);
     } else {
       if (worldDirty || V().randomSheriff) buildWorld();
       world.placeEvidence();          // every game the evidence moves (except the sheriff's tape)
     }
+    clearAllHideOccupancy();
     coopTeamWiped = false;
     spectateId = null;
     coopMenuOpen = false;
     document.body.classList.remove('spectating');
     const sb = $('spectate-bar'); if (sb) sb.classList.remove('show');
     if (Net && Net.isCoop()) {
-      Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; });
+      Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
       syncRemotePlayersRoster();
     }
     titleSpot.intensity = 0; siren.root.visible = true; $('title-fade').style.opacity = 0;
@@ -888,6 +1161,13 @@
     gameTime = 0;
     lastEvidenceTime = 0; hintUntil = 0; hintTarget = null;
     updateEvidenceUI();
+    if (LO.Map && LO.Map.prebuild && world && (!LO.ver || V().townMap)) {
+      LO.Map.prebuild({
+        world,
+        forestRing: !!V().forestRing,
+        hazards: (hazards && V().hazards && !(LO.admin && LO.admin.noHazards)) ? hazards.list : null,
+      });
+    }
   }
 
   function startGame(skipIntro, seed, evSeed) {
@@ -898,8 +1178,6 @@
     A.stopVoices();
     hideAllScreens();
     state = 'loading';
-    coopRunSeed = seed;
-    coopEvSeed = evSeed;
     if (seed !== undefined) buildWorld(seed, evSeed);
     resetRun(seed, evSeed);
     ui.fadeOut(0.8);
@@ -964,6 +1242,7 @@
     resetHudCache();
     state = 'play';
     show('hud');
+    updateVoiceUI();
     updateCoopTeamHUD();
     ui.fadeIn(1.5);
     A.playMusic('explore', 3);
@@ -978,7 +1257,7 @@
   }
 
   function lockPointer() {
-    if (LO.isTouch || (LO.admin && LO.admin.open)) return;
+    if (LO.isTouch || chatOpen || (LO.admin && LO.admin.open)) return;
     const el = renderer.domElement;
     try {
       const p = el.requestPointerLock && el.requestPointerLock();
@@ -988,12 +1267,13 @@
 
   LO.pauseGame = () => pause();
   document.addEventListener('pointerlockchange', () => {
-    if (!document.pointerLockElement && (state === 'play' || state === 'spectate') && !coopMenuOpen && !(LO.admin && LO.admin.open)) pause();
+    if (!document.pointerLockElement && (state === 'play' || state === 'spectate') && !coopMenuOpen && !chatOpen && !(LO.admin && LO.admin.open)) pause();
   });
 
   function pause() {
     // A dead co-op player can open the same menu while spectating a teammate.
     if (state !== 'play' && state !== 'spectate') return;
+    closeChat(false);
     if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
     if (Net && Net.isCoop()) {
       coopMenuOpen = true;
@@ -1110,7 +1390,7 @@
     player.noSilent = true;
     player.exposure = 0;
     if (fastone) fastone.clearHighlight();
-    A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0); A.setExposure(0);
+    A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
     if (Net && Net.isHost()) Net.broadcast({ type: 'ending_queue' });
     setTimeout(async () => {
       await A.say('player', 'That\'s enough. Sending everything to the county sheriff now.');
@@ -1136,6 +1416,7 @@
     spectateId = null;
     document.body.classList.remove('spectating');
     const sb = $('spectate-bar'); if (sb) sb.classList.remove('show');
+    closeChat(false);
     remotePlayers.forEach(rp => { rp.root.visible = false; if (rp.spot) rp.spot.intensity = 0; });
     player.enabled = false;
     player.mapOpen = false;
@@ -1269,6 +1550,7 @@
     dieCause = cause;
     state = 'dying';
     coopMenuOpen = false;
+    closeChat(false);
     dieT = 0;
     player.alive = false;
     player.adrenaline = 0;
@@ -1297,6 +1579,7 @@
     dieCause = 'siren';
     state = 'dying';
     coopMenuOpen = false;
+    closeChat(false);
     dieT = 0;
     player.alive = false;
     player.adrenaline = 0;
@@ -1345,6 +1628,7 @@
   }
   function enterSpectate(targetId) {
     state = 'spectate';
+    remotePlayers.forEach(rp => { rp.firstPersonHidden = false; });
     spectateId = targetId;
     LO.TVFX.clear();
     hideAllScreens();
@@ -1369,7 +1653,11 @@
     const mate = spectateId && Net ? Net.getPlayer(spectateId) : null;
     const rp = spectateId ? remotePlayers.get(spectateId) : null;
     const hpTxt = rp ? ` (${Math.max(0, Math.round(rp.health))} HP)` : '';
-    el.textContent = mate ? `SPECTATING: ${mate.name.toUpperCase()}${hpTxt}` : 'SPECTATING TEAMMATE';
+    const nextTxt = mate ? `SPECTATING: ${mate.name.toUpperCase()}${hpTxt}` : 'SPECTATING TEAMMATE';
+    if (nextTxt !== lastSpecLabelText) {
+      lastSpecLabelText = nextTxt;
+      el.textContent = nextTxt;
+    }
   }
 
   function cycleSpectate(dir) {
@@ -1383,6 +1671,7 @@
       : (curIdx + (dir || 1) + alive.length) % alive.length;
     if (spectateId && remotePlayers.has(spectateId)) remotePlayers.get(spectateId).firstPersonHidden = false;
     spectateId = alive[nextIdx].id;
+    lastSpecLabelText = '';
     updateSpectateLabel();
   }
 
@@ -1826,9 +2115,16 @@
       show('map-overlay', mapOpen);
     }
     if (mapOpen && LO.Map) {
+      let rpList = null;
+      if (Net && Net.isCoop()) {
+        _rpList.length = 0;
+        remotePlayers.forEach(rp => _rpList.push(rp));
+        rpList = _rpList;
+      }
       LO.Map.draw({
         world,
         player,
+        remotePlayers: rpList,
         hintTarget,
         evidenceCount,
         evidenceNeeded: EVIDENCE_NEEDED,
@@ -2070,15 +2366,63 @@
   const _onBirdScatter = p => { A.birdScatter && A.birdScatter(p); };
   const _worldUpdateOpts = { pos: null, disturbed: false, still: false, enabled: true, threats: null, onScatter: _onBirdScatter };
   let _rafPending = false;
-function loop() {
-  _rafPending = false;
-  if (!document.hidden && !_rafPending) {
-    _rafPending = true;
-    requestAnimationFrame(loop);
+  function broadcastHostWorldSnap() {
+    if (!Net || !Net.isHost() || !Net.broadcast) return;
+    const snapPlayers = [];
+    if (player) {
+      const lp = player.getNetState ? player.getNetState() : {};
+      lp.id = 'host';
+      snapPlayers.push(lp);
+      const hm = Net.getPlayer('host');
+      if (hm) {
+        hm.alive = player.alive !== false;
+        hm.hidden = !!lp.hidden;
+        hm.hideSpotIdx = lp.hideSpotIdx !== undefined ? lp.hideSpotIdx : -1;
+        hm.health = lp.health;
+      }
+    }
+    Net.players.forEach(np => {
+      if (!np || np.id === 'host' || np.left) return;
+      const st = Net.remoteStates && Net.remoteStates.get(np.id);
+      if (st) {
+        snapPlayers.push({
+          id: np.id,
+          x: st.x,
+          y: st.y,
+          z: st.z,
+          yaw: st.yaw,
+          pitch: st.pitch,
+          crouch: st.crouch || 0,
+          flashOn: !!st.flashOn,
+          cameraUp: !!st.cameraUp,
+          hidden: !!st.hidden,
+          hideSpotIdx: st.hideSpotIdx !== undefined ? st.hideSpotIdx : -1,
+          alive: np.alive !== false && !np.left,
+          moving: !!st.moving,
+          sprinting: !!st.sprinting,
+          noiseRadius: st.noiseRadius || 0,
+          health: typeof np.health === 'number' ? np.health : (typeof st.health === 'number' ? st.health : 100),
+        });
+      }
+    });
+    Net.broadcast({
+      type: 'world_snap',
+      siren: siren ? siren.getNetState() : null,
+      moths: moths ? moths.getNetSync() : null,
+      players: snapPlayers,
+    });
   }
-  const dt = Math.min(0.05, clock.getDelta());
-  shakeAmt = Math.max(0, shakeAmt - dt * 1.5);
+
+  function loop() {
+    _rafPending = false;
+    if (!document.hidden && !_rafPending) {
+      _rafPending = true;
+      requestAnimationFrame(loop);
+    }
+    const dt = Math.min(0.05, clock.getDelta());
+    shakeAmt = Math.max(0, shakeAmt - dt * 1.5);
     if (state === 'title' || state === 'gate') {
+      A.setReverbZone && A.setReverbZone(false, false);
       updateTitle(dt);
     } else if (state === 'play') {
       const adm = LO.isTesting ? LO.admin : null;
@@ -2088,40 +2432,65 @@ function loop() {
         gameTime += simDt;
         LO.ambush.now = gameTime;
         player.update(simDt, gameTime);
-        siren.update(simDt, player, gameTime);
-        if (Net && Net.isCoop()) {
+
+        const isCoop = !!(Net && Net.isCoop());
+        const isClient = !!(Net && Net.isClient());
+        let hasRemoteBeam = false;
+
+        if (isCoop) {
           syncRemotePlayersRoster();
+          _coopPlayers.length = 0;
+          _coopPlayers.push(player);
           remotePlayers.forEach((rp, id) => {
             const st = Net.remoteStates && Net.remoteStates.get(id);
             if (st) rp.applyNetState(st);
+            const np = Net.getPlayer ? Net.getPlayer(id) : null;
+            if (np && np.alive === false) rp.alive = false;
+            syncHideSpotOccupation(id, rp.hidden && rp.alive !== false, rp.hideSpotIdx, rp);
             rp.update(simDt, camera ? camera.position : null);
+            if (rp.alive !== false) {
+              _coopPlayers.push(rp);
+              if (rp.flashOn && !rp.hidden) hasRemoteBeam = true;
+            }
           });
+          updateRemoteRocks(simDt);
+        }
+
+        if (isClient) {
+          siren.applyNetState(lastWorldSnap ? lastWorldSnap.siren : null, simDt, player.pos);
+          if (state === 'play') moths.applyNetSync(lastWorldSnap ? lastWorldSnap.moths : null, player, hasRemoteBeam, camera, gameTime);
+        } else {
+          siren.update(simDt, isCoop ? _coopPlayers : player, gameTime);
+          if (state === 'play') moths.update(simDt, isCoop ? _coopPlayers : player, camera, gameTime);
+        }
+
+        if (isCoop) {
           netSyncAccum += simDt;
           if (netSyncAccum >= SYNC_INTERVAL) {
             netSyncAccum = 0;
-            const pkt = {
-              type: 'p_state',
-              x: player.pos.x,
-              y: player.pos.y,
-              z: player.pos.z,
-              yaw: player.yaw,
-              pitch: player.pitch,
-              crouch: player.crouch || 0,
-              flashOn: !!player.flashOn,
-              cameraUp: !!player.cameraUp,
-              hidden: !!player.hidden,
-              hideSpotIdx: player.hideSpotIdx !== undefined ? player.hideSpotIdx : -1,
-              alive: player.alive !== false,
-              moving: !!player.moving,
-              sprinting: !!player.sprinting,
-              noiseRadius: player.noiseRadius || 0,
-              health: player.health !== undefined ? player.health : 100
-            };
-            if (Net.isHost() && Net.broadcast) Net.broadcast(pkt);
-            else if (Net.sendToHost) Net.sendToHost(pkt);
+            if (Net.isHost()) {
+              broadcastHostWorldSnap();
+            } else if (Net.sendToHost) {
+              const pkt = player.getNetState ? player.getNetState() : {
+                x: player.pos.x, y: player.pos.y, z: player.pos.z,
+                yaw: player.yaw, pitch: player.pitch, crouch: player.crouch || 0,
+                flashOn: !!player.flashOn, cameraUp: !!player.cameraUp,
+                hidden: !!player.hidden, hideSpotIdx: -1,
+                alive: player.alive !== false, moving: !!player.moving,
+                sprinting: !!player.sprinting, noiseRadius: player.noiseRadius || 0,
+                health: player.health !== undefined ? player.health : 100,
+              };
+              pkt.type = 'p_state';
+              Net.sendToHost(pkt);
+            }
+          }
+          coopHudAccum += simDt;
+          if (coopHudAccum >= 0.2) {
+            coopHudAccum = 0;
+            updateCoopTeamHUD();
           }
         }
-        if (state === 'play') moths.update(simDt, player, camera, gameTime);
+
         if (state === 'play' && sneaky.update(simDt, player, camera, siren) === 'kill') dieBy('sneaky');
         if (state === 'play' && fastone.update(simDt, player, camera, siren, gameTime) === 'kill') dieBy('fastone');
         if (state === 'play' && hazards) hazards.update(simDt, player, siren, gameTime);
@@ -2141,6 +2510,11 @@ function loop() {
           updateHUD(simDt);
           updateHintUI();
           updateWindState(simDt);
+          const inForest = !!(world && world.isForest && world.isForest(player.pos) && !player.indoor);
+          if (A.setReverbZone) {
+            if (verNow.reverb) A.setReverbZone(!!player.indoor, inForest);
+            else A.setReverbZone(false, false);
+          }
           // music & heartbeat follow the danger
           const d = siren.distToPlayer || 999;
           const near = Math.max(0, 1 - d / 70);
@@ -2176,6 +2550,7 @@ function loop() {
       updateDying(dt);
       world.update(dt, gameTime, { still: true, enabled: !!V().forestBirds });
     } else if (cutscene) {
+      A.setReverbZone && A.setReverbZone(false, false);
       // hold space to skip
       if ((player.keys.Space || LO.touchHold) && state === 'opening') {
         skipHeld += dt;
@@ -2186,43 +2561,129 @@ function loop() {
       A.setSubMode && A.setSubMode('mode-cutscene');
       if (world && world.updateWind) world.updateWind(dt, 0.5, camera.position, gameTime);
       if (world) world.update(dt, gameTime += dt, { still: false, enabled: !!V().forestBirds });
-    
-   } else if (state === 'spectate') {
-        gameTime += dt;
-        if (siren) siren.update(dt, player, gameTime);
-        if (Net && Net.isCoop()) {
-          syncRemotePlayersRoster();
-          remotePlayers.forEach((rp) => {
-            rp.update(dt, camera ? camera.position : null);
-          });
-        }
-        let targetRp = spectateId ? remotePlayers.get(spectateId) : null;
-        if (!targetRp || !targetRp.alive) {
-          const alive = Net ? Net.players.filter(p => p.alive !== false && !p.left && p.id !== Net.localId) : [];
-          if (alive.length > 0) {
-            spectateId = alive[0].id;
-            targetRp = remotePlayers.get(spectateId);
-            if (typeof updateSpectateLabel === 'function') updateSpectateLabel();
+    } else if (state === 'spectate') {
+      gameTime += dt;
+      LO.ambush.now = gameTime;
+      const isCoop = !!(Net && Net.isCoop());
+      const isClient = !!(Net && Net.isClient());
+      let hasRemoteBeam = false;
+      if (isCoop) {
+        syncRemotePlayersRoster();
+        _coopPlayers.length = 0;
+        if (player) _coopPlayers.push(player);
+        remotePlayers.forEach((rp, id) => {
+          const st = Net.remoteStates && Net.remoteStates.get(id);
+          if (st) rp.applyNetState(st);
+          const np = Net.getPlayer ? Net.getPlayer(id) : null;
+          if (np && np.alive === false) rp.alive = false;
+          syncHideSpotOccupation(id, rp.hidden && rp.alive !== false, rp.hideSpotIdx, rp);
+          rp.update(dt, camera ? camera.position : null);
+          if (rp.alive !== false) {
+            _coopPlayers.push(rp);
+            if (rp.flashOn && !rp.hidden) hasRemoteBeam = true;
           }
-        }
-        if (targetRp && camera) {
-          targetRp.firstPersonHidden = !!spectateFirstPerson;
-          if (spectateFirstPerson) {
-            const eyeY = targetRp.pos.y + 1.62 - (targetRp.crouch || 0) * 0.42;
-            camera.position.set(targetRp.pos.x, eyeY, targetRp.pos.z);
-            camera.rotation.order = 'YXZ';
-            camera.rotation.set(targetRp.pitch || 0, targetRp.yaw || 0, 0);
-          } else {
-            const yaw = targetRp.yaw || 0;
-            const behindX = targetRp.pos.x + Math.sin(yaw) * 3.2;
-            const behindZ = targetRp.pos.z + Math.cos(yaw) * 3.2;
-            camera.position.lerp(new THREE.Vector3(behindX, targetRp.pos.y + 2.1, behindZ), Math.min(1, dt * 12));
-            camera.lookAt(targetRp.pos.x, targetRp.pos.y + 1.45, targetRp.pos.z);
-          }
-        }
-      } else if (state !== 'play') {
-        A.setSubMode && A.setSubMode('');
+        });
+        updateRemoteRocks(dt);
       }
+      if (isClient) {
+        if (siren) siren.applyNetState(lastWorldSnap ? lastWorldSnap.siren : null, dt, camera ? camera.position : null);
+        if (moths) moths.applyNetSync(lastWorldSnap ? lastWorldSnap.moths : null, null, hasRemoteBeam, camera, gameTime);
+      } else {
+        if (siren) siren.update(dt, isCoop ? _coopPlayers : player, gameTime);
+        if (moths) moths.update(dt, isCoop ? _coopPlayers : player, camera, gameTime);
+        // Keep co-op waves advancing for surviving clients if the host is dead/spectating.
+        if (Net && Net.isHost() && _coopPlayers.length > 1) {
+          if (fastone && V().fastone && !(LO.admin && LO.admin.noFastOne) && !LO.ambush.active && LO.ambush.now >= LO.ambush.gapUntil) {
+            if (fastone.cooldown > 0) fastone.cooldown = Math.max(0, fastone.cooldown - dt);
+            else {
+              fastone.timer -= dt;
+              if (fastone.timer <= 0) {
+                Net.broadcast({ type: 'fast_wave' });
+                fastone.timer = 135 + Math.random() * 45;
+                fastone.cooldown = 35;
+              }
+            }
+          }
+          if (sneaky && V().sneaky && !(LO.admin && LO.admin.noSneaky) && !LO.ambush.active && LO.ambush.now >= LO.ambush.gapUntil) {
+            sneaky.timer -= dt;
+            if (sneaky.timer <= 0) {
+              Net.broadcast({ type: 'sneaky_wave' });
+              sneaky.timer = 150 + Math.random() * 60;
+            }
+          }
+        }
+      }
+      if (Net && Net.isHost()) {
+        netSyncAccum += dt;
+        if (netSyncAccum >= SYNC_INTERVAL) {
+          netSyncAccum = 0;
+          broadcastHostWorldSnap();
+        }
+      }
+      let targetRp = spectateId ? remotePlayers.get(spectateId) : null;
+      if (!targetRp || !targetRp.alive) {
+        const alive = Net ? Net.players.filter(p => p.alive !== false && !p.left && p.id !== Net.localId) : [];
+        if (alive.length > 0) {
+          if (targetRp) targetRp.firstPersonHidden = false;
+          spectateId = alive[0].id;
+          targetRp = remotePlayers.get(spectateId);
+          lastSpecLabelText = '';
+          updateSpectateLabel();
+        }
+      }
+      remotePlayers.forEach((rp, id) => {
+        if (id !== spectateId && rp.firstPersonHidden) rp.firstPersonHidden = false;
+      });
+      if (targetRp && camera) {
+        targetRp.firstPersonHidden = !!spectateFirstPerson;
+        if (spectateFirstPerson) {
+          const eyeY = targetRp.pos.y + 1.62 - (targetRp.crouch || 0) * 0.42;
+          camera.position.set(targetRp.pos.x, eyeY, targetRp.pos.z);
+          camera.rotation.order = 'YXZ';
+          camera.rotation.set(targetRp.pitch || 0, targetRp.yaw || 0, 0);
+        } else {
+          const yaw = targetRp.yaw || 0;
+          const behindX = targetRp.pos.x + Math.sin(yaw) * 3.2;
+          const behindZ = targetRp.pos.z + Math.cos(yaw) * 3.2;
+          _specTarget.set(behindX, targetRp.pos.y + 2.1, behindZ);
+          camera.position.lerp(_specTarget, Math.min(1, dt * 12));
+          camera.lookAt(targetRp.pos.x, targetRp.pos.y + 1.45, targetRp.pos.z);
+        }
+        const verNow = V();
+        if (A.setReverbZone) {
+          if (verNow.reverb) {
+            const specIn = !!(world && world.isIndoor && world.isIndoor(targetRp.pos));
+            const specFor = !!(world && world.isForest && world.isForest(targetRp.pos) && !specIn);
+            A.setReverbZone(specIn, specFor);
+          } else A.setReverbZone(false, false);
+        }
+        if (world) {
+          _worldUpdateOpts.pos = targetRp.pos;
+          _worldUpdateOpts.disturbed = false;
+          _worldUpdateOpts.still = false;
+          _worldUpdateOpts.enabled = !!verNow.forestBirds;
+          _worldUpdateOpts.threats = null;
+          _worldUpdateOpts.onScatter = null;
+          world.update(dt, gameTime, _worldUpdateOpts);
+        }
+      }
+      if (siren && camera) {
+        const dSpec = Math.hypot(siren.pos.x - camera.position.x, siren.pos.z - camera.position.z);
+        const nearSpec = Math.max(0, 1 - dSpec / 70);
+        if (siren.state === 'hunt') A.playMusic('chase', 1);
+        else A.playMusic('explore', 4);
+        A.setHeartbeat(siren.state === 'wander' ? nearSpec * 0.5 : Math.max(0.35, nearSpec));
+      }
+      coopHudAccum += dt;
+      if (coopHudAccum >= 0.2) {
+        coopHudAccum = 0;
+        updateSpectateLabel();
+        updateCoopTeamHUD();
+      }
+    } else if (state !== 'play') {
+      A.setReverbZone && A.setReverbZone(false, false);
+      A.setSubMode && A.setSubMode('');
+    }
 
     if (LO.admin && LO.admin.update) LO.admin.update(dt);
 
@@ -2237,6 +2698,25 @@ function loop() {
     camera.getWorldDirection(fwd);
     upv.set(0, 1, 0).applyQuaternion(camera.quaternion);
     A.setListener(camera.position, fwd, upv);
+    if (Net && Net.isCoop() && Net.updateVoiceProximity) {
+      const inWorld = (state === 'play' || state === 'spectate' || state === 'dying');
+      Net.updateVoiceProximity(
+        inWorld ? camera.position : null,
+        id => {
+          const rp = remotePlayers.get(id);
+          if (!rp) return null;
+          _voiceRemotePos.copy(rp.pos);
+          return _voiceRemotePos;
+        },
+        inWorld
+      );
+      voiceUiAccum += dt;
+      if (voiceUiAccum >= 0.12) {
+        voiceUiAccum = 0;
+        updateVoiceUI();
+        if (state === 'play' && !coopMenuOpen) updateCoopTeamHUD();
+      }
+    }
     LO.TVFX.update(dt);
     if (S.showFps) {
       fpsAcc += dt; fpsFrames++;
@@ -2258,26 +2738,29 @@ function loop() {
       const inPause = state === 'paused';
       switch (act) {
         case 'play': startGame(false); break;
+        case 'multiplayer':
+          openPanel('coop-join', 'title');
+          break;
         case 'coop-host':
           if (LO.Net && LO.Net.host) {
-            const nameEl = document.getElementById('coop-name-lobby');
-            const name = nameEl ? nameEl.value : '';
+            const nameEl = document.getElementById('coop-name-join') || document.getElementById('coop-name-lobby');
+            const rawName = nameEl ? nameEl.value : loadSavedCallsign();
+            const clean = saveCallsign(rawName);
+            syncCallsignInputs(clean);
             openPanel('coop-lobby', 'title');
-            LO.Net.host(name, LO.settings && LO.settings.gameVersion).catch(() => {});
+            LO.Net.host(clean, LO.settings && LO.settings.gameVersion).catch(() => {});
           }
-          break;
-        case 'coop-join':
-          openPanel('coop-join', 'title');
           break;
         case 'coop-connect':
           if (LO.Net && LO.Net.join) {
             const codeEl = document.getElementById('coop-code-input');
             const nameEl = document.getElementById('coop-name-join');
             const code = codeEl ? codeEl.value : '';
-            const name = nameEl ? nameEl.value : '';
-            LO.Net.join(code, name).then(() => {
-              const lobbyNameEl = document.getElementById('coop-name-lobby');
-              if (lobbyNameEl && nameEl) lobbyNameEl.value = nameEl.value;
+            const rawName = nameEl ? nameEl.value : loadSavedCallsign();
+            const clean = saveCallsign(rawName);
+            syncCallsignInputs(clean);
+            LO.Net.join(code, clean).then(() => {
+              syncCallsignInputs(clean);
               openPanel('coop-lobby', 'title');
             }).catch(() => {});
           }
@@ -2294,10 +2777,11 @@ function loop() {
         case 'coop-leave':
         case 'coop-cancel':
           if (LO.Net && LO.Net.leave) LO.Net.leave();
+          clearChatLogs();
+          updateVoiceUI();
+          restoreLocalVersion();
           closePanel();
           break;
-        case 'coop-host': if (LO.Net && LO.Net.host) LO.Net.host(); openPanel('coop-lobby', 'title'); break;
-     case 'coop-join': openPanel('coop-join', 'title'); break;
         case 'settings': settingsTab = 'all'; openPanel('settings', inPause ? 'pause' : 'title'); break;
         case 'graphics': openPanel('graphics', inPause ? 'pause' : 'title'); break;
         case 'audio': openPanel('audio', inPause ? 'pause' : 'title'); break;
@@ -2308,21 +2792,21 @@ function loop() {
         case 'back': closePanel(); break;
         case 'resume': resume(); break;
         case 'retry':
-  if (Net && Net.isCoop() && Net.isHost()) {
-    if (Array.isArray(Net.players)) {
-      Net.players = Net.players.filter(p => !p.left);
-      Net.players.forEach(p => { p.alive = true; });
-    }
-    coopTeamWiped = false;
-    const seed = Math.floor(Math.random() * 1e9);
-    const evSeed = Math.floor(Math.random() * 1e9);
-    Net.inGame = true;
-    if (Net.broadcast) Net.broadcast({ type: 'start_run', seed, evSeed });
-    startGame(false, seed, evSeed);
-  } else {
-    startGame(true);
-  }
-  break;
+          if (Net && Net.isCoop() && Net.isHost()) {
+            if (Array.isArray(Net.players)) {
+              Net.players = Net.players.filter(p => !p.left);
+              Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
+            }
+            coopTeamWiped = false;
+            const seed = (Math.random() * 0x7fffffff) | 0;
+            const evSeed = (Math.random() * 0x7fffffff) | 0;
+            Net.inGame = true;
+            if (Net.broadcast) Net.broadcast({ type: 'start_run', seed, evSeed });
+            startGame(false, seed, evSeed);
+          } else {
+            startGame(true);
+          }
+          break;
         case 'quit': ui.fadeOut(0.6); setTimeout(goTitle, 650); break;
       }
     });
@@ -2331,6 +2815,28 @@ function loop() {
         e.preventDefault();
         if (LO.admin) LO.admin.toggle(state);
         return;
+      }
+      if (chatOpen) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          closeChat(state === 'play');
+        }
+        return;
+      }
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+      if (Net && Net.isCoop() && (state === 'play' || state === 'spectate') && !coopMenuOpen && !(LO.admin && LO.admin.open)) {
+        if ((e.code === 'KeyT' || e.code === 'Enter') && !e.repeat) {
+          e.preventDefault();
+          openChat();
+          return;
+        }
+        if (e.code === 'KeyX' && !e.repeat) {
+          e.preventDefault();
+          A.init && A.init();
+          if (Net.toggleMicMute) Net.toggleMicMute().then(() => updateVoiceUI());
+          return;
+        }
       }
       if (e.code === 'KeyH' && state === 'play' && !(LO.admin && LO.admin.open)) useHint();
       if (e.code === 'Escape') {
@@ -2348,75 +2854,182 @@ function loop() {
     window.addEventListener('resize', applyDisplay);
     LO.events.addEventListener('settings', () => applyDisplay());
     if (window.LO && LO.Net) {
-   const codeDisplay = document.getElementById('coop-room-code');
-   const rosterEl = document.getElementById('coop-roster');
-   const lobbyStatus = document.getElementById('coop-lobby-status');
-   const joinStatus = document.getElementById('coop-join-status');
-   const startBtn = document.getElementById('coop-start-btn');
-   const copyBtn = document.getElementById('coop-copy-btn');
-   const lobbyNameInput = document.getElementById('coop-name-lobby');
+      const codeDisplay = document.getElementById('coop-room-code');
+      const rosterEl = document.getElementById('coop-roster');
+      const lobbyStatus = document.getElementById('coop-lobby-status');
+      const joinStatus = document.getElementById('coop-join-status');
+      const startBtn = document.getElementById('coop-start-btn');
+      const copyBtn = document.getElementById('coop-copy-btn');
+      const joinNameInput = document.getElementById('coop-name-join');
+      const lobbyNameInput = document.getElementById('coop-name-lobby');
 
-   LO.Net.onStatus = (msg, isErr) => {
-     [lobbyStatus, joinStatus].forEach(el => {
-       if (!el) return;
-       el.textContent = msg || '';
-       el.style.color = isErr ? '#e05555' : '';
-     });
-   };
+      const savedCallsign = loadSavedCallsign();
+      if (savedCallsign) {
+        syncCallsignInputs(savedCallsign);
+        LO.Net.localName = LO.Net.sanitizeName ? LO.Net.sanitizeName(savedCallsign, 0) : savedCallsign;
+      }
 
-   LO.Net.onLobbyUpdate = (players, roomCode) => {
-     if (codeDisplay) codeDisplay.textContent = roomCode || '-----';
-     if (startBtn) startBtn.style.display = LO.Net.isHost() ? '' : 'none';
-     if (rosterEl) {
-       rosterEl.innerHTML = (players || []).map(p =>
-         `<div class="coop-roster-row" style="border-left: 3px solid ${p.color || '#4a78a8'}; padding-left: 8px; margin: 4px 0;">
-           <span>${p.name}</span> <small style="opacity:0.7;">${p.id === 'host' ? '(HOST)' : ''}</small>
-         </div>`
-       ).join('');
-     }
-   };
+      const wireCallsignInput = el => {
+        if (!el) return;
+        const onInput = () => {
+          const clean = saveCallsign(el.value);
+          syncCallsignInputs(clean, el);
+          if (LO.Net.setLocalName) LO.Net.setLocalName(clean);
+        };
+        el.addEventListener('input', onInput);
+        el.addEventListener('change', () => {
+          const clean = saveCallsign(el.value);
+          el.value = clean;
+          syncCallsignInputs(clean, el);
+          if (LO.Net.setLocalName) LO.Net.setLocalName(clean);
+        });
+      };
+      wireCallsignInput(joinNameInput);
+      wireCallsignInput(lobbyNameInput);
 
-   if (copyBtn) {
-     copyBtn.addEventListener('click', () => {
-       if (LO.Net.roomCode && navigator.clipboard) {
-         navigator.clipboard.writeText(LO.Net.roomCode);
-         if (lobbyStatus) lobbyStatus.textContent = 'Copied room code: ' + LO.Net.roomCode;
-       }
-     });
-   }
+      LO.Net.onStatus = (msg, isErr) => {
+        [lobbyStatus, joinStatus].forEach(el => {
+          if (!el) return;
+          el.textContent = msg || '';
+          el.classList.toggle('err', !!isErr);
+          el.style.color = '';
+        });
+      };
 
-   if (lobbyNameInput) {
-     lobbyNameInput.addEventListener('input', () => {
-       if (LO.Net.setLocalName) LO.Net.setLocalName(lobbyNameInput.value);
-     });
-   }
-   LO.Net.onMessage = (senderId, msg) => {
+      LO.Net.onChat = msg => appendChatMessage(msg);
+      LO.Net.onVoiceChange = () => updateVoiceUI();
+
+      const lobbyMicBtn = $('lobby-mic-btn');
+      if (lobbyMicBtn) {
+        lobbyMicBtn.addEventListener('click', () => {
+          A.init && A.init();
+          if (LO.Net.toggleMicMute) LO.Net.toggleMicMute().then(() => updateVoiceUI());
+        });
+      }
+      const hudMicBtn = $('hud-mic-btn');
+      if (hudMicBtn) {
+        hudMicBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          A.init && A.init();
+          if (LO.Net.toggleMicMute) LO.Net.toggleMicMute().then(() => {
+            updateVoiceUI();
+            if (state === 'play' && !chatOpen && !coopMenuOpen) lockPointer();
+          });
+        });
+      }
+      const hudChatBtn = $('hud-chat-btn');
+      if (hudChatBtn) {
+        hudChatBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (chatOpen) closeChat(state === 'play');
+          else openChat();
+        });
+      }
+      const lobbyChatForm = $('lobby-chat-form');
+      const lobbyChatInput = $('lobby-chat-input');
+      if (lobbyChatForm && lobbyChatInput) {
+        lobbyChatForm.addEventListener('submit', e => {
+          e.preventDefault();
+          const val = lobbyChatInput.value;
+          if (LO.Net.sendChat && LO.Net.sendChat(val)) lobbyChatInput.value = '';
+          lobbyChatInput.focus();
+        });
+      }
+      const hudChatForm = $('hud-chat-form');
+      const hudChatInput = $('hud-chat-input');
+      if (hudChatForm && hudChatInput) {
+        hudChatForm.addEventListener('submit', e => {
+          e.preventDefault();
+          const val = hudChatInput.value;
+          if (LO.Net.sendChat && LO.Net.sendChat(val)) hudChatInput.value = '';
+          closeChat(state === 'play');
+        });
+      }
+
+      LO.Net.onLobbyUpdate = (players, roomCode) => {
+        if (codeDisplay) codeDisplay.textContent = roomCode || '-----';
+        if (startBtn) startBtn.style.display = LO.Net.isHost() ? '' : 'none';
+        if (LO.Net.isClient() && LO.Net.hostVersion) applyHostVersion(LO.Net.hostVersion);
+        else syncCoopVersionBadge();
+        if (rosterEl) {
+          const list = Array.isArray(players) ? players : [];
+          let html = '';
+          for (let i = 0; i < LO.Net.MAX_PLAYERS; i++) {
+            const p = list.find(m => m.slot === i) || list[i];
+            if (p) {
+              const role = p.id === 'host' ? 'HOST' : (p.id === LO.Net.localId ? 'YOU' : 'READY');
+              const vs = LO.Net.getVoiceState ? LO.Net.getVoiceState(p.id) : { hasMic: !!p.hasMic, muted: !!p.muted, speaking: false };
+              const micCls = vs.speaking ? ' talking' : vs.hasMic ? (vs.muted ? ' muted' : ' live') : '';
+              const micTxt = vs.speaking ? 'TALKING' : vs.hasMic ? (vs.muted ? 'MUTED' : 'MIC ON') : 'NO MIC';
+              html += `<div class="coop-slot" data-pid="${escHtml(p.id)}">
+                <span class="coop-slot-left"><i class="coop-swatch" style="background:${escHtml(p.color || '#4a78a8')}"></i><span>${escHtml(p.name)}</span></span>
+                <span class="coop-slot-right">
+                  <span class="coop-mic-pill${micCls}">${micTxt}</span>
+                  <span class="coop-badge ${p.id === 'host' ? 'host' : ''}">${role}</span>
+                </span>
+              </div>`;
+            } else {
+              html += `<div class="coop-slot empty"><span class="coop-slot-left">Waiting for investigator...</span><span class="coop-badge">OPEN</span></div>`;
+            }
+          }
+          rosterEl.innerHTML = html;
+        }
+        updateVoiceUI();
+      };
+
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          if (LO.Net.roomCode && navigator.clipboard) {
+            navigator.clipboard.writeText(LO.Net.roomCode);
+            if (lobbyStatus) lobbyStatus.textContent = 'Copied room code: ' + LO.Net.roomCode;
+          }
+        });
+      }
+
+      LO.Net.onDisconnect = reason => {
+        const msg = reason || 'Disconnected from host.';
+        clearChatLogs();
+        updateVoiceUI();
+        if (state !== 'title' && state !== 'gate') {
+          goTitle();
+          showHint(msg, 5000);
+        } else if (joinStatus) {
+          joinStatus.textContent = msg;
+          joinStatus.classList.add('err');
+        }
+      };
+
+      LO.Net.onMessage = (senderId, msg) => {
         if (!msg || typeof msg !== 'object') return;
         if (msg.type === 'start_run') {
-  coopTeamWiped = false;
-  if (Array.isArray(Net.players)) {
-    Net.players = Net.players.filter(p => !p.left);
-    Net.players.forEach(p => { p.alive = true; });
-  }
-  LO.Net.inGame = true;
-  startGame(false, msg.seed, msg.evSeed);
-}
-  else if (msg.type === 'sneaky_wave') {
-    if (sneaky && !sneaky.attacking) {
-      sneaky.waveActive = true;
-      sneaky.timer = Math.random() * 10;
-    }
-  }
-  else if (msg.type === 'fast_wave') {
-    if (fastone && player && fastone.triggerLocalAttack) {
-      fastone.triggerLocalAttack(player, gameTime);
-    }
-  }
-        else if (msg.type === 'begin_play') {
-       if (typeof endCutscene === 'function') endCutscene();
-       if (typeof beginPlay === 'function') beginPlay();
-     }
-     else if (msg.type === 'p_state') {
+          coopTeamWiped = false;
+          if (Array.isArray(Net.players)) {
+            Net.players = Net.players.filter(p => !p.left);
+            Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
+          }
+          LO.Net.inGame = true;
+          startGame(false, msg.seed, msg.evSeed);
+        } else if (msg.type === 'world_snap') {
+          lastWorldSnap = msg;
+        } else if (msg.type === 'sneaky_wave') {
+          if (sneaky && !sneaky.attacking) {
+            sneaky.waveActive = true;
+            sneaky.timer = Math.random() * 10;
+          }
+        } else if (msg.type === 'sneaky_result') {
+          if (Net.isHost() && sneaky && sneaky.finishHostAmbush) sneaky.finishHostAmbush();
+        } else if (msg.type === 'fast_wave') {
+          if (fastone && player && fastone.triggerLocalAttack) {
+            fastone.triggerLocalAttack(player, gameTime);
+          }
+        } else if (msg.type === 'fastone_breach') {
+          if (Net.isHost() && siren && siren.investigateFence && V().fastoneV2) {
+            siren.investigateFence({ x: msg.x || 0, z: msg.z || 0 });
+          }
+        } else if (msg.type === 'begin_play') {
+          if (typeof endCutscene === 'function') endCutscene();
+          if (typeof beginPlay === 'function') beginPlay();
+        } else if (msg.type === 'p_state') {
           syncRemotePlayersRoster();
           const mate = Net.getPlayer ? Net.getPlayer(senderId) : null;
           if (mate && mate.alive === false) msg.alive = false;
@@ -2424,26 +3037,189 @@ function loop() {
           if (rp) {
             const firstSync = !rp._hasNetSync;
             rp.applyNetState(msg);
+            syncHideSpotOccupation(senderId, rp.hidden && rp.alive !== false, rp.hideSpotIdx, rp);
             if (firstSync && msg.x !== undefined) {
               rp.pos.set(msg.x, msg.y || 0, msg.z);
               rp.yaw = msg.yaw !== undefined ? msg.yaw : rp.yaw;
               rp._hasNetSync = true;
             }
           }
+        } else if (msg.type === 'ev_found') {
+          if (!Net.isHost() || !world || !world.evidence) return;
+          const ev = world.evidence.find(e => e.id === msg.evId);
+          if (!ev || ev.found) return;
+          ev.found = true;
+          evidenceCount++;
+          lastEvidenceTime = gameTime;
+          if (ev === hintTarget) hintTarget = null;
+          A.evidenceSting();
+          updateEvidenceUI();
+          const finder = Net.getPlayer ? Net.getPlayer(senderId) : null;
+          const finderName = finder ? finder.name : 'Teammate';
+          showHint(`${finderName} photographed: ${ev.name}`, 3600);
+          Net.broadcast({
+            type: 'ev_sync',
+            foundIds: world.evidence.filter(e => e.found).map(e => e.id),
+            evidenceCount,
+            evName: ev.name,
+            finderName,
+          });
+          if (evidenceCount >= EVIDENCE_NEEDED && !endingQueued) queueEnding();
+        } else if (msg.type === 'ev_sync') {
+          if (world && world.evidence && Array.isArray(msg.foundIds)) {
+            const idSet = new Set(msg.foundIds);
+            world.evidence.forEach(e => { if (idSet.has(e.id)) e.found = true; });
+          }
+          if (typeof msg.evidenceCount === 'number') evidenceCount = msg.evidenceCount;
+          lastEvidenceTime = gameTime;
+          if (hintTarget && hintTarget.found) hintTarget = null;
+          A.evidenceSting();
+          updateEvidenceUI();
+          if (msg.evName) {
+            const who = msg.finderName ? `${msg.finderName} photographed` : 'Evidence photographed';
+            showHint(`${who}: ${msg.evName}`, 3600);
+          }
+        } else if (msg.type === 'ending_queue') {
+          if (!endingQueued) {
+            endingQueued = true;
+            if (player) { player.calm = true; player.noSilent = true; player.exposure = 0; }
+            if (fastone) fastone.clearHighlight();
+            A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
+            setTimeout(async () => {
+              if (state !== 'play' && state !== 'spectate') return;
+              await A.say('player', 'That\'s enough. Sending everything to the county sheriff now.');
+              if (state !== 'play' && state !== 'spectate') return;
+              await A.say('radio', 'Hollow Creek caller, we received your photos. Stay where you are. All units, heavy response to Hollow Creek. This is not a drill. I repeat, this is not a drill.');
+              if (state !== 'play' && state !== 'spectate') return;
+              await A.say('player', 'They\'re coming. They\'re actually coming.');
+            }, 2500);
+          }
+        } else if (msg.type === 'ending_start') {
+          if (state === 'play' || state === 'spectate' || state === 'paused') startEnding();
+        } else if (msg.type === 'pickup_taken') {
+          if (!Net.isHost()) return;
+          const p = world && world.pickups && world.pickups[msg.idx];
+          if (p && !p.taken) {
+            p.taken = true;
+            if (p.mesh) p.mesh.visible = false;
+            Net.broadcast({ type: 'pickup_sync', idx: msg.idx });
+          }
+        } else if (msg.type === 'pickup_sync') {
+          const p = world && world.pickups && world.pickups[msg.idx];
+          if (p) { p.taken = true; if (p.mesh) p.mesh.visible = false; }
+        } else if (msg.type === 'map_found') {
+          if (!Net.isHost()) return;
+          const wm = world && world.wallMap;
+          if (wm && !wm.taken) {
+            wm.taken = true;
+            if (wm.mesh) wm.mesh.visible = false;
+            if (wm.building) wm.building.hasMap = false;
+            if (player) player.hasMap = true;
+            A.pickup();
+            const finder = Net.getPlayer ? Net.getPlayer(senderId) : null;
+            const finderName = finder ? finder.name : 'Teammate';
+            showHint(`${finderName} picked up the Town Map! Press ${LO.isTouch ? 'MAP' : 'M or Tab'} to view.`, 5000);
+            Net.broadcast({ type: 'map_sync', finderName });
+          }
+        } else if (msg.type === 'map_sync') {
+          const wm = world && world.wallMap;
+          if (wm) {
+            wm.taken = true;
+            if (wm.mesh) wm.mesh.visible = false;
+            if (wm.building) wm.building.hasMap = false;
+          }
+          if (player && !player.hasMap) {
+            player.hasMap = true;
+            A.pickup();
+            const who = msg.finderName || 'Teammate';
+            showHint(`${who} picked up the Town Map! Press ${LO.isTouch ? 'MAP' : 'M or Tab'} to view.`, 5000);
+          }
+        } else if (msg.type === 'rock_throw') {
+          if (Net.isHost()) Net.broadcast(msg, senderId);
+          if (msg.fromId !== Net.localId) spawnRemoteRock(msg);
+        } else if (msg.type === 'noise_evt') {
+          if (!Net.isHost()) return;
+          const pos = { x: msg.x || 0, y: msg.y || 0, z: msg.z || 0 };
+          if (siren && siren.hearNoise) siren.hearNoise(pos, msg.radius || 20);
+          if (msg.kind === 'shutter') {
+            Net.broadcast({ type: 'remote_photo', id: senderId });
+          } else if (msg.kind && msg.kind !== 'jump' && msg.kind !== 'land' && msg.kind !== 'kicked' && msg.kind !== 'rock') {
+            Net.broadcast({ type: 'remote_sfx', kind: msg.kind, x: pos.x, y: pos.y, z: pos.z, fromId: senderId });
+          }
+        } else if (msg.type === 'remote_photo') {
+          if (msg.id && msg.id !== Net.localId) {
+            const rp = remotePlayers.get(msg.id);
+            if (rp && rp.triggerPhotoFlash) rp.triggerPhotoFlash();
+          }
+        } else if (msg.type === 'haz_state') {
+          if (Net.isHost()) Net.broadcast(msg, senderId);
+          if (hazards && hazards.applyRemoteState) hazards.applyRemoteState(msg.idx, msg.st);
+        } else if (msg.type === 'remote_sfx') {
+          if (msg.fromId === Net.localId) return;
+          const pos = { x: msg.x || 0, y: msg.y || 0, z: msg.z || 0 };
+          if (msg.kind === 'powerline' && A.hazardZap) A.hazardZap(pos);
+          else if (msg.kind === 'beartrap' && A.hazardTrapSnap) A.hazardTrapSnap(pos);
+          else if (msg.kind === 'steam' && A.hazardSteamBurn) A.hazardSteamBurn(pos);
+          else if (msg.kind === 'glass' && A.hazardGlass) A.hazardGlass(pos);
+          else if (msg.kind === 'floorboard' && A.hazardCreak) A.hazardCreak(pos);
+          else if (msg.kind === 'tindebris' && A.hazardTinClatter) A.hazardTinClatter(pos);
+        } else if (msg.type === 'moth_shriek') {
+          const pos = { x: msg.x || 0, y: msg.y || 2, z: msg.z || 0 };
+          if (A.mothShriek) A.mothShriek(pos);
+          if (player && player.alive) player.shake = Math.max(player.shake, 0.5);
+          if (msg.targetId === Net.localId && player && player.alive && player.damage) {
+            player.damage(msg.dmg || (V().mothDamage || 20), 'moth');
+          }
+        } else if (msg.type === 'siren_sfx' && msg.evt && siren) {
+          const e = msg.evt;
+          if (e.kind === 'echo') {
+            if (A.echoPing) A.echoPing(siren.voice);
+            siren.onEcho && siren.onEcho(siren.distToPlayer || 0);
+          } else if (e.kind === 'siren') {
+            A.siren && A.siren(siren.voice, e.sirenKind, e.loud);
+          } else if (e.kind === 'static') {
+            A.staticBurst && A.staticBurst(siren.voice, e.dur, e.vol);
+          } else if (e.kind === 'creak') {
+            A.creak && A.creak(siren.voice);
+          } else if (e.kind === 'say' && !A.still) {
+            if (e.lineKind === 'static') A.staticBurst && A.staticBurst(siren.voice, 1.2, 0.6);
+            else if (e.lineKind === 'radio') A.radioGarble && A.radioGarble(siren.voice, 2.2, 0.7);
+            else if (e.line) A.say('siren', e.line, { panner: siren.voice && siren.voice.panner, rate: 0.72, pitch: 0.45 });
+          }
+        } else if (msg.type === 'world_evt') {
+          if (msg.kind === 'smash_building' && world && world.buildings && world.smashBuilding) {
+            const b = world.buildings.find(x => x.id === msg.bId);
+            if (b) {
+              world.smashBuilding(b, { x: msg.x || 0, z: msg.z || 0 }, { x: msg.dx || 0, z: msg.dz || 1 });
+              A.buildingSmash && A.buildingSmash({ x: msg.x || 0, y: 2, z: msg.z || 0 });
+              if (player && player.alive) {
+                const d = Math.hypot((msg.x || 0) - player.pos.x, (msg.z || 0) - player.pos.z);
+                if (d < 120) player.shake = Math.max(player.shake, Math.max(0.4, 1.25 * (1 - d / 120)));
+                if (d < 100) player.triggerDizzy(Math.max(0.45, 1.15 * (1 - d / 100)));
+              }
+            }
+          }
+        } else if (msg.type === 'eject_hide') {
+          if (player && (player.hidden || player.hideAnim)) player.ejectFromHide();
+        } else if (msg.type === 'player_caught') {
+          onCaught();
+        } else if (msg.type === 'player_kill') {
+          dieBy(msg.cause || 'fastone');
         } else if (msg.type === 'player_dead') {
           const deadId = msg.id || senderId;
           const mate = Net.getPlayer ? Net.getPlayer(deadId) : null;
-          if (mate) mate.alive = false;
+          if (mate) { mate.alive = false; mate.hidden = false; mate.hideSpotIdx = -1; }
           const rp = remotePlayers.get(deadId);
           if (rp) {
-  rp.alive = false;
-  if (rp.root) rp.root.visible = false;
-}
+            syncHideSpotOccupation(deadId, false, -1, rp);
+            rp.alive = false;
+            if (rp.root) rp.root.visible = false;
+          }
           if (typeof updateCoopTeamHUD === 'function') updateCoopTeamHUD();
           if (typeof updateSpectateLabel === 'function') updateSpectateLabel();
           if (Net.isHost()) {
             Net.broadcast({ type: 'player_dead', id: deadId, cause: msg.cause });
-            const anyAlive = Net.players.some(p => p.alive !== false);
+            const anyAlive = Net.players.some(p => p.alive !== false && !p.left);
             if (!anyAlive && !coopTeamWiped) {
               coopTeamWiped = true;
               Net.broadcast({ type: 'team_wipe' });
@@ -2452,31 +3228,35 @@ function loop() {
           }
         } else if (msg.type === 'team_wipe') {
           if (!coopTeamWiped) showTeamWipeDeath();
-      } else if (msg.type === 'player_left') {
-  const leftId = msg.id || senderId;
-  const mate = Net.getPlayer ? Net.getPlayer(leftId) : null;
-  if (mate) { mate.left = true; mate.alive = false; }
-  const rp = remotePlayers.get(leftId);
-  if (rp) { if (rp.dispose) rp.dispose(); remotePlayers.delete(leftId); }
-  if (Net.remoteStates && Net.remoteStates.delete) Net.remoteStates.delete(leftId);
-  if (spectateId === leftId) {
-    spectateId = null;
-    if (state === 'spectate') cycleSpectate(1);
-  }
-  if (typeof updateCoopTeamHUD === 'function') updateCoopTeamHUD();
-  if (typeof updateSpectateLabel === 'function') updateSpectateLabel();
-  if (Net.isHost()) {
-    Net.broadcast({ type: 'player_left', id: leftId });
-    const anyAlive = Net.players.some(p => p.alive !== false && !p.left);
-    if (!anyAlive && !coopTeamWiped && Net.inGame) {
-      coopTeamWiped = true;
-      Net.broadcast({ type: 'team_wipe' });
-      if (state === 'spectate' || state === 'dying') showTeamWipeDeath();
+        } else if (msg.type === 'player_left') {
+          const leftId = msg.id || senderId;
+          const mate = Net.getPlayer ? Net.getPlayer(leftId) : null;
+          if (mate) { mate.left = true; mate.alive = false; mate.hidden = false; mate.hideSpotIdx = -1; }
+          const rp = remotePlayers.get(leftId);
+          if (rp) {
+            syncHideSpotOccupation(leftId, false, -1, rp);
+            if (rp.dispose) rp.dispose();
+            remotePlayers.delete(leftId);
+          }
+          if (Net.remoteStates && Net.remoteStates.delete) Net.remoteStates.delete(leftId);
+          if (spectateId === leftId) {
+            spectateId = null;
+            if (state === 'spectate') cycleSpectate(1);
+          }
+          if (typeof updateCoopTeamHUD === 'function') updateCoopTeamHUD();
+          if (typeof updateSpectateLabel === 'function') updateSpectateLabel();
+          if (Net.isHost()) {
+            Net.broadcast({ type: 'player_left', id: leftId });
+            const anyAlive = Net.players.some(p => p.alive !== false && !p.left);
+            if (!anyAlive && !coopTeamWiped && Net.inGame) {
+              coopTeamWiped = true;
+              Net.broadcast({ type: 'team_wipe' });
+              if (state === 'spectate' || state === 'dying') showTeamWipeDeath();
+            }
+          }
+        }
+      };
     }
-  }
-}
-  };
-}
   }
 
 function boot() {
@@ -2504,9 +3284,18 @@ function boot() {
     ui.fadeIn(0.1);
     clock.start();
     loop();
-setInterval(() => {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        clock.getDelta();
+        if (!_rafPending) {
+          _rafPending = true;
+          requestAnimationFrame(loop);
+        }
+      }
+    });
+    setInterval(() => {
       if (document.hidden && Net && Net.isCoop() && (state === 'play' || state === 'spectate')) {
-        loop(performance.now());
+        loop();
       }
     }, 50);
     const gate = $('gate');
@@ -2601,21 +3390,39 @@ setInterval(() => {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 
-function updateCoopTeamHUD() {
+  function updateCoopTeamHUD() {
     const el = document.getElementById('coop-team-hud');
     if (!el) return;
     if (!window.LO || !LO.Net || LO.Net.mode === 'solo') {
-      el.style.display = 'none';
-      el.innerHTML = '';
+      el.classList.remove('show');
+      if (lastCoopHudHtml !== '') {
+        lastCoopHudHtml = '';
+        el.innerHTML = '';
+      }
       return;
     }
+    el.classList.add('show');
     const list = Array.isArray(LO.Net.players) ? LO.Net.players : [];
-    el.style.display = 'flex';
-    el.innerHTML = list.map(p => {
-      const status = p.left ? 'LEFT' : p.alive === false ? 'DEAD' : (p.hidden ? 'HIDDEN' : (typeof p.health === 'number' ? Math.ceil(p.health) + ' HP' : 'OK'));
-      return `<div class="coop-hud-member" style="border-left: 3px solid ${p.color || '#3a5a78'}; padding-left: 6px; margin-bottom: 4px;">
-        <span>${p.name || 'Player'}</span> <small style="opacity:0.75;">${status}</small>
+    let html = '';
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      const rp = p.id !== LO.Net.localId ? remotePlayers.get(p.id) : null;
+      const hp = p.id === LO.Net.localId && player ? player.health : (rp ? rp.health : p.health);
+      const isDead = p.left || p.alive === false;
+      const status = p.left ? 'LEFT' : p.alive === false ? 'DEAD' : (p.hidden ? 'HIDDEN' : (typeof hp === 'number' ? Math.max(0, Math.ceil(hp)) + ' HP' : 'OK'));
+      const vs = LO.Net.getVoiceState ? LO.Net.getVoiceState(p.id) : null;
+      const micTag = !p.left && vs && vs.hasMic ? (vs.speaking ? 'TALK' : vs.muted ? 'MUTE' : 'MIC') : '';
+      const cls = 'coop-mate' + (isDead ? ' dead' : '') + (vs && vs.speaking ? ' talking' : '') + (vs && vs.hasMic && vs.muted ? ' mic-muted' : '');
+      html += `<div class="${cls}">
+        <span class="coop-mate-dot" style="background:${escHtml(p.color || '#4a78a8')}"></span>
+        <span>${escHtml(p.name || 'Investigator')}</span>
+        ${micTag ? `<span class="coop-mate-mic">${micTag}</span>` : ''}
+        <span class="coop-mate-hp">${status}</span>
       </div>`;
-   }).join('');
+    }
+    if (html !== lastCoopHudHtml) {
+      lastCoopHudHtml = html;
+      el.innerHTML = html;
+    }
   }
 })();

@@ -9,8 +9,105 @@
   LO.audio = A;
 
   let ctx = null, master, musicBus, sfxBus, voiceBus, worldBus, comp;
+  let reverbSend = null, worldReverbTap = null, voiceReverbTap = null, sfxReverbTap = null;
+  let reverbZones = null, curReverbZone = '';
   A.still = false; // true while the wind has died: the whole world goes silent
   let noiseBuf = null, brownBuf = null;
+
+  function makeImpulseResponse(duration, buildSample) {
+    const rate = ctx.sampleRate || 44100;
+    const len = Math.max(1, Math.floor(rate * duration));
+    const buf = ctx.createBuffer(2, len, rate);
+    const L = buf.getChannelData(0);
+    const R = buf.getChannelData(1);
+    let lpL = 0, lpR = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / rate;
+      const wL = Math.random() * 2 - 1;
+      const wR = Math.random() * 2 - 1;
+      const s = buildSample(t, i, len, wL, wR);
+      lpL = lpL * 0.35 + s.l * 0.65;
+      lpR = lpR * 0.35 + s.r * 0.65;
+      L[i] = lpL;
+      R[i] = lpR;
+    }
+    return buf;
+  }
+
+  function initReverb() {
+    if (!ctx || typeof ctx.createConvolver !== 'function') return;
+    try {
+      reverbSend = ctx.createGain();
+      reverbSend.gain.value = 1;
+
+      worldReverbTap = ctx.createGain();
+      worldReverbTap.gain.value = 0.26;
+      worldBus.connect(worldReverbTap);
+      worldReverbTap.connect(reverbSend);
+
+      voiceReverbTap = ctx.createGain();
+      voiceReverbTap.gain.value = 0.10;
+      voiceBus.connect(voiceReverbTap);
+      voiceReverbTap.connect(reverbSend);
+
+      sfxReverbTap = ctx.createGain();
+      sfxReverbTap.gain.value = 0.22;
+      sfxReverbTap.connect(reverbSend);
+
+      // 1) Indoor wood/plaster room: tight reflections & short warm decay
+      const indoorIR = makeImpulseResponse(0.42, (t, i, len, wL, wR) => {
+        const decay = Math.exp(-t * 10.5) * (1 - i / len);
+        let refl = 0;
+        if (Math.abs(t - 0.008) < 0.0012 || Math.abs(t - 0.017) < 0.0012 || Math.abs(t - 0.029) < 0.0012 || Math.abs(t - 0.043) < 0.0012) {
+          refl = 0.45 * decay;
+        }
+        return { l: (wL * 0.22 + refl) * decay, r: (wR * 0.22 + refl * 0.92) * decay };
+      });
+
+      // 2) Hollow Creek street: sparse distant building slapbacks + open dry decay
+      const streetIR = makeImpulseResponse(0.90, (t, i, len, wL, wR) => {
+        const envT = Math.min(1, t / 0.025) * Math.exp(-t * 5.2) * (1 - i / len);
+        let slap = 0;
+        if (Math.abs(t - 0.048) < 0.0016 || Math.abs(t - 0.086) < 0.0016 || Math.abs(t - 0.132) < 0.0018) {
+          slap = 0.38;
+        }
+        return { l: (wL * 0.14 + slap * wL * 0.6) * envT, r: (wR * 0.14 + slap * wR * 0.6) * envT };
+      });
+
+      // 3) Woodland perimeter forest: soft diffuse buildup, deep damped pine absorption
+      const forestIR = makeImpulseResponse(1.25, (t, i, len, wL, wR) => {
+        const envT = (1 - Math.exp(-t * 42)) * Math.exp(-t * 3.8) * (1 - i / len);
+        return { l: wL * 0.18 * envT, r: wR * 0.18 * envT };
+      });
+
+      const defs = [
+        { key: 'indoor', ir: indoorIR, lp: 2600, gain: 0 },
+        { key: 'street', ir: streetIR, lp: 2100, gain: 0.20 },
+        { key: 'forest', ir: forestIR, lp: 1450, gain: 0 },
+      ];
+      reverbZones = {};
+      for (let i = 0; i < defs.length; i++) {
+        const d = defs[i];
+        const conv = ctx.createConvolver();
+        conv.buffer = d.ir;
+        const filt = ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.value = d.lp;
+        const g = ctx.createGain();
+        g.gain.value = d.gain;
+        reverbSend.connect(conv);
+        conv.connect(filt);
+        filt.connect(g);
+        g.connect(master);
+        reverbZones[d.key] = { conv, filt, g };
+      }
+      curReverbZone = 'street';
+    } catch (e) {
+      console.warn('[audio] ConvolverNode reverb init skipped:', e && e.message ? e.message : e);
+      reverbZones = null;
+      reverbSend = null;
+    }
+  }
 
   A.ready = false;
 
@@ -26,6 +123,7 @@
     worldBus = ctx.createGain();
     musicBus.connect(master); sfxBus.connect(master); voiceBus.connect(master); worldBus.connect(sfxBus);
     master.connect(comp); comp.connect(ctx.destination);
+    initReverb();
     applyVolumes();
 
     // shared noise buffers
@@ -46,6 +144,28 @@
     startScheduler();
   };
 
+  const REVERB_PRESETS = {
+    indoor: { indoor: 0.34, street: 0.0, forest: 0.0, worldTap: 0.28, voiceTap: 0.22, sfxTap: 0.38 },
+    street: { indoor: 0.0, street: 0.20, forest: 0.0, worldTap: 0.26, voiceTap: 0.10, sfxTap: 0.22 },
+    forest: { indoor: 0.0, street: 0.0, forest: 0.30, worldTap: 0.34, voiceTap: 0.14, sfxTap: 0.28 },
+  };
+  A.setReverbZone = function (indoor, forest) {
+    if (!ctx || !reverbZones) return;
+    const zone = indoor ? 'indoor' : (forest ? 'forest' : 'street');
+    if (zone === curReverbZone) return;
+    curReverbZone = zone;
+    const preset = REVERB_PRESETS[zone];
+    const t = ctx.currentTime;
+    const sfxScale = A.still ? 0 : (S.sfx !== undefined ? S.sfx : 0.9);
+    if (reverbZones.indoor) reverbZones.indoor.g.gain.setTargetAtTime(preset.indoor, t, 0.24);
+    if (reverbZones.street) reverbZones.street.g.gain.setTargetAtTime(preset.street, t, 0.24);
+    if (reverbZones.forest) reverbZones.forest.g.gain.setTargetAtTime(preset.forest, t, 0.28);
+    if (worldReverbTap) worldReverbTap.gain.setTargetAtTime(preset.worldTap, t, 0.24);
+    if (voiceReverbTap) voiceReverbTap.gain.setTargetAtTime(preset.voiceTap, t, 0.24);
+    if (sfxReverbTap) sfxReverbTap.gain.setTargetAtTime(preset.sfxTap * sfxScale, t, 0.24);
+  };
+  A.getReverbZone = () => curReverbZone || 'street';
+
   function applyVolumes() {
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -53,12 +173,17 @@
     const k = A.still ? 0 : 1, tc = 0.8;
     if (A.still) {
       // the moment the wind dies, everything else cuts out instantly
-      [musicBus, voiceBus, worldBus].forEach(b => { if (b) { b.gain.cancelScheduledValues(t); b.gain.setValueAtTime(0, t); } });
+      [musicBus, voiceBus, worldBus, reverbSend].forEach(b => { if (b) { b.gain.cancelScheduledValues(t); b.gain.setValueAtTime(0, t); } });
     } else {
       musicBus.gain.setTargetAtTime(S.music * 0.55, t, tc);
       if (worldBus) worldBus.gain.setTargetAtTime(1, t, tc);
+      if (reverbSend && !A.worldMuted) reverbSend.gain.setTargetAtTime(1, t, tc);
     }
     sfxBus.gain.setTargetAtTime(S.sfx, t, 0.05);
+    if (sfxReverbTap) {
+      const p = REVERB_PRESETS[curReverbZone || 'street'] || REVERB_PRESETS.street;
+      sfxReverbTap.gain.setTargetAtTime((A.still ? 0 : S.sfx) * p.sfxTap, t, 0.08);
+    }
     if (!A.still) voiceBus.gain.setTargetAtTime(S.voice * k, t, tc);
   }
   LO.events.addEventListener('settings', applyVolumes);
@@ -295,11 +420,12 @@
       breathAmt = 0;
       [breath && breath.g, buzz && buzz.g, wind && wind.g, wind && wind.wg, forestWind && forestWind.g1, forestWind && forestWind.g2,
        tenant && tenant.g, tenant && tenant.og, silent && silent.og, silent && silent.sg,
-       moth && moth.g, expo && expo.g1, expo && expo.g2, proxAmb && proxAmb.out, envHum && envHum.g, birdBus, worldBus]
+       moth && moth.g, expo && expo.g1, expo && expo.g2, proxAmb && proxAmb.out, envHum && envHum.g, birdBus, worldBus, reverbSend]
         .forEach(g => { if (g && g.gain) { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0, t); } });
       if (breath && breath.src) { try { breath.src.stop(); } catch (e) {} breath = null; }
     } else if (worldBus && !A.still) {
       worldBus.gain.cancelScheduledValues(t); worldBus.gain.setTargetAtTime(1, t, 0.3);
+      if (reverbSend) { reverbSend.gain.cancelScheduledValues(t); reverbSend.gain.setTargetAtTime(1, t, 0.3); }
       if (birdBus) birdBus.gain.setTargetAtTime(birdState.enabled && !birdState.indoor ? 1 : 0, t, 0.4);
     }
   };
@@ -415,6 +541,7 @@
       const g = ctx.createGain();
       g.gain.setValueAtTime(vol * 0.96, t);
       s.connect(f); f.connect(g); g.connect(sfxBus);
+      if (sfxReverbTap) g.connect(sfxReverbTap);
       s.start(t);
       return;
     }
@@ -424,6 +551,7 @@
     const g = ctx.createGain();
     env(g, t, 0.004, vol, 0.09, 0.0001);
     n.connect(f); f.connect(g); g.connect(sfxBus);
+    if (sfxReverbTap) g.connect(sfxReverbTap);
     n.start(t); n.stop(t + 0.2);
     // low thump
     const o = ctx.createOscillator(); o.type = 'sine';
@@ -466,11 +594,13 @@
     const o = ctx.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.15);
     const g = ctx.createGain(); env(g, t, 0.003, hard ? 0.9 : 0.5, 0.2, 0.0001);
-    o.connect(g); g.connect(sfxBus); o.start(t); o.stop(t + 0.3);
+    o.connect(g); g.connect(sfxBus); if (sfxReverbTap) g.connect(sfxReverbTap);
+    o.start(t); o.stop(t + 0.3);
     const n = noiseSrc(false, false);
     const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
     const g2 = ctx.createGain(); env(g2, t, 0.002, 0.5, 0.15, 0.0001);
-    n.connect(f); f.connect(g2); g2.connect(sfxBus); n.start(t); n.stop(t + 0.25);
+    n.connect(f); f.connect(g2); g2.connect(sfxBus); if (sfxReverbTap) g2.connect(sfxReverbTap);
+    n.start(t); n.stop(t + 0.25);
   };
 
   A.jumpGrunt = function () {
@@ -479,7 +609,8 @@
     const n = noiseSrc(false, false);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 3;
     const g = ctx.createGain(); env(g, t, 0.01, 0.25, 0.12, 0.0001);
-    n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t); n.stop(t + 0.2);
+    n.connect(f); f.connect(g); g.connect(sfxBus); if (sfxReverbTap) g.connect(sfxReverbTap);
+    n.start(t); n.stop(t + 0.2);
   };
 
   // player exhaustion panting (loops only the 0..12s clip from the breathing asset)
@@ -556,7 +687,8 @@
       const n = noiseSrc(false, false);
       const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500;
       const g = ctx.createGain(); env(g, t + dt, 0.001, i ? 0.35 : 0.5, 0.04, 0.0001);
-      n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t + dt); n.stop(t + dt + 0.08);
+      n.connect(f); f.connect(g); g.connect(sfxBus); if (sfxReverbTap) g.connect(sfxReverbTap);
+      n.start(t + dt); n.stop(t + dt + 0.08);
     });
     // flash recharge whine
     const o = ctx.createOscillator(); o.type = 'sine';
@@ -594,11 +726,13 @@
     o.frequency.setValueAtTime(320, t); o.frequency.linearRampToValueAtTime(260, t + 0.3);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 800; f.Q.value = 6;
     const g = ctx.createGain(); env(g, t, 0.02, 0.06, 0.3, 0.0001);
-    o.connect(f); f.connect(g); g.connect(sfxBus); o.start(t); o.stop(t + 0.4);
+    o.connect(f); f.connect(g); g.connect(sfxBus); if (sfxReverbTap) g.connect(sfxReverbTap);
+    o.start(t); o.stop(t + 0.4);
     const n = noiseSrc(false, false);
     const g2 = ctx.createGain(); env(g2, t + 0.28, 0.002, 0.2, 0.08, 0.0001);
     const f2 = ctx.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = 900;
-    n.connect(f2); f2.connect(g2); g2.connect(sfxBus); n.start(t); n.stop(t + 0.5);
+    n.connect(f2); f2.connect(g2); g2.connect(sfxBus); if (sfxReverbTap) g2.connect(sfxReverbTap);
+    n.start(t); n.stop(t + 0.5);
   };
 
   // heartbeat — intensity 0..1
@@ -1194,7 +1328,7 @@
   A.rockClack = function (pos) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    const p = panner(pos, 6, 1); p.connect(sfxBus);
+    const p = panner(pos, 6, 1); p.connect(worldBus);
     [0, 0.12, 0.2].forEach((dt, i) => {
       const n = noiseSrc(false, false);
       const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800 - i * 300; f.Q.value = 4;
@@ -1299,14 +1433,15 @@
       s.buffer = hurts[(Math.random() * hurts.length) | 0];
       s.playbackRate.value = 0.95 + Math.random() * 0.10;
       const g = ctx.createGain(); g.gain.value = 0.72;
-      s.connect(g); g.connect(sfxBus);
+      s.connect(g); g.connect(sfxBus); if (sfxReverbTap) g.connect(sfxReverbTap);
       s.start(t);
       return;
     }
     const n = noiseSrc(false, false);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(900, t); f.frequency.linearRampToValueAtTime(500, t + 0.3); f.Q.value = 4;
     const g = ctx.createGain(); env(g, t, 0.01, 0.35, 0.3, 0.0001);
-    n.connect(f); f.connect(g); g.connect(sfxBus); n.start(t); n.stop(t + 0.4);
+    n.connect(f); f.connect(g); g.connect(sfxBus); if (sfxReverbTap) g.connect(sfxReverbTap);
+    n.start(t); n.stop(t + 0.4);
   };
 
   // ---------- SIREN HEAD sounds ----------

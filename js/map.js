@@ -9,6 +9,37 @@ window.LO = window.LO || {};
   const MAP_INNER = MAP_SIZE - MAP_PAD * 2;
   let staticCache = null;
   let midCache = null;
+  let lastDrawKey = '';
+  let lastZoneText = '';
+  let coneSprites = null;
+
+  function makeConeSprite(radius, halfAng, c0, c1) {
+    const size = radius * 2 + 4;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    const cx = size * 0.5, cy = size * 0.5;
+    const grad = g.createRadialGradient(cx, cy, 2, cx, cy, radius);
+    grad.addColorStop(0, c0);
+    grad.addColorStop(1, c1);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(cx, cy);
+    g.arc(cx, cy, radius, -Math.PI / 2 - halfAng, -Math.PI / 2 + halfAng);
+    g.closePath();
+    g.fill();
+    return c;
+  }
+
+  function ensureConeSprites() {
+    if (coneSprites) return coneSprites;
+    coneSprites = {
+      localLit: makeConeSprite(34, 0.42, 'rgba(255, 224, 120, 0.55)', 'rgba(209, 26, 26, 0)'),
+      localDim: makeConeSprite(34, 0.42, 'rgba(209, 26, 26, 0.34)', 'rgba(209, 26, 26, 0)'),
+      remoteLit: makeConeSprite(28, 0.38, 'rgba(255, 232, 160, 0.40)', 'rgba(255, 232, 160, 0)'),
+    };
+    return coneSprites;
+  }
 
   function drawOutlinedText(g, text, x, y, fill, stroke, lineW, maxW) {
     if (stroke) {
@@ -341,6 +372,59 @@ window.LO = window.LO || {};
   function resetCache() {
     staticCache = null;
     midCache = null;
+    lastDrawKey = '';
+    lastZoneText = '';
+  }
+
+  function computeMidKey(w, hazList) {
+    let smashedCount = 0;
+    const blds = w.buildings || [];
+    for (let i = 0; i < blds.length; i++) if (blds[i].smashed) smashedCount++;
+    let brokenFenceCount = 0;
+    const fns = w.fences || [];
+    for (let i = 0; i < fns.length; i++) if (fns[i].broken) brokenFenceCount++;
+    let foundEvCount = 0;
+    const evs = w.evidence || [];
+    for (let i = 0; i < evs.length; i++) if (evs[i].found) foundEvCount++;
+
+    let hazStateCount = 0;
+    if (hazList) {
+      for (let i = 0; i < hazList.length; i++) {
+        const h = hazList[i];
+        if (h && !h.disarmed && !h.toppled) hazStateCount++;
+      }
+    }
+    return `${smashedCount}:${brokenFenceCount}:${foundEvCount}:${hazList ? hazList.length : 0}:${hazStateCount}`;
+  }
+
+  function prebuild(opts) {
+    opts = opts || {};
+    const w = opts.world;
+    if (!w) return;
+    const forestRing = !!opts.forestRing;
+    const hazList = opts.hazards || null;
+    ensureConeSprites();
+    if (!staticCache || staticCache.world !== w || staticCache.forestRing !== forestRing) {
+      staticCache = buildStaticMapLayer(w, forestRing);
+      midCache = null;
+    }
+    const midKey = computeMidKey(w, hazList);
+    if (!midCache || midCache.world !== w || midCache.forestRing !== forestRing || midCache.key !== midKey) {
+      midCache = {
+        world: w,
+        forestRing,
+        key: midKey,
+        canvas: buildMidMapLayer(staticCache, w, forestRing, hazList),
+      };
+    }
+    // Warm up the destination canvas surface so first map pickup doesn't stall on texture upload
+    const canvas = document.getElementById('map-canvas');
+    if (canvas) {
+      const g = canvas.getContext('2d');
+      g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+      g.drawImage(midCache.canvas, 0, 0);
+      lastDrawKey = '';
+    }
   }
 
   function drawTownMap(opts) {
@@ -353,27 +437,11 @@ window.LO = window.LO || {};
     if (!staticCache || staticCache.world !== w || staticCache.forestRing !== forestRing) {
       staticCache = buildStaticMapLayer(w, forestRing);
       midCache = null;
+      lastDrawKey = '';
     }
-
-    let smashedCount = 0;
-    const blds = w.buildings || [];
-    for (let i = 0; i < blds.length; i++) if (blds[i].smashed) smashedCount++;
-    let brokenFenceCount = 0;
-    const fns = w.fences || [];
-    for (let i = 0; i < fns.length; i++) if (fns[i].broken) brokenFenceCount++;
-    let foundEvCount = 0;
-    const evs = w.evidence || [];
-    for (let i = 0; i < evs.length; i++) if (evs[i].found) foundEvCount++;
 
     const hazList = opts.hazards || null;
-    let hazStateCount = 0;
-    if (hazList) {
-      for (let i = 0; i < hazList.length; i++) {
-        const h = hazList[i];
-        if (h && !h.disarmed && !h.toppled) hazStateCount++;
-      }
-    }
-    const midKey = `${smashedCount}:${brokenFenceCount}:${foundEvCount}:${hazList ? hazList.length : 0}:${hazStateCount}`;
+    const midKey = computeMidKey(w, hazList);
     if (!midCache || midCache.world !== w || midCache.forestRing !== forestRing || midCache.key !== midKey) {
       midCache = {
         world: w,
@@ -381,96 +449,95 @@ window.LO = window.LO || {};
         key: midKey,
         canvas: buildMidMapLayer(staticCache, w, forestRing, hazList),
       };
+      lastDrawKey = '';
     }
 
-    const { toX, toY } = staticCache;
-    const g = canvas.getContext('2d');
-    g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
-    g.drawImage(midCache.canvas, 0, 0);
-
-    // Active Hint target marker (amber ring)
     const hintTarget = opts.hintTarget;
-    if (hintTarget && !hintTarget.found && hintTarget.pos) {
-      const hx = toX(hintTarget.pos.x), hy = toY(hintTarget.pos.z);
-      g.strokeStyle = '#d48806';
-      g.lineWidth = 2.2;
-      g.beginPath(); g.arc(hx, hy, 10, 0, Math.PI * 2); g.stroke();
-      g.fillStyle = '#ffbf2b';
-      g.font = 'bold 12px monospace';
-      g.textAlign = 'center';
-      g.fillText('?', hx, hy + 4);
-    }
-
-    // Remote teammates on the survey map
     const remotes = opts.remotePlayers || [];
+    let remoteKey = '';
     for (let ri = 0; ri < remotes.length; ri++) {
       const rp = remotes[ri];
       if (!rp || !rp.pos) continue;
-      const rx = toX(rp.pos.x), ry = toY(rp.pos.z);
-      if (!rp.alive) {
-        g.strokeStyle = rp.color || '#888';
-        g.lineWidth = 2;
-        g.beginPath();
-        g.moveTo(rx - 4, ry - 4); g.lineTo(rx + 4, ry + 4);
-        g.moveTo(rx + 4, ry - 4); g.lineTo(rx - 4, ry + 4);
-        g.stroke();
-        continue;
+      remoteKey += `|${rp.id}:${rp.alive ? 1 : 0}:${rp.pos.x.toFixed(1)},${rp.pos.z.toFixed(1)},${(rp.yaw || 0).toFixed(2)},${rp.flashOn ? 1 : 0}`;
+    }
+    const drawKey = `${midKey}|${player.pos.x.toFixed(1)},${player.pos.z.toFixed(1)},${player.yaw.toFixed(2)},${player.flashOn ? 1 : 0}|${hintTarget && !hintTarget.found ? hintTarget.id : ''}${remoteKey}`;
+    if (drawKey !== lastDrawKey) {
+      lastDrawKey = drawKey;
+      const cones = ensureConeSprites();
+      const { toX, toY } = staticCache;
+      const g = canvas.getContext('2d');
+      g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+      g.drawImage(midCache.canvas, 0, 0);
+
+      // Active Hint target marker (amber ring)
+      if (hintTarget && !hintTarget.found && hintTarget.pos) {
+        const hx = toX(hintTarget.pos.x), hy = toY(hintTarget.pos.z);
+        g.strokeStyle = '#d48806';
+        g.lineWidth = 2.2;
+        g.beginPath(); g.arc(hx, hy, 10, 0, Math.PI * 2); g.stroke();
+        g.fillStyle = '#ffbf2b';
+        g.font = 'bold 12px monospace';
+        g.textAlign = 'center';
+        g.fillText('?', hx, hy + 4);
       }
-      g.save();
-      g.translate(rx, ry);
-      g.rotate(-(rp.yaw || 0));
-      if (rp.flashOn) {
-        const rCone = g.createRadialGradient(0, 0, 2, 0, 0, 28);
-        rCone.addColorStop(0, 'rgba(255, 232, 160, 0.40)');
-        rCone.addColorStop(1, 'rgba(255, 232, 160, 0)');
-        g.fillStyle = rCone;
+
+      // Remote teammates on the survey map
+      for (let ri = 0; ri < remotes.length; ri++) {
+        const rp = remotes[ri];
+        if (!rp || !rp.pos) continue;
+        const rx = toX(rp.pos.x), ry = toY(rp.pos.z);
+        if (!rp.alive) {
+          g.strokeStyle = rp.color || '#888';
+          g.lineWidth = 2;
+          g.beginPath();
+          g.moveTo(rx - 4, ry - 4); g.lineTo(rx + 4, ry + 4);
+          g.moveTo(rx + 4, ry - 4); g.lineTo(rx - 4, ry + 4);
+          g.stroke();
+          continue;
+        }
+        g.save();
+        g.translate(rx, ry);
+        g.rotate(-(rp.yaw || 0));
+        if (rp.flashOn) {
+          const hs = cones.remoteLit.width * 0.5;
+          g.drawImage(cones.remoteLit, -hs, -hs);
+        }
+        g.fillStyle = rp.color || '#4a78a8';
+        g.strokeStyle = '#fffaf0';
+        g.lineWidth = 1.6;
         g.beginPath();
-        g.moveTo(0, 0);
-        g.arc(0, 0, 28, -Math.PI / 2 - 0.38, -Math.PI / 2 + 0.38);
+        g.moveTo(0, -9);
+        g.lineTo(6, 6);
+        g.lineTo(0, 2.5);
+        g.lineTo(-6, 6);
         g.closePath();
         g.fill();
+        g.stroke();
+        g.restore();
       }
-      g.fillStyle = rp.color || '#4a78a8';
+
+      // Player view cone + live directional chevron (at yaw=0, fwd=-Z => -Y on canvas; rotate by -player.yaw)
+      const px = toX(player.pos.x), py = toY(player.pos.z);
+      g.save();
+      g.translate(px, py);
+      g.rotate(-player.yaw);
+      const localCone = player.flashOn ? cones.localLit : cones.localDim;
+      const lhs = localCone.width * 0.5;
+      g.drawImage(localCone, -lhs, -lhs);
+
+      g.fillStyle = '#d11a1a';
       g.strokeStyle = '#fffaf0';
-      g.lineWidth = 1.6;
+      g.lineWidth = 2;
       g.beginPath();
-      g.moveTo(0, -9);
-      g.lineTo(6, 6);
-      g.lineTo(0, 2.5);
-      g.lineTo(-6, 6);
+      g.moveTo(0, -11);
+      g.lineTo(7.5, 7.5);
+      g.lineTo(0, 3.5);
+      g.lineTo(-7.5, 7.5);
       g.closePath();
       g.fill();
       g.stroke();
       g.restore();
     }
-
-    // Player view cone + live directional chevron (at yaw=0, fwd=-Z => -Y on canvas; rotate by -player.yaw)
-    const px = toX(player.pos.x), py = toY(player.pos.z);
-    g.save();
-    g.translate(px, py);
-    g.rotate(-player.yaw);
-    const cone = g.createRadialGradient(0, 0, 2, 0, 0, 34);
-    cone.addColorStop(0, player.flashOn ? 'rgba(255, 224, 120, 0.55)' : 'rgba(209, 26, 26, 0.34)');
-    cone.addColorStop(1, 'rgba(209, 26, 26, 0)');
-    g.fillStyle = cone;
-    g.beginPath();
-    g.moveTo(0, 0);
-    g.arc(0, 0, 34, -Math.PI / 2 - 0.42, -Math.PI / 2 + 0.42);
-    g.closePath();
-    g.fill();
-
-    g.fillStyle = '#d11a1a';
-    g.strokeStyle = '#fffaf0';
-    g.lineWidth = 2;
-    g.beginPath();
-    g.moveTo(0, -11);
-    g.lineTo(7.5, 7.5);
-    g.lineTo(0, 3.5);
-    g.lineTo(-7.5, 7.5);
-    g.closePath();
-    g.fill();
-    g.stroke();
-    g.restore();
 
     // Zone text readout
     const zEl = document.getElementById('map-zone');
@@ -492,11 +559,16 @@ window.LO = window.LO || {};
         zone = curBuildingName ? `${curBuildingName.toUpperCase()}${levelTag}` : (player.pos.y > 2.2 ? 'INDOORS (UPPER / ROOF)' : 'INSIDE BUILDING');
       } else if (w.lookout && Math.hypot(player.pos.x - w.lookout.x, player.pos.z - w.lookout.z) < 6) zone = 'FIRE LOOKOUT TOWER';
       else if (w.isForest && w.isForest(player.pos)) zone = 'WOODLAND PERIMETER';
-      zEl.textContent = `${zone}  ·  ${opts.evidenceCount || 0}/${opts.evidenceNeeded || 5} EVIDENCE`;
+      const nextZoneText = `${zone}  ·  ${opts.evidenceCount || 0}/${opts.evidenceNeeded || 5} EVIDENCE`;
+      if (nextZoneText !== lastZoneText) {
+        lastZoneText = nextZoneText;
+        zEl.textContent = nextZoneText;
+      }
     }
   }
 
   LO.Map = {
+    prebuild,
     draw: drawTownMap,
     resetCache,
   };
