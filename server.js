@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const iceHandler = require('./api/ice');
 
 const app = express();
 const PORT = 3000;
@@ -12,6 +13,8 @@ const staticOpts = {
     }
   }
 };
+
+app.get('/api/ice', iceHandler);
 
 app.get(['/testing', '/testing/', '/testing.html'], (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');

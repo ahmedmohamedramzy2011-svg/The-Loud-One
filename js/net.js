@@ -7,9 +7,13 @@ window.LO = window.LO || {};
   const PREFIX = 'loudone-';
   const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const MAX_PLAYERS = 4;
-  const ICE_SERVERS = [
+  const DEFAULT_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
   ];
   const SLOT_COLORS = ['#4a78a8', '#5c8a52', '#a86544', '#856094'];
   const JACKET_COLORS = [0x365270, 0x455e3d, 0x73442d, 0x563f61];
@@ -38,6 +42,9 @@ window.LO = window.LO || {};
     localSlot: 0,
     localName: 'Investigator 1',
     hostVersion: null,
+    hasTurn: false,
+    _iceCache: null,
+    _connectSeq: 0,
     inGame: false,
     peer: null,
     hostConn: null,
@@ -638,12 +645,65 @@ window.LO = window.LO || {};
     // ============================================================
     //  HOST / JOIN
     // ============================================================
+    async _loadIceConfig() {
+      const now = Date.now();
+      if (this._iceCache && now < this._iceCache.expiresAt) {
+        return this._iceCache.data;
+      }
+      const fallback = { iceServers: DEFAULT_ICE_SERVERS, hasTurn: false, peerOpts: null };
+      if (typeof fetch !== 'function' || typeof window === 'undefined') {
+        this.hasTurn = false;
+        return fallback;
+      }
+      try {
+        const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = ac ? setTimeout(() => ac.abort(), 2500) : null;
+        const res = await fetch('/api/ice', Object.assign({ cache: 'no-store' }, ac ? { signal: ac.signal } : {}));
+        if (timer) clearTimeout(timer);
+        if (!res || !res.ok) throw new Error('ice endpoint unavailable');
+        const json = await res.json();
+        const servers = (json && Array.isArray(json.iceServers) && json.iceServers.length)
+          ? json.iceServers
+          : DEFAULT_ICE_SERVERS;
+        const data = {
+          iceServers: servers,
+          hasTurn: !!(json && json.hasTurn),
+          peerOpts: (json && json.peerOpts && typeof json.peerOpts === 'object') ? json.peerOpts : null,
+        };
+        this.hasTurn = data.hasTurn;
+        this._iceCache = {
+          data,
+          expiresAt: now + (data.hasTurn ? 600000 : 30000),
+        };
+        return data;
+      } catch (e) {
+        this.hasTurn = false;
+        this._iceCache = { data: fallback, expiresAt: now + 15000 };
+        return fallback;
+      }
+    },
+
+    _buildPeerOptions(netCfg) {
+      const opts = {
+        config: {
+          iceServers: (netCfg && Array.isArray(netCfg.iceServers) && netCfg.iceServers.length)
+            ? netCfg.iceServers
+            : DEFAULT_ICE_SERVERS,
+          iceCandidatePoolSize: 6,
+          iceTransportPolicy: 'all',
+        },
+      };
+      if (netCfg && netCfg.peerOpts) Object.assign(opts, netCfg.peerOpts);
+      return opts;
+    },
+
     host(name, gameVersion) {
       this.leave();
       if (typeof Peer === 'undefined') {
         this._emitStatus('PeerJS library failed to load.', true);
         return Promise.reject(new Error('PeerJS missing'));
       }
+      const seq = ++this._connectSeq;
       this.mode = 'host';
       this.localId = 'host';
       this.localSlot = 0;
@@ -652,19 +712,19 @@ window.LO = window.LO || {};
       this.inGame = false;
       this.players = [this._makePlayer('host', 0, this.localName)];
       this.remoteStates.clear();
+      this._emitStatus('Preparing co-op room...');
 
       return new Promise((resolve, reject) => {
         let attempts = 0;
+        let peerOpts = null;
         const tryCreate = () => {
-          if (this.mode !== 'host') return;
+          if (this.mode !== 'host' || this._connectSeq !== seq) return;
           attempts++;
           const code = genCode();
           this.roomCode = code;
           this._emitStatus('Creating co-op room...');
           let settled = false;
-          const peer = new Peer(PREFIX + code, {
-            config: { iceServers: ICE_SERVERS },
-          });
+          const peer = new Peer(PREFIX + code, peerOpts || this._buildPeerOptions(null));
           this.peer = peer;
 
           peer.on('open', () => {
@@ -708,13 +768,28 @@ window.LO = window.LO || {};
             }
           });
         };
-        tryCreate();
+
+        this._loadIceConfig().then(netCfg => {
+          if (this.mode !== 'host' || this._connectSeq !== seq) return;
+          peerOpts = this._buildPeerOptions(netCfg);
+          tryCreate();
+        });
       });
     },
 
     _handleIncomingClient(conn) {
       const peerId = conn.peer;
       let accepted = false;
+      let restartedIce = false;
+
+      if (conn && conn.on) {
+        conn.on('iceStateChanged', st => {
+          if (st === 'failed' && !restartedIce && conn.peerConnection && conn.peerConnection.restartIce) {
+            restartedIce = true;
+            try { conn.peerConnection.restartIce(); } catch (e) {}
+          }
+        });
+      }
 
       const rejectAndClose = reason => {
         try { conn.send({ type: 'reject', reason }); } catch (e) {}
@@ -853,6 +928,7 @@ window.LO = window.LO || {};
         return Promise.reject(new Error('Invalid room code'));
       }
 
+      const seq = ++this._connectSeq;
       this.mode = 'client';
       this.roomCode = code;
       this.localName = sanitizeName(name, 1);
@@ -863,19 +939,18 @@ window.LO = window.LO || {};
       return new Promise((resolve, reject) => {
         let settled = false;
         this._emitStatus(`Connecting to ${code}...`);
-        const peer = new Peer(undefined, {
-          config: { iceServers: ICE_SERVERS },
-        });
-        this.peer = peer;
 
         const timer = setTimeout(() => {
           if (!settled) {
             settled = true;
-            this._emitStatus('Connection timed out. Check the room code and try again.', true);
+            const timeoutMsg = this.hasTurn
+              ? 'Connection timed out. Check the room code or firewall and try again.'
+              : 'Connection timed out — direct P2P may be blocked between networks without a TURN relay server.';
+            this._emitStatus(timeoutMsg, true);
             this.leave();
             reject(new Error('Connection timeout'));
           }
-        }, 14000);
+        }, 22000);
 
         const fail = (errMsg, errObj) => {
           clearTimeout(timer);
@@ -890,104 +965,136 @@ window.LO = window.LO || {};
           }
         };
 
-        peer.on('call', call => {
-          if (this.peer !== peer) return;
-          this._handleIncomingCall(call);
-        });
+        this._loadIceConfig().then(netCfg => {
+          if (this.mode !== 'client' || this._connectSeq !== seq || settled) return;
+          const peer = new Peer(undefined, this._buildPeerOptions(netCfg));
+          this.peer = peer;
 
-        peer.on('open', () => {
-          if (this.peer !== peer) return;
-          const conn = peer.connect(PREFIX + code, { reliable: true });
-          this.hostConn = conn;
-
-          conn.on('open', () => {
-            if (this.hostConn !== conn) return;
-            try {
-              conn.send({ type: 'hello', name: this.localName });
-            } catch (e) {}
+          peer.on('call', call => {
+            if (this.peer !== peer) return;
+            this._handleIncomingCall(call);
           });
 
-          conn.on('data', msg => {
-            if (this.hostConn !== conn || !msg || typeof msg !== 'object') return;
-            if (msg.type === 'reject') {
-              fail(msg.reason || 'Host rejected connection.');
-              return;
-            }
-            if (msg.type === 'welcome') {
-              clearTimeout(timer);
-              this.localId = msg.localId;
-              this.localSlot = msg.slot;
-              this.roomCode = msg.roomCode || code;
-              this.hostVersion = msg.version || null;
-              this.players = Array.isArray(msg.players) ? msg.players : [];
-              this._emitStatus(`Connected to room ${this.roomCode}`);
-              this._emitLobby();
-              if (this.voiceEnabled) this._broadcastVoiceState();
-              if (!settled) {
-                settled = true;
-                resolve(this.roomCode);
-              }
-              return;
-            }
-            if (msg.type === 'lobby_sync') {
-              this.hostVersion = msg.version || this.hostVersion;
-              const prevIds = new Set(this.players.map(p => p.id));
-              this.players = Array.isArray(msg.players) ? msg.players : [];
-              const nextIds = new Set(this.players.map(p => p.id));
-              prevIds.forEach(id => {
-                if (!nextIds.has(id) && id !== this.localId) {
-                  this.remoteStates.delete(id);
-                  this._disposeVoiceEntry(id);
-                  if (this.onPlayerLeave) this.onPlayerLeave({ id });
+          peer.on('open', () => {
+            if (this.peer !== peer) return;
+            this._emitStatus(`Signaling connected — reaching room ${code}...`);
+            const conn = peer.connect(PREFIX + code, { reliable: true });
+            this.hostConn = conn;
+            let restartedIce = false;
+
+            if (conn && conn.on) {
+              conn.on('iceStateChanged', st => {
+                if (this.hostConn !== conn || settled) return;
+                if (st === 'checking') {
+                  this._emitStatus(`Negotiating internet route to ${code}...`);
+                } else if (st === 'failed') {
+                  if (!restartedIce && conn.peerConnection && conn.peerConnection.restartIce) {
+                    restartedIce = true;
+                    try { conn.peerConnection.restartIce(); return; } catch (e) {}
+                  }
+                  const natMsg = this.hasTurn
+                    ? 'Firewall/router blocked peer connection even with TURN relay.'
+                    : 'Direct P2P blocked by router/NAT. Configure a TURN server on /api/ice to connect across networks.';
+                  fail(natMsg);
                 }
               });
-              this._emitLobby();
-              return;
             }
-            if (msg.type === 'voice_state') {
-              const p = this.getPlayer(msg.id);
-              if (p) {
-                p.hasMic = !!msg.hasMic;
-                p.muted = !!msg.muted;
-                this._emitVoiceChange();
+
+            conn.on('open', () => {
+              if (this.hostConn !== conn) return;
+              try {
+                conn.send({ type: 'hello', name: this.localName });
+              } catch (e) {}
+            });
+
+            conn.on('data', msg => {
+              if (this.hostConn !== conn || !msg || typeof msg !== 'object') return;
+              if (msg.type === 'reject') {
+                fail(msg.reason || 'Host rejected connection.');
+                return;
               }
-              return;
-            }
-            if (msg.type === 'chat') {
-              if (this.onChat) this.onChat(msg);
-              return;
-            }
-            if (msg.type === 'world_snap' && Array.isArray(msg.players)) {
-              for (let i = 0; i < msg.players.length; i++) {
-                const ps = msg.players[i];
-                if (!ps || ps.id === this.localId) continue;
-                this.remoteStates.set(ps.id, ps);
-                const lp = this.getPlayer(ps.id);
-                if (lp && !lp.left) {
-                  if (lp.alive !== false) lp.alive = ps.alive !== false;
-                  lp.hidden = !!ps.hidden;
-                  lp.hideSpotIdx = ps.hideSpotIdx !== undefined ? ps.hideSpotIdx : -1;
-                  if (typeof ps.health === 'number') lp.health = ps.health;
+              if (msg.type === 'welcome') {
+                clearTimeout(timer);
+                this.localId = msg.localId;
+                this.localSlot = msg.slot;
+                this.roomCode = msg.roomCode || code;
+                this.hostVersion = msg.version || null;
+                this.players = Array.isArray(msg.players) ? msg.players : [];
+                this._emitStatus(`Connected to room ${this.roomCode}`);
+                this._emitLobby();
+                if (this.voiceEnabled) this._broadcastVoiceState();
+                if (!settled) {
+                  settled = true;
+                  resolve(this.roomCode);
+                }
+                return;
+              }
+              if (msg.type === 'lobby_sync') {
+                this.hostVersion = msg.version || this.hostVersion;
+                const prevIds = new Set(this.players.map(p => p.id));
+                this.players = Array.isArray(msg.players) ? msg.players : [];
+                const nextIds = new Set(this.players.map(p => p.id));
+                prevIds.forEach(id => {
+                  if (!nextIds.has(id) && id !== this.localId) {
+                    this.remoteStates.delete(id);
+                    this._disposeVoiceEntry(id);
+                    if (this.onPlayerLeave) this.onPlayerLeave({ id });
+                  }
+                });
+                this._emitLobby();
+                return;
+              }
+              if (msg.type === 'voice_state') {
+                const p = this.getPlayer(msg.id);
+                if (p) {
+                  p.hasMic = !!msg.hasMic;
+                  p.muted = !!msg.muted;
+                  this._emitVoiceChange();
+                }
+                return;
+              }
+              if (msg.type === 'chat') {
+                if (this.onChat) this.onChat(msg);
+                return;
+              }
+              if (msg.type === 'world_snap' && Array.isArray(msg.players)) {
+                for (let i = 0; i < msg.players.length; i++) {
+                  const ps = msg.players[i];
+                  if (!ps || ps.id === this.localId) continue;
+                  this.remoteStates.set(ps.id, ps);
+                  const lp = this.getPlayer(ps.id);
+                  if (lp && !lp.left) {
+                    if (lp.alive !== false) lp.alive = ps.alive !== false;
+                    lp.hidden = !!ps.hidden;
+                    lp.hideSpotIdx = ps.hideSpotIdx !== undefined ? ps.hideSpotIdx : -1;
+                    if (typeof ps.health === 'number') lp.health = ps.health;
+                  }
                 }
               }
+              if (this.onMessage) this.onMessage('host', msg);
+            });
+
+            conn.on('close', () => {
+              if (this.hostConn === conn) fail('Disconnected from host.');
+            });
+            conn.on('error', () => {
+              if (this.hostConn === conn) fail('Connection to host failed.');
+            });
+          });
+
+          peer.on('error', err => {
+            if (this.peer !== peer) return;
+            let msg = 'Network error.';
+            if (err && err.type === 'peer-unavailable') msg = `Room "${code}" not found.`;
+            else if (err && err.message) msg = err.message;
+            fail(msg, err);
+          });
+
+          peer.on('disconnected', () => {
+            if (this.peer === peer && !peer.destroyed) {
+              try { peer.reconnect(); } catch (e) {}
             }
-            if (this.onMessage) this.onMessage('host', msg);
           });
-
-          conn.on('close', () => {
-            if (this.hostConn === conn) fail('Disconnected from host.');
-          });
-          conn.on('error', () => {
-            if (this.hostConn === conn) fail('Connection to host failed.');
-          });
-        });
-
-        peer.on('error', err => {
-          if (this.peer !== peer) return;
-          let msg = 'Network error.';
-          if (err && err.type === 'peer-unavailable') msg = `Room "${code}" not found.`;
-          else if (err && err.message) msg = err.message;
-          fail(msg, err);
         });
       });
     },
@@ -1028,6 +1135,7 @@ window.LO = window.LO || {};
     },
 
     leave() {
+      this._connectSeq++;
       this._notifyLeaving();
       this.disableVoice();
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
