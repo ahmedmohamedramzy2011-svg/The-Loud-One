@@ -64,9 +64,15 @@ window.LO = window.LO || {};
     localHoldUntil: 0,
     _voiceMasterGain: null,
 
-    // Latency tracking state
+    // Latency & Session Registry tracking state
     pingMs: null,
     _pingTimer: null,
+    startedAt: 0,
+    _hostToken: '',
+    _heartbeatTimer: null,
+    _closing: false,
+    localHiddenAdmin: false,
+    _iceProviders: null,
 
     // Callbacks wired by main.js
     onLobbyUpdate: null,
@@ -75,9 +81,12 @@ window.LO = window.LO || {};
     onPlayerJoin: null,
     onPlayerLeave: null,
     onDisconnect: null,
+    onForceExit: null,
     onChat: null,
     onVoiceChange: null,
     onPingUpdate: null,
+    getSessionSnapshot: null,
+    getRunSyncState: null,
 
     sanitizeName,
     sanitizeChat,
@@ -132,14 +141,15 @@ window.LO = window.LO || {};
       return -1;
     },
 
-    _makePlayer(id, slot, name) {
+    _makePlayer(id, slot, name, opts) {
+      const o = opts || {};
       return {
         id,
         slot,
         name: sanitizeName(name, slot),
         color: SLOT_COLORS[slot % SLOT_COLORS.length],
         jacketHex: JACKET_COLORS[slot % JACKET_COLORS.length],
-        alive: true,
+        alive: !o.hiddenAdmin,
         hidden: false,
         hideSpotIdx: -1,
         health: 100,
@@ -148,6 +158,7 @@ window.LO = window.LO || {};
         hasMic: false,
         muted: false,
         ping: id === 'host' ? 0 : null,
+        hiddenAdmin: !!o.hiddenAdmin,
       };
     },
 
@@ -156,9 +167,10 @@ window.LO = window.LO || {};
       if (this.mode === 'host') {
         const me = this.getPlayer('host');
         if (me) me.name = this.localName;
-        this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion });
+        this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
         this._emitLobby();
-      } else if (this.mode === 'client' && this.hostConn && this.hostConn.open) {
+        this.pushRoomHeartbeat();
+      } else if (this.mode === 'client' && this.hostConn && this.hostConn.open && !this.localHiddenAdmin) {
         this.sendToHost({ type: 'rename', name: this.localName });
       }
     },
@@ -166,7 +178,7 @@ window.LO = window.LO || {};
     setHostVersion(ver) {
       if (!ver || this.mode !== 'host') return;
       this.hostVersion = ver;
-      this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion });
+      this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
       this._emitLobby();
     },
 
@@ -395,7 +407,7 @@ window.LO = window.LO || {};
     _syncVoiceCalls() {
       const validIds = new Set();
       this.players.forEach(p => {
-        if (p && p.id !== this.localId && !p.left) validIds.add(p.id);
+        if (p && p.id !== this.localId && !p.left && !p.hiddenAdmin) validIds.add(p.id);
       });
       this.voiceCalls.forEach((_, id) => {
         if (!validIds.has(id)) this._disposeVoiceEntry(id);
@@ -732,22 +744,108 @@ window.LO = window.LO || {};
     },
 
     // ============================================================
+    //  LIVE SESSION REGISTRY HEARTBEAT (/api/rooms)
+    // ============================================================
+    _makeHostToken() {
+      const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let out = '';
+      for (let i = 0; i < 24; i++) out += chars[(Math.random() * chars.length) | 0];
+      return out;
+    },
+
+    async _sendRoomHeartbeat(forceCheck) {
+      if (this.mode !== 'host' || !this.roomCode || (this._closing && !forceCheck)) return;
+      if (typeof fetch !== 'function' || typeof window === 'undefined') return;
+      const snap = this.getSessionSnapshot ? this.getSessionSnapshot() : null;
+      const activeCount = this.players.filter(p => p && !p.left && !p.hiddenAdmin).length || 1;
+      const payload = {
+        roomId: this.roomCode,
+        hostCallsign: this.localName || 'Investigator 1',
+        playerCount: Math.max(1, Math.min(MAX_PLAYERS, activeCount)),
+        maxPlayers: MAX_PLAYERS,
+        wave: (snap && snap.wave) || (this.inGame ? 'In Progress' : 'Lobby'),
+        startedAt: this.startedAt || Date.now(),
+        status: (snap && snap.status) || (this.inGame ? 'playing' : 'lobby'),
+        hostToken: this._hostToken || '',
+      };
+      try {
+        const res = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          cache: 'no-store',
+        });
+        if (!res || !res.ok) return;
+        const json = await res.json();
+        if (json && json.shutdown && this.mode === 'host' && !this._closing) {
+          this.shutdownByAdmin(json.shutdownReason || 'Match shut down by Admin');
+        }
+      } catch (e) {}
+    },
+
+    pushRoomHeartbeat() {
+      if (this.mode === 'host' && this.roomCode && !this._closing) {
+        this._sendRoomHeartbeat(false);
+      }
+    },
+
+    _startRoomHeartbeat() {
+      this._stopRoomHeartbeat();
+      if (this.mode !== 'host' || !this.roomCode) return;
+      this._sendRoomHeartbeat(false);
+      this._heartbeatTimer = setInterval(() => {
+        this._sendRoomHeartbeat(false);
+      }, 15000);
+    },
+
+    _stopRoomHeartbeat() {
+      if (this._heartbeatTimer) {
+        clearInterval(this._heartbeatTimer);
+        this._heartbeatTimer = null;
+      }
+    },
+
+    _deleteRoomRegistry(useBeacon, isAdmin) {
+      const code = this.roomCode;
+      if (!code || typeof window === 'undefined') return;
+      const token = this._hostToken || '';
+      if (useBeacon && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        try {
+          const blob = new Blob([JSON.stringify({ action: 'leave', roomId: code, hostToken: token })], { type: 'application/json' });
+          navigator.sendBeacon('/api/rooms', blob);
+          return;
+        } catch (e) {}
+      }
+      if (typeof fetch === 'function') {
+        const qs = new URLSearchParams({ roomId: code });
+        if (token) qs.set('token', token);
+        if (isAdmin) qs.set('admin', '1');
+        fetch(`/api/rooms?${qs.toString()}`, {
+          method: 'DELETE',
+          keepalive: true,
+          cache: 'no-store',
+        }).catch(() => {});
+      }
+    },
+
+    // ============================================================
     //  HOST / JOIN
     // ============================================================
-    async _loadIceConfig() {
+    async _loadIceConfig(preferCloudflare) {
       const now = Date.now();
-      if (this._iceCache && now < this._iceCache.expiresAt) {
+      if (!preferCloudflare && this._iceCache && now < this._iceCache.expiresAt) {
         return this._iceCache.data;
       }
-      const fallback = { iceServers: DEFAULT_ICE_SERVERS, hasTurn: false, peerOpts: null };
+      const fallback = { iceServers: DEFAULT_ICE_SERVERS, hasTurn: false, peerOpts: null, providers: null };
       if (typeof fetch !== 'function' || typeof window === 'undefined') {
         this.hasTurn = false;
         return fallback;
       }
       try {
         const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timer = ac ? setTimeout(() => ac.abort(), 2500) : null;
-        const res = await fetch('/api/ice', Object.assign({ cache: 'no-store' }, ac ? { signal: ac.signal } : {}));
+        const timer = ac ? setTimeout(() => ac.abort(), 3000) : null;
+        const url = preferCloudflare ? '/api/ice?prefer=cloudflare' : '/api/ice';
+        const res = await fetch(url, Object.assign({ cache: 'no-store' }, ac ? { signal: ac.signal } : {}));
         if (timer) clearTimeout(timer);
         if (!res || !res.ok) throw new Error('ice endpoint unavailable');
         const json = await res.json();
@@ -757,9 +855,11 @@ window.LO = window.LO || {};
         const data = {
           iceServers: servers,
           hasTurn: !!(json && json.hasTurn),
+          providers: (json && json.providers) ? json.providers : null,
           peerOpts: (json && json.peerOpts && typeof json.peerOpts === 'object') ? json.peerOpts : null,
         };
         this.hasTurn = data.hasTurn;
+        this._iceProviders = data.providers;
         this._iceCache = {
           data,
           expiresAt: now + (data.hasTurn ? 600000 : 30000),
@@ -797,8 +897,12 @@ window.LO = window.LO || {};
       this.localId = 'host';
       this.localSlot = 0;
       this.localName = sanitizeName(name, 0);
+      this.localHiddenAdmin = false;
       this.hostVersion = gameVersion || (LO.settings && LO.settings.gameVersion) || '2.8.3';
       this.inGame = false;
+      this.startedAt = Date.now();
+      this._hostToken = this._makeHostToken();
+      this._closing = false;
       this.players = [this._makePlayer('host', 0, this.localName)];
       this.remoteStates.clear();
       this._emitStatus('Preparing co-op room...');
@@ -821,6 +925,7 @@ window.LO = window.LO || {};
             settled = true;
             this._emitStatus(`Room ready: ${code}`);
             this._emitLobby();
+            this._startRoomHeartbeat();
             resolve(code);
           });
 
@@ -873,9 +978,17 @@ window.LO = window.LO || {};
 
       if (conn && conn.on) {
         conn.on('iceStateChanged', st => {
-          if (st === 'failed' && !restartedIce && conn.peerConnection && conn.peerConnection.restartIce) {
+          if (st === 'failed' && !restartedIce && conn.peerConnection) {
             restartedIce = true;
-            try { conn.peerConnection.restartIce(); } catch (e) {}
+            this._loadIceConfig(true).then(cfg => {
+              if (!conn.peerConnection) return;
+              try {
+                if (conn.peerConnection.setConfiguration && cfg && cfg.iceServers) {
+                  conn.peerConnection.setConfiguration({ iceServers: cfg.iceServers, iceCandidatePoolSize: 6, iceTransportPolicy: 'all' });
+                }
+                if (conn.peerConnection.restartIce) conn.peerConnection.restartIce();
+              } catch (e) {}
+            });
           }
         });
       }
@@ -887,20 +1000,27 @@ window.LO = window.LO || {};
 
       conn.on('data', msg => {
         if (!msg || typeof msg !== 'object') return;
+        if (msg.type === 'ADMIN_SHUTDOWN') {
+          this._sendRoomHeartbeat(true);
+          return;
+        }
         if (!accepted) {
           if (msg.type !== 'hello') return;
-          if (this.inGame) {
+          const isAdminJoin = !!msg.adminJoin;
+          const isAdminHidden = isAdminJoin && !!msg.adminHidden;
+          if (this.inGame && !isAdminJoin) {
             rejectAndClose('Run already in progress.');
             return;
           }
-          const slot = this._nextFreeSlot();
-          if (slot < 0 || this.players.length >= MAX_PLAYERS) {
+          let slot = this._nextFreeSlot();
+          if ((slot < 0 || this.players.filter(pl => !pl.hiddenAdmin).length >= MAX_PLAYERS) && !isAdminHidden) {
             rejectAndClose('Room is full (max 4 players).');
             return;
           }
+          if (slot < 0) slot = MAX_PLAYERS - 1;
           accepted = true;
           this.conns.set(peerId, conn);
-          const p = this._makePlayer(peerId, slot, msg.name);
+          const p = this._makePlayer(peerId, slot, msg.name, { hiddenAdmin: isAdminHidden });
           this.players.push(p);
           try {
             conn.send({
@@ -909,12 +1029,18 @@ window.LO = window.LO || {};
               slot,
               roomCode: this.roomCode,
               version: this.hostVersion,
-              players: this.players,
+              players: isAdminHidden ? this.players : this.players.filter(pl => !pl.hiddenAdmin),
+              inGame: !!this.inGame,
+              adminHidden: isAdminHidden,
+              runState: (this.inGame && this.getRunSyncState) ? this.getRunSyncState() : null,
             });
           } catch (e) {}
-          this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion }, peerId);
-          this._emitLobby();
-          if (this.onPlayerJoin) this.onPlayerJoin(p);
+          if (!isAdminHidden) {
+            this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion }, peerId);
+            this._emitLobby();
+            this.pushRoomHeartbeat();
+            if (this.onPlayerJoin) this.onPlayerJoin(p);
+          }
           return;
         }
 
@@ -973,8 +1099,9 @@ window.LO = window.LO || {};
         }
 
         if (msg.type === 'p_state') {
-          this.remoteStates.set(peerId, msg);
           const p = this.getPlayer(peerId);
+          if (p && p.hiddenAdmin) return;
+          this.remoteStates.set(peerId, msg);
           if (p) {
             if (p.alive !== false && !p.left) {
               p.alive = msg.alive !== false;
@@ -997,6 +1124,11 @@ window.LO = window.LO || {};
         const idx = this.players.findIndex(p => p.id === peerId);
         if (idx >= 0) {
           const removed = this.players[idx];
+          if (removed.hiddenAdmin) {
+            this.players.splice(idx, 1);
+            this._emitVoiceChange();
+            return;
+          }
           if (this.inGame) {
             removed.left = true;
             removed.alive = false;
@@ -1006,10 +1138,11 @@ window.LO = window.LO || {};
             if (this.onMessage) this.onMessage(peerId, { type: 'player_left', id: peerId });
           } else {
             this.players.splice(idx, 1);
-            this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion });
+            this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
             this._emitLobby();
           }
           if (this.onPlayerLeave) this.onPlayerLeave(removed);
+          this.pushRoomHeartbeat();
         }
         this._emitVoiceChange();
       };
@@ -1018,7 +1151,7 @@ window.LO = window.LO || {};
       conn.on('error', drop);
     },
 
-    join(rawCode, name) {
+    join(rawCode, name, opts) {
       this.leave();
       if (typeof Peer === 'undefined') {
         this._emitStatus('PeerJS library failed to load.', true);
@@ -1030,11 +1163,14 @@ window.LO = window.LO || {};
         return Promise.reject(new Error('Invalid room code'));
       }
 
+      const joinOpts = opts || {};
       const seq = ++this._connectSeq;
       this.mode = 'client';
       this.roomCode = code;
       this.localName = sanitizeName(name, 1);
+      this.localHiddenAdmin = !!(joinOpts.adminJoin && joinOpts.adminHidden);
       this.inGame = false;
+      this._closing = false;
       this.players = [];
       this.remoteStates.clear();
 
@@ -1090,9 +1226,18 @@ window.LO = window.LO || {};
                 if (st === 'checking') {
                   this._emitStatus(`Negotiating internet route to ${code}...`);
                 } else if (st === 'failed') {
-                  if (!restartedIce && conn.peerConnection && conn.peerConnection.restartIce) {
+                  if (!restartedIce && conn.peerConnection) {
                     restartedIce = true;
-                    try { conn.peerConnection.restartIce(); return; } catch (e) {}
+                    this._loadIceConfig(true).then(cfg => {
+                      if (this.hostConn !== conn || settled || !conn.peerConnection) return;
+                      try {
+                        if (conn.peerConnection.setConfiguration && cfg && cfg.iceServers) {
+                          conn.peerConnection.setConfiguration({ iceServers: cfg.iceServers, iceCandidatePoolSize: 6, iceTransportPolicy: 'all' });
+                        }
+                        if (conn.peerConnection.restartIce) { conn.peerConnection.restartIce(); return; }
+                      } catch (e) {}
+                    });
+                    return;
                   }
                   const natMsg = this.hasTurn
                     ? 'Firewall/router blocked peer connection even with TURN relay.'
@@ -1105,7 +1250,12 @@ window.LO = window.LO || {};
             conn.on('open', () => {
               if (this.hostConn !== conn) return;
               try {
-                conn.send({ type: 'hello', name: this.localName });
+                conn.send({
+                  type: 'hello',
+                  name: this.localName,
+                  adminJoin: !!joinOpts.adminJoin,
+                  adminHidden: !!this.localHiddenAdmin,
+                });
               } catch (e) {}
             });
 
@@ -1115,12 +1265,30 @@ window.LO = window.LO || {};
                 fail(msg.reason || 'Host rejected connection.');
                 return;
               }
+              if (msg.type === 'ROOM_CLOSED' || msg.type === 'ADMIN_SHUTDOWN') {
+                clearTimeout(timer);
+                const reason = msg.reason || (msg.type === 'ADMIN_SHUTDOWN' ? 'Match shut down by Admin' : 'Room closed by host.');
+                const kind = msg.type === 'ADMIN_SHUTDOWN' ? 'admin' : 'closed';
+                this.hostConn = null;
+                try { conn.close(); } catch (e) {}
+                this.leave();
+                if (!settled) {
+                  settled = true;
+                  this._emitStatus(reason, true);
+                  reject(new Error(reason));
+                }
+                if (this.onForceExit) this.onForceExit(reason, kind);
+                else if (this.onDisconnect) this.onDisconnect(reason);
+                return;
+              }
               if (msg.type === 'welcome') {
                 clearTimeout(timer);
                 this.localId = msg.localId;
                 this.localSlot = msg.slot;
                 this.roomCode = msg.roomCode || code;
                 this.hostVersion = msg.version || null;
+                this.inGame = !!msg.inGame;
+                this.localHiddenAdmin = !!msg.adminHidden;
                 this.players = Array.isArray(msg.players) ? msg.players : [];
                 this._emitStatus(`Connected to room ${this.roomCode}`);
                 this._emitLobby();
@@ -1128,7 +1296,19 @@ window.LO = window.LO || {};
                 if (this.voiceEnabled) this._broadcastVoiceState();
                 if (!settled) {
                   settled = true;
-                  resolve(this.roomCode);
+                  resolve({
+                    roomCode: this.roomCode,
+                    inGame: this.inGame,
+                    adminHidden: this.localHiddenAdmin,
+                    runState: msg.runState || null,
+                  });
+                }
+                if (this.inGame && this.onMessage) {
+                  this.onMessage('host', {
+                    type: 'admin_midjoin',
+                    adminHidden: this.localHiddenAdmin,
+                    runState: msg.runState || null,
+                  });
                 }
                 return;
               }
@@ -1255,11 +1435,11 @@ window.LO = window.LO || {};
       }
     },
 
-    leave() {
+    _teardownTransport() {
       this._connectSeq++;
+      this._stopRoomHeartbeat();
       if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
       this.pingMs = null;
-      this._notifyLeaving();
       this.disableVoice();
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
       this.voiceCalls.clear();
@@ -1280,9 +1460,114 @@ window.LO = window.LO || {};
       this.localSlot = 0;
       this.hostVersion = null;
       this.inGame = false;
+      this.startedAt = 0;
+      this._hostToken = '';
+      this._closing = false;
+      this.localHiddenAdmin = false;
       this.players = [];
       this.remoteStates.clear();
       this._emitPing();
+    },
+
+    closeRoom(clientReason, selfReason) {
+      if (this.mode !== 'host') {
+        this.leave();
+        return;
+      }
+      if (this._closing) return;
+      this._closing = true;
+      const reasonForClients = clientReason || 'Host closed the room.';
+      const reasonForSelf = selfReason || reasonForClients;
+      this._stopRoomHeartbeat();
+      this._deleteRoomRegistry(false, false);
+      this.broadcast({ type: 'ROOM_CLOSED', reason: reasonForClients });
+      setTimeout(() => {
+        this._teardownTransport();
+        if (this.onForceExit) this.onForceExit(reasonForSelf, 'closed');
+      }, 120);
+    },
+
+    shutdownByAdmin(reason) {
+      const msg = reason || 'Match shut down by Admin';
+      if (this.mode !== 'host') {
+        this.leave();
+        if (this.onForceExit) this.onForceExit(msg, 'admin');
+        return;
+      }
+      if (this._closing) return;
+      this._closing = true;
+      this._stopRoomHeartbeat();
+      this._deleteRoomRegistry(false, true);
+      this.broadcast({ type: 'ADMIN_SHUTDOWN', reason: msg });
+      setTimeout(() => {
+        this._teardownTransport();
+        if (this.onForceExit) this.onForceExit(msg, 'admin');
+      }, 120);
+    },
+
+    async adminRemoteShutdown(rawCode, reason) {
+      const code = String(rawCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+      if (!code) return { ok: false, error: 'Invalid room ID.' };
+      const msg = reason || 'Match shut down by Admin';
+      let ok = false;
+      if (typeof fetch === 'function') {
+        try {
+          const res = await fetch('/api/rooms', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'shutdown', roomId: code, reason: msg }),
+            cache: 'no-store',
+          });
+          ok = !!(res && res.ok);
+        } catch (e) {}
+      }
+      if (this.mode === 'host' && this.roomCode === code) {
+        this.shutdownByAdmin(msg);
+        return { ok: true };
+      }
+      if (this.mode === 'client' && this.roomCode === code) {
+        this.sendToHost({ type: 'ADMIN_SHUTDOWN', reason: msg });
+        return { ok: true };
+      }
+      // Best-effort instant signaling nudge so host sees shutdown right away instead of waiting 15s
+      if (typeof Peer !== 'undefined') {
+        this._loadIceConfig(false).then(cfg => {
+          try {
+            const p = new Peer(undefined, this._buildPeerOptions(cfg));
+            let done = false;
+            const cleanup = () => {
+              if (done) return;
+              done = true;
+              try { p.destroy(); } catch (e) {}
+            };
+            const t = setTimeout(cleanup, 2500);
+            p.on('open', () => {
+              try {
+                const c = p.connect(PREFIX + code, { reliable: true });
+                c.on('open', () => {
+                  try { c.send({ type: 'ADMIN_SHUTDOWN', reason: msg }); } catch (e) {}
+                  setTimeout(() => { clearTimeout(t); cleanup(); }, 250);
+                });
+                c.on('error', () => { clearTimeout(t); cleanup(); });
+              } catch (e) { clearTimeout(t); cleanup(); }
+            });
+            p.on('error', () => { clearTimeout(t); cleanup(); });
+          } catch (e) {}
+        });
+      }
+      return { ok };
+    },
+
+    leave() {
+      const wasHost = this.mode === 'host';
+      if (wasHost && !this._closing) {
+        this._stopRoomHeartbeat();
+        this._deleteRoomRegistry(false, false);
+        this.broadcast({ type: 'ROOM_CLOSED', reason: 'Host left the match.' });
+      } else {
+        this._notifyLeaving();
+      }
+      this._teardownTransport();
     },
   };
 
@@ -1290,9 +1575,12 @@ window.LO = window.LO || {};
 
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', () => {
-      if (!Net.inGame) return;
-      if (Net.mode === 'host') Net.broadcast({ type: 'player_left', id: Net.localId });
-      else if (Net.mode === 'client') Net.sendToHost({ type: 'player_left', id: Net.localId });
+      if (Net.mode === 'host') {
+        Net._deleteRoomRegistry(true, false);
+        Net.broadcast({ type: 'ROOM_CLOSED', reason: 'Host disconnected.' });
+      } else if (Net.inGame && Net.mode === 'client') {
+        Net.sendToHost({ type: 'player_left', id: Net.localId });
+      }
     });
   }
 })();

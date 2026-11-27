@@ -42,6 +42,11 @@
     dbgHideSpots: false,
     dbgHazards: false,
     dbgFreezeBirds: false,
+    // multiplayer admin controls
+    adminJoinHidden: true,
+    sessions: [],
+    sessionsLoading: false,
+    sessionsError: '',
   };
   window.LO = window.LO || {};
   LO.admin = admin;
@@ -346,6 +351,8 @@
     renderBody();
     refreshLiveUI();
     $('admin-panel').classList.add('active');
+    H.syncMatchIdUI && H.syncMatchIdUI();
+    if (admin.activeTab === 'multiplayer') refreshSessions();
   };
 
   admin.closePanel = function (silentTransition) {
@@ -353,6 +360,7 @@
     const H = host();
     admin.open = false;
     $('admin-panel').classList.remove('active');
+    if (H && H.syncMatchIdUI) H.syncMatchIdUI();
     if (silentTransition || !H) return;
 
     if (admin.returnTo === 'play' && H.getState() === 'play') {
@@ -965,7 +973,7 @@
     }
 
     const H = host();
-    if (!inRun()) {
+    if (!inRun() && admin.activeTab !== 'multiplayer') {
       const banner = document.createElement('div');
       banner.className = 'adm-banner';
       const txt = document.createElement('span');
@@ -1219,6 +1227,183 @@
         btn('Die: Steam Leak', 'die', 'steam', 'danger'),
         btn('Die: Fall Damage', 'die', 'fall', 'danger'),
       ]));
+    } else if (admin.activeTab === 'multiplayer') {
+      const Net = LO.Net;
+      if (Net && Net.isCoop && Net.isCoop() && Net.roomCode) {
+        const curBanner = document.createElement('div');
+        curBanner.className = 'adm-banner';
+        const curTxt = document.createElement('span');
+        curTxt.textContent = `Current Match ID: ${Net.roomCode} (${Net.isHost() ? 'HOST' : 'CLIENT'}${Net.localHiddenAdmin ? ' · HIDDEN SPECTATOR' : ''})`;
+        const curCopy = document.createElement('button');
+        curCopy.type = 'button';
+        curCopy.className = 'adm-btn';
+        curCopy.textContent = 'Copy Match ID';
+        curCopy.onclick = () => {
+          LO.audio && LO.audio.click(true);
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(Net.roomCode).catch(() => {});
+          }
+          setStatus(`Copied Match ID: ${Net.roomCode}`);
+        };
+        curBanner.append(curTxt, curCopy);
+        body.appendChild(curBanner);
+      }
+
+      const card = document.createElement('div');
+      card.className = 'adm-card';
+      const head = document.createElement('div');
+      head.className = 'adm-sess-head';
+      const title = document.createElement('div');
+      title.className = 'adm-card-title';
+      title.style.marginBottom = '0';
+      title.style.borderBottom = 'none';
+      title.style.paddingBottom = '0';
+      title.textContent = 'ACTIVE MULTIPLAYER SESSIONS';
+
+      const ctrls = document.createElement('div');
+      ctrls.style.display = 'flex';
+      ctrls.style.flexWrap = 'wrap';
+      ctrls.style.gap = '6px';
+      ctrls.style.alignItems = 'center';
+
+      const hiddenToggle = toggleBtn('Hidden Spectator Join', 'adminJoinHidden', 'Join invisibly without player slot');
+      const refreshBtn = document.createElement('button');
+      refreshBtn.type = 'button';
+      refreshBtn.className = 'adm-btn primary';
+      refreshBtn.textContent = admin.sessionsLoading ? 'Refreshing...' : 'Refresh';
+      refreshBtn.disabled = !!admin.sessionsLoading;
+      refreshBtn.onclick = () => {
+        LO.audio && LO.audio.click(true);
+        refreshSessions();
+      };
+      ctrls.append(hiddenToggle, refreshBtn);
+      head.append(title, ctrls);
+      card.appendChild(head);
+
+      const listEl = document.createElement('div');
+      listEl.className = 'adm-sess-list';
+
+      if (admin.sessionsError) {
+        const errEl = document.createElement('div');
+        errEl.className = 'adm-muted';
+        errEl.style.color = '#ff8a80';
+        errEl.textContent = admin.sessionsError;
+        listEl.appendChild(errEl);
+      } else if (admin.sessionsLoading && (!admin.sessions || !admin.sessions.length)) {
+        const loadingEl = document.createElement('div');
+        loadingEl.className = 'adm-muted';
+        loadingEl.textContent = 'Querying active multiplayer sessions...';
+        listEl.appendChild(loadingEl);
+      } else if (!admin.sessions || !admin.sessions.length) {
+        const emptyEl = document.createElement('div');
+        emptyEl.className = 'adm-muted';
+        emptyEl.textContent = 'No active multiplayer sessions found (25s heartbeat TTL). Host a Co-op room or click Refresh.';
+        listEl.appendChild(emptyEl);
+      } else {
+        admin.sessions.forEach(sess => {
+          const row = document.createElement('div');
+          row.className = 'adm-sess-row';
+
+          const info = document.createElement('div');
+          info.className = 'adm-sess-info';
+
+          const top = document.createElement('div');
+          top.className = 'adm-sess-top';
+          const idBadge = document.createElement('span');
+          idBadge.className = 'adm-sess-id';
+          idBadge.textContent = sess.roomId || '-----';
+          const hostName = document.createElement('span');
+          hostName.textContent = `Host: ${sess.hostCallsign || 'Investigator 1'}`;
+          top.append(idBadge, hostName);
+
+          const meta = document.createElement('div');
+          meta.className = 'adm-sess-meta';
+          const playersTxt = `${sess.playerCount || 1}/${sess.maxPlayers || 4} Players`;
+          const waveTxt = `${sess.wave || 'Lobby'} (${String(sess.status || 'lobby').toUpperCase()})`;
+          const uptimeTxt = `Uptime ${formatUptime(sess.uptimeMs)}`;
+          meta.textContent = `${playersTxt} · ${waveTxt} · ${uptimeTxt}`;
+
+          info.append(top, meta);
+
+          const actions = document.createElement('div');
+          actions.className = 'adm-sess-actions';
+
+          const joinBtn = document.createElement('button');
+          joinBtn.type = 'button';
+          joinBtn.className = 'adm-btn primary';
+          const isHere = !!(Net && Net.isCoop && Net.isCoop() && Net.roomCode === sess.roomId);
+          joinBtn.textContent = isHere ? 'Connected' : (admin.adminJoinHidden ? 'Join (Hidden)' : 'Join Match');
+          joinBtn.disabled = isHere;
+          joinBtn.onclick = async () => {
+            LO.audio && LO.audio.click(true);
+            if (!H || !H.joinMatchAdmin) return;
+            joinBtn.disabled = true;
+            joinBtn.textContent = 'Connecting...';
+            setStatus(`Connecting to match ${sess.roomId}...`);
+            try {
+              await H.joinMatchAdmin(sess.roomId, admin.adminJoinHidden);
+            } catch (err) {
+              setStatus((err && err.message) ? err.message : `Failed to join ${sess.roomId}.`);
+              joinBtn.disabled = false;
+              joinBtn.textContent = admin.adminJoinHidden ? 'Join (Hidden)' : 'Join Match';
+            }
+          };
+
+          const shutBtn = document.createElement('button');
+          shutBtn.type = 'button';
+          shutBtn.className = 'adm-btn danger';
+          shutBtn.textContent = 'Shut Down Match';
+          shutBtn.onclick = async () => {
+            LO.audio && LO.audio.click(true);
+            if (!H || !H.shutdownMatchAdmin) return;
+            shutBtn.disabled = true;
+            shutBtn.textContent = 'Shutting down...';
+            try {
+              await H.shutdownMatchAdmin(sess.roomId);
+              setStatus(`Shut down match ${sess.roomId}.`);
+              setTimeout(() => refreshSessions(), 350);
+            } catch (err) {
+              setStatus(`Failed to shut down ${sess.roomId}.`);
+              shutBtn.disabled = false;
+              shutBtn.textContent = 'Shut Down Match';
+            }
+          };
+
+          actions.append(joinBtn, shutBtn);
+          row.append(info, actions);
+          listEl.appendChild(row);
+        });
+      }
+
+      card.appendChild(listEl);
+      body.appendChild(card);
+    }
+  }
+
+  function formatUptime(ms) {
+    const sec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  }
+
+  async function refreshSessions() {
+    if (admin.sessionsLoading) return;
+    admin.sessionsLoading = true;
+    admin.sessionsError = '';
+    if (admin.open && admin.activeTab === 'multiplayer') renderBody();
+    try {
+      const res = await fetch('/api/rooms', { cache: 'no-store' });
+      if (!res || !res.ok) throw new Error('Could not load active rooms.');
+      const json = await res.json();
+      admin.sessions = (json && Array.isArray(json.rooms)) ? json.rooms : [];
+    } catch (err) {
+      admin.sessionsError = (err && err.message) ? err.message : 'Failed to query /api/rooms.';
+    } finally {
+      admin.sessionsLoading = false;
+      if (admin.open && admin.activeTab === 'multiplayer') renderBody();
     }
   }
 
@@ -1307,6 +1492,7 @@
         LO.audio && LO.audio.click(true);
         admin.activeTab = b.dataset.tab;
         renderBody();
+        if (admin.activeTab === 'multiplayer') refreshSessions();
       };
     });
 

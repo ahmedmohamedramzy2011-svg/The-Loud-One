@@ -1170,3 +1170,140 @@ body.touch #hud-chat-hint { display: none; }
   #coop-chat { width: min(290px, 68vw); }
 }
 
+/* ---------- Match ID Watermark & AFK Banner ---------- */
+#coop-match-id {
+  display: none;
+  position: fixed;
+  top: 5px;
+  left: 24px;
+  z-index: 66;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 1px 5px;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  color: #e6e2d8;
+  opacity: 0.35;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  transition: opacity 0.16s, border-color 0.16s, background 0.16s, color 0.16s;
+}
+body.in-coop-match #coop-match-id { display: inline-block; }
+body.match-id-copyable #coop-match-id {
+  pointer-events: auto;
+  cursor: pointer;
+  opacity: 0.78;
+  background: rgba(8, 8, 12, 0.65);
+  border-color: rgba(230, 226, 216, 0.28);
+}
+body.match-id-copyable #coop-match-id:hover {
+  opacity: 1;
+  border-color: var(--red);
+  color: #fff;
+}
+body.touch #coop-match-id { left: 16px; top: 4px; }
+
+#pause-match-id {
+  display: none;
+  margin: -6px auto 12px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(230, 226, 216, 0.2);
+  color: var(--ink-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 1.3px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+body.in-coop-match #pause-match-id { display: inline-block; }
+#pause-match-id:hover { border-color: var(--red); color: #fff; background: rgba(209, 26, 26, 0.14); }
+
+#afk-warning {
+  display: none;
+  position: fixed;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 72;
+  max-width: min(92vw, 620px);
+  padding: 10px 18px;
+  background: rgba(24, 10, 8, 0.94);
+  border: 1px solid #ff5c38;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.85), 0 0 18px rgba(255, 92, 56, 0.25);
+  color: #ffd7c9;
+  font-family: var(--font-body);
+  font-size: 13px;
+  letter-spacing: 0.7px;
+  text-align: center;
+  pointer-events: none;
+}
+#afk-warning.show { display: block; animation: afkPulse 0.9s ease-in-out infinite alternate; }
+@keyframes afkPulse {
+  from { border-color: #ff5c38; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.85); }
+  to { border-color: #ff9c54; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.85), 0 0 22px rgba(255, 110, 60, 0.45); }
+}
+
+/* ---------- Admin Active Multiplayer Sessions ---------- */
+.adm-sess-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.adm-sess-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.adm-sess-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid rgba(232, 226, 212, 0.14);
+  background: rgba(0, 0, 0, 0.34);
+}
+.adm-sess-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 210px;
+  flex: 1;
+}
+.adm-sess-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.adm-sess-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  padding: 2px 6px;
+  border: 1px solid rgba(56, 170, 255, 0.45);
+  color: #9be0ff;
+  background: rgba(56, 170, 255, 0.12);
+}
+.adm-sess-meta {
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0.4px;
+}
+.adm-sess-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+

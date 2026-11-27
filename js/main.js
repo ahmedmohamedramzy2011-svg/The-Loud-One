@@ -44,6 +44,181 @@
   let chatFadeTimer = null;
   let voiceUiAccum = 0;
   const _voiceRemotePos = new THREE.Vector3();
+  let currentRunSeed = null;
+  let currentEvSeed = null;
+
+  // 60-second AFK auto-kick & Match ID watermark state
+  const AFK_WARN_SEC = 50;
+  const AFK_KICK_SEC = 60;
+  let afkIdleSec = 0;
+  let afkBannerShown = false;
+  let afkLastCountdown = -1;
+  let afkKicking = false;
+  let afkMouseX = null;
+  let afkMouseY = null;
+  const _afkLastPos = new THREE.Vector3();
+  let _afkLastYaw = 0;
+  let _afkLastPitch = 0;
+  let _afkTrackInit = false;
+  let _matchIdCopyTimer = null;
+
+  function setAfkBanner(showBanner, secsLeft) {
+    const el = $('afk-warning');
+    if (!el) return;
+    if (!showBanner) {
+      if (afkBannerShown) {
+        afkBannerShown = false;
+        afkLastCountdown = -1;
+        el.classList.remove('show');
+        el.textContent = '';
+      }
+      return;
+    }
+    const sec = Math.max(1, Math.ceil(secsLeft || 1));
+    if (!afkBannerShown || sec !== afkLastCountdown) {
+      afkBannerShown = true;
+      afkLastCountdown = sec;
+      el.textContent = `AFK WARNING: Moving soon or you will be disconnected to save bandwidth (${sec}s)`;
+      el.classList.add('show');
+    }
+  }
+
+  function resetAfkActivity() {
+    afkIdleSec = 0;
+    if (afkBannerShown) setAfkBanner(false);
+  }
+
+  function copyMatchIdToClipboard(sourceBtn) {
+    const code = (Net && Net.roomCode) ? Net.roomCode : '';
+    if (!code) return;
+    const finish = () => {
+      if (sourceBtn) {
+        const prev = sourceBtn.textContent;
+        sourceBtn.textContent = `COPIED: ${code}`;
+        clearTimeout(_matchIdCopyTimer);
+        _matchIdCopyTimer = setTimeout(() => { updateMatchIdWatermark(); }, 1600);
+        if (!prev) updateMatchIdWatermark();
+      }
+      showHint(`Copied Match ID: ${code}`, 2200);
+    };
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(finish).catch(() => finish());
+    } else {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = code;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (e) {}
+      finish();
+    }
+  }
+
+  function updateMatchIdWatermark() {
+    const isCoop = !!(Net && Net.isCoop && Net.isCoop() && Net.roomCode);
+    const inMatch = isCoop && (
+      state === 'opening' || state === 'play' || state === 'paused' ||
+      state === 'spectate' || state === 'dying' || state === 'dead' ||
+      state === 'ending' || state === 'credits'
+    );
+    document.body.classList.toggle('in-coop-match', inMatch);
+    const pauseEl = $('pause');
+    const copyable = inMatch && !!(
+      coopMenuOpen ||
+      state === 'paused' ||
+      (pauseEl && pauseEl.classList.contains('active')) ||
+      (LO.admin && LO.admin.open)
+    );
+    document.body.classList.toggle('match-id-copyable', copyable);
+    const wm = $('coop-match-id');
+    if (wm) wm.textContent = isCoop ? `ID: ${Net.roomCode}` : 'ID: -----';
+    const pm = $('pause-match-id');
+    if (pm) pm.textContent = isCoop ? `MATCH ID: ${Net.roomCode}  [COPY]` : '';
+  }
+
+  function handleCoopForceExit(reason) {
+    const msg = reason || 'Disconnected from match.';
+    resetAfkActivity();
+    afkKicking = false;
+    clearChatLogs();
+    updateVoiceUI();
+    if (LO.admin && LO.admin.open && LO.admin.closePanel) LO.admin.closePanel(true);
+    if (state !== 'title' && state !== 'gate') {
+      goTitle();
+    } else {
+      hideAllScreens();
+      show('title');
+      document.body.classList.remove('in-coop', 'in-coop-match', 'match-id-copyable', 'spectating');
+      updateMatchIdWatermark();
+    }
+    showHint(msg, 6500);
+    const js = $('coop-join-status');
+    if (js) {
+      js.textContent = msg;
+      js.classList.add('err');
+      js.style.color = '';
+    }
+  }
+
+  function updateAfkTracker(dt) {
+    if (!Net || !Net.isCoop || !Net.isCoop()) {
+      resetAfkActivity();
+      _afkTrackInit = false;
+      afkKicking = false;
+      return;
+    }
+    if (afkKicking) return;
+    // Pause AFK timer in Death Screen and non-interactive cutscenes/loading
+    if (state === 'dying' || state === 'dead' || state === 'opening' || state === 'ending' || state === 'credits' || state === 'loading') {
+      setAfkBanner(false);
+      return;
+    }
+    if (state === 'play' && player && !coopMenuOpen) {
+      if (!_afkTrackInit) {
+        _afkLastPos.copy(player.pos);
+        _afkLastYaw = player.yaw || 0;
+        _afkLastPitch = player.pitch || 0;
+        _afkTrackInit = true;
+      } else {
+        const movedDist = _afkLastPos.distanceTo(player.pos);
+        const lookDelta = Math.abs((player.yaw || 0) - _afkLastYaw) + Math.abs((player.pitch || 0) - _afkLastPitch);
+        const ks = player.keys || {};
+        const keyHeld = !!(ks.KeyW || ks.KeyA || ks.KeyS || ks.KeyD || ks.ArrowUp || ks.ArrowDown || ks.ArrowLeft || ks.ArrowRight || ks.Space || ks.ShiftLeft || ks.ShiftRight || ks.KeyE || ks.KeyF || ks.KeyG || ks.KeyQ);
+        const touchActive = !!(LO.touchStick && (Math.abs(LO.touchStick.x) > 0.05 || Math.abs(LO.touchStick.y) > 0.05)) || !!LO.touchHold;
+        _afkLastPos.copy(player.pos);
+        _afkLastYaw = player.yaw || 0;
+        _afkLastPitch = player.pitch || 0;
+        if (movedDist > 0.0025 || lookDelta > 0.0015 || keyHeld || touchActive) {
+          resetAfkActivity();
+        }
+      }
+    } else {
+      _afkTrackInit = false;
+    }
+
+    afkIdleSec += dt;
+    if (afkIdleSec >= AFK_KICK_SEC) {
+      afkKicking = true;
+      resetAfkActivity();
+      const kickReason = 'Disconnected due to inactivity (1 min AFK).';
+      if (Net.isHost && Net.isHost() && Net.closeRoom) {
+        Net.closeRoom(kickReason, kickReason);
+      } else {
+        if (Net.leave) Net.leave();
+        handleCoopForceExit(kickReason);
+      }
+      return;
+    }
+    if (afkIdleSec >= AFK_WARN_SEC) {
+      setAfkBanner(true, AFK_KICK_SEC - afkIdleSec);
+    } else {
+      setAfkBanner(false);
+    }
+  }
 
   function sanitizeCallsign(raw) {
     return String(raw || '').replace(/[^\w \-\.]/g, '').trim().slice(0, 16);
@@ -549,8 +724,8 @@
     const validIds = new Set();
     Net.players.forEach(p => {
       // A player who left stays in the roster for HUD/status purposes, but must
-      // never get their mesh recreated by a later sync.
-      if (p.id === Net.localId || p.left) return;
+      // never get their mesh recreated by a later sync. Hidden admins never spawn a mesh.
+      if (p.id === Net.localId || p.left || p.hiddenAdmin) return;
       validIds.add(p.id);
       let rp = remotePlayers.get(p.id);
       if (!rp) {
@@ -1011,6 +1186,7 @@
       syncCoopVersionBadge();
     }
     show(id);
+    updateMatchIdWatermark();
   }
   function closePanel() {
     hideAllScreens();
@@ -1018,6 +1194,7 @@
     else if (menuReturn === 'lobby') { show('coop-lobby'); }
     else if (state === 'play' || state === 'spectate') { show('hud'); }
     else show('title');
+    updateMatchIdWatermark();
   }
 
   function restoreLocalVersion() {
@@ -1191,6 +1368,8 @@
     coopTeamWiped = false;
     lastWorldSnap = null;
     lastCoopHudHtml = null;
+    resetAfkActivity();
+    afkKicking = false;
     if (Net && Net.isCoop()) {
       // Everyone in the roster is leaving with us: treat them all as gone so a
       // stale DEAD/HP status can never linger, and drop their meshes.
@@ -1199,7 +1378,8 @@
     }
     disposeRemotePlayers();
     restoreLocalVersion();
-    document.body.classList.remove('spectating', 'in-coop');
+    document.body.classList.remove('spectating', 'in-coop', 'in-coop-match', 'match-id-copyable');
+    updateMatchIdWatermark();
     updateVoiceUI();
     const sb = $('spectate-bar'); if (sb) sb.classList.remove('show');
     const th = $('coop-team-hud'); if (th) { th.classList.remove('show'); th.innerHTML = ''; }
@@ -1236,6 +1416,8 @@
   function resetRun(seed, evSeed) {
     lastWorldSnap = null;
     lastCoopHudHtml = null;
+    currentRunSeed = seed !== undefined ? seed : null;
+    currentEvSeed = evSeed !== undefined ? evSeed : null;
     if (seed !== undefined) {
       buildWorld(seed, evSeed);
     } else {
@@ -1356,10 +1538,14 @@
     const mb = $('map-hud-badge'); if (mb) mb.classList.remove('show', 'open');
     document.body.classList.remove('map-open', 'has-map', 'spectating');
     resetHudCache();
+    resetAfkActivity();
+    _afkTrackInit = false;
     state = 'play';
     show('hud');
+    updateMatchIdWatermark();
     updateVoiceUI();
     updateCoopTeamHUD();
+    if (Net && Net.isHost && Net.isHost() && Net.pushRoomHeartbeat) Net.pushRoomHeartbeat();
     ui.fadeIn(1.5);
     A.playMusic('explore', 3);
     windStrength = 1;
@@ -1398,6 +1584,7 @@
       show('map-overlay', false);
       document.body.classList.remove('map-open');
       show('pause');
+      updateMatchIdWatermark();
       return;
     }
     state = 'paused';
@@ -1410,6 +1597,7 @@
     clearFlashStrobe();
     clearFallFx();
     show('pause');
+    updateMatchIdWatermark();
     if (window.speechSynthesis) try { speechSynthesis.pause(); } catch (e) {}
     A.setFlashlightBuzz(false); A.setTenant(0); A.setSilentOne(0); A.setMothFlutter(0); A.setExposure(0);
     A.setBreathing && A.setBreathing(0);
@@ -1424,7 +1612,7 @@
     if (Net && Net.isCoop()) {
       coopMenuOpen = false;
       const me = Net.getPlayer ? Net.getPlayer(Net.localId) : null;
-      const localDead = !!(me && me.alive === false) || !!(player && player.alive === false);
+      const localDead = !!(me && me.alive === false) || !!(player && player.alive === false) || !!Net.localHiddenAdmin;
       // Resuming from the pause menu must not put a dead player back in control.
       state = localDead ? 'spectate' : 'play';
       if (state === 'play') {
@@ -1434,6 +1622,7 @@
         player.enabled = false;
         updateSpectateLabel();
       }
+      updateMatchIdWatermark();
       return;
     }
     state = 'play';
@@ -1483,6 +1672,7 @@
         evName: ev.name,
         finderName: Net.localName,
       });
+      Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
     }
     if (evidenceCount >= EVIDENCE_NEEDED && !endingQueued) queueEnding();
   }
@@ -1761,6 +1951,7 @@
     $('fade').style.transition = 'none'; $('fade').style.opacity = 0;
     updateSpectateLabel();
     updateCoopTeamHUD();
+    updateMatchIdWatermark();
   }
 
   function updateSpectateLabel() {
@@ -1769,7 +1960,8 @@
     const mate = spectateId && Net ? Net.getPlayer(spectateId) : null;
     const rp = spectateId ? remotePlayers.get(spectateId) : null;
     const hpTxt = rp ? ` (${Math.max(0, Math.round(rp.health))} HP)` : '';
-    const nextTxt = mate ? `SPECTATING: ${mate.name.toUpperCase()}${hpTxt}` : 'SPECTATING TEAMMATE';
+    const prefix = (Net && Net.localHiddenAdmin) ? 'ADMIN SPECTATING (HIDDEN): ' : 'SPECTATING: ';
+    const nextTxt = mate ? `${prefix}${mate.name.toUpperCase()}${hpTxt}` : 'SPECTATING TEAMMATE';
     if (nextTxt !== lastSpecLabelText) {
       lastSpecLabelText = nextTxt;
       el.textContent = nextTxt;
@@ -1779,7 +1971,7 @@
   function cycleSpectate(dir) {
     if (state !== 'spectate' || !Net) return;
     // Only living, connected teammates can be spectated.
-    const alive = Net.players.filter(p => p.alive !== false && !p.left && p.id !== Net.localId);
+    const alive = Net.players.filter(p => p.alive !== false && !p.left && !p.hiddenAdmin && p.id !== Net.localId);
     if (!alive.length) return;
     const curIdx = alive.findIndex(p => p.id === spectateId);
     const nextIdx = curIdx < 0
@@ -1794,6 +1986,8 @@
   function showTeamWipeDeath() {
     coopTeamWiped = true;
     state = 'dead';
+    updateMatchIdWatermark();
+    if (Net && Net.isHost && Net.isHost() && Net.pushRoomHeartbeat) Net.pushRoomHeartbeat();
     deathShown = false;
     spectateId = null;
     document.body.classList.remove('spectating');
@@ -2498,7 +2692,7 @@
       }
     }
     Net.players.forEach(np => {
-      if (!np || np.id === 'host' || np.left) return;
+      if (!np || np.id === 'host' || np.left || np.hiddenAdmin) return;
       const st = Net.remoteStates && Net.remoteStates.get(np.id);
       if (st) {
         snapPlayers.push({
@@ -2814,6 +3008,7 @@
     camera.getWorldDirection(fwd);
     upv.set(0, 1, 0).applyQuaternion(camera.quaternion);
     A.setListener(camera.position, fwd, upv);
+    updateAfkTracker(dt);
     if (Net && Net.isCoop() && Net.updateVoiceProximity) {
       const inCutscene = (state === 'opening' || state === 'ending' || state === 'credits' || state === 'loading' || state === 'dying' || state === 'dead' || !!cutscene);
       const inWorld = !inCutscene && (state === 'play' || state === 'spectate');
@@ -2877,9 +3072,9 @@
             const rawName = nameEl ? nameEl.value : loadSavedCallsign();
             const clean = saveCallsign(rawName);
             syncCallsignInputs(clean);
-            LO.Net.join(code, clean).then(() => {
+            LO.Net.join(code, clean).then(res => {
               syncCallsignInputs(clean);
-              openPanel('coop-lobby', 'title');
+              if (!res || !res.inGame) openPanel('coop-lobby', 'title');
             }).catch(() => {});
           }
           break;
@@ -2890,11 +3085,13 @@
             LO.Net.inGame = true;
             if (LO.Net.broadcast) LO.Net.broadcast({ type: 'start_run', seed, evSeed });
             startGame(false, seed, evSeed);
+            LO.Net.pushRoomHeartbeat && LO.Net.pushRoomHeartbeat();
           }
           break;
         case 'coop-leave':
         case 'coop-cancel':
           if (LO.Net && LO.Net.leave) LO.Net.leave();
+          resetAfkActivity();
           clearChatLogs();
           updateVoiceUI();
           restoreLocalVersion();
@@ -2913,7 +3110,7 @@
           if (Net && Net.isCoop() && Net.isHost()) {
             if (Array.isArray(Net.players)) {
               Net.players = Net.players.filter(p => !p.left);
-              Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
+              Net.players.forEach(p => { p.alive = !p.hiddenAdmin; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
             }
             coopTeamWiped = false;
             const seed = (Math.random() * 0x7fffffff) | 0;
@@ -2921,6 +3118,7 @@
             Net.inGame = true;
             if (Net.broadcast) Net.broadcast({ type: 'start_run', seed, evSeed });
             startGame(false, seed, evSeed);
+            Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
           } else {
             startGame(true);
           }
@@ -2964,6 +3162,23 @@
         else if ((state === 'play' || state === 'spectate') && !coopMenuOpen) pause();
       }
     });
+    window.addEventListener('keydown', resetAfkActivity, { passive: true });
+    window.addEventListener('keyup', resetAfkActivity, { passive: true });
+    window.addEventListener('mousedown', resetAfkActivity, { passive: true });
+    window.addEventListener('touchstart', resetAfkActivity, { passive: true });
+    window.addEventListener('wheel', resetAfkActivity, { passive: true });
+    window.addEventListener('input', resetAfkActivity, { passive: true });
+    window.addEventListener('mousemove', e => {
+      const dx = Math.abs(e.movementX || 0) + (afkMouseX !== null ? Math.abs(e.clientX - afkMouseX) : 0);
+      const dy = Math.abs(e.movementY || 0) + (afkMouseY !== null ? Math.abs(e.clientY - afkMouseY) : 0);
+      afkMouseX = e.clientX;
+      afkMouseY = e.clientY;
+      if (dx > 0 || dy > 0) resetAfkActivity();
+    }, { passive: true });
+    const matchIdBtn = $('coop-match-id');
+    if (matchIdBtn) matchIdBtn.addEventListener('click', e => { e.stopPropagation(); copyMatchIdToClipboard(matchIdBtn); });
+    const pauseMatchBtn = $('pause-match-id');
+    if (pauseMatchBtn) pauseMatchBtn.addEventListener('click', e => { e.stopPropagation(); copyMatchIdToClipboard(pauseMatchBtn); });
     $('hint-btn').addEventListener('click', e => { e.stopPropagation(); useHint(); });
     const mapBadge = $('map-hud-badge');
     if (mapBadge) mapBadge.addEventListener('click', e => { e.stopPropagation(); if (player) player.toggleMap(); });
@@ -3074,13 +3289,43 @@
         });
       }
 
+      LO.Net.getSessionSnapshot = () => {
+        let wave = 'Lobby';
+        let status = 'lobby';
+        if (LO.Net.inGame) {
+          if (coopTeamWiped || state === 'dead') { wave = 'Team Wipe'; status = 'wipe'; }
+          else if (state === 'opening') { wave = 'Opening'; status = 'opening'; }
+          else if (endingQueued || state === 'ending' || state === 'credits') { wave = 'Ending'; status = 'ending'; }
+          else if (fastone && fastone.state && fastone.state !== 'idle') { wave = `Fast One · ${evidenceCount}/${EVIDENCE_NEEDED}`; status = 'playing'; }
+          else if (siren && siren.state === 'hunt') { wave = `Siren Hunt · ${evidenceCount}/${EVIDENCE_NEEDED}`; status = 'playing'; }
+          else { wave = `Evidence ${evidenceCount}/${EVIDENCE_NEEDED}`; status = 'playing'; }
+        }
+        return { wave, status };
+      };
+
+      LO.Net.getRunSyncState = () => ({
+        seed: currentRunSeed,
+        evSeed: currentEvSeed,
+        gameTime,
+        foundIds: (world && world.evidence) ? world.evidence.filter(e => e.found).map(e => e.id) : [],
+        evidenceCount,
+        mapTaken: !!(world && world.wallMap && world.wallMap.taken),
+        endingQueued: !!endingQueued,
+        runPhase: state,
+      });
+
+      LO.Net.onForceExit = (reason, kind) => {
+        handleCoopForceExit(reason, kind);
+      };
+
       LO.Net.onLobbyUpdate = (players, roomCode) => {
         if (codeDisplay) codeDisplay.textContent = roomCode || '-----';
         if (startBtn) startBtn.style.display = LO.Net.isHost() ? '' : 'none';
         if (LO.Net.isClient() && LO.Net.hostVersion) applyHostVersion(LO.Net.hostVersion);
         else syncCoopVersionBadge();
+        updateMatchIdWatermark();
         if (rosterEl) {
-          const list = Array.isArray(players) ? players : [];
+          const list = Array.isArray(players) ? players.filter(m => m && !m.hiddenAdmin) : [];
           let html = '';
           for (let i = 0; i < LO.Net.MAX_PLAYERS; i++) {
             const p = list.find(m => m.slot === i) || list[i];
@@ -3119,6 +3364,7 @@
 
       LO.Net.onDisconnect = reason => {
         const msg = reason || 'Disconnected from host.';
+        resetAfkActivity();
         clearChatLogs();
         updateVoiceUI();
         if (state !== 'title' && state !== 'gate') {
@@ -3136,10 +3382,49 @@
           coopTeamWiped = false;
           if (Array.isArray(Net.players)) {
             Net.players = Net.players.filter(p => !p.left);
-            Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
+            Net.players.forEach(p => { p.alive = !p.hiddenAdmin; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
           }
           LO.Net.inGame = true;
           startGame(false, msg.seed, msg.evSeed);
+        } else if (msg.type === 'admin_midjoin') {
+          const rs = msg.runState || {};
+          coopTeamWiped = false;
+          LO.Net.inGame = true;
+          A.init();
+          A.stopVoices();
+          hideAllScreens();
+          const seedArg = rs.seed !== null && rs.seed !== undefined ? rs.seed : undefined;
+          const evSeedArg = rs.evSeed !== null && rs.evSeed !== undefined ? rs.evSeed : undefined;
+          if (seedArg !== undefined) buildWorld(seedArg, evSeedArg);
+          resetRun(seedArg, evSeedArg);
+          if (world && world.evidence && Array.isArray(rs.foundIds)) {
+            const idSet = new Set(rs.foundIds);
+            world.evidence.forEach(e => { e.found = idSet.has(e.id); });
+          }
+          if (typeof rs.evidenceCount === 'number') evidenceCount = rs.evidenceCount;
+          if (rs.mapTaken && world && world.wallMap) {
+            world.wallMap.taken = true;
+            if (world.wallMap.mesh) world.wallMap.mesh.visible = false;
+            if (world.wallMap.building) world.wallMap.building.hasMap = false;
+            if (player) player.hasMap = true;
+          }
+          if (typeof rs.gameTime === 'number') gameTime = rs.gameTime;
+          endingQueued = !!rs.endingQueued;
+          updateEvidenceUI();
+          syncRemotePlayersRoster();
+          if (msg.adminHidden) {
+            const me = Net.getPlayer ? Net.getPlayer(Net.localId) : null;
+            if (me) { me.alive = false; me.hiddenAdmin = true; }
+            if (player) { player.alive = false; player.enabled = false; }
+            const aliveMates = Net.players.filter(p => p && !p.left && !p.hiddenAdmin && p.alive !== false && p.id !== Net.localId);
+            const targetId = aliveMates.length ? aliveMates[0].id : 'host';
+            enterSpectate(targetId);
+            showHint(`Admin joined match ${Net.roomCode} (hidden spectator).`, 3500);
+          } else {
+            beginPlay();
+            showHint(`Admin joined match ${Net.roomCode}.`, 3500);
+          }
+          updateMatchIdWatermark();
         } else if (msg.type === 'world_snap') {
           lastWorldSnap = msg;
         } else if (msg.type === 'sneaky_wave') {
@@ -3195,6 +3480,7 @@
             evName: ev.name,
             finderName,
           });
+          Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
           if (evidenceCount >= EVIDENCE_NEEDED && !endingQueued) queueEnding();
         } else if (msg.type === 'ev_sync') {
           if (world && world.evidence && Array.isArray(msg.foundIds)) {
@@ -3425,7 +3711,7 @@ function boot() {
       }
     });
     setInterval(() => {
-      if (document.hidden && Net && Net.isCoop() && (state === 'play' || state === 'spectate' || state === 'opening' || state === 'ending' || state === 'dying')) {
+      if (document.hidden && Net && Net.isCoop()) {
         loop();
       }
     }, 50);
@@ -3513,6 +3799,23 @@ function boot() {
       hideAllScreens,
       setPlayEnabled: on => { if (player) player.enabled = !!on; },
       syncClock: () => { clock.getDelta(); },
+      syncMatchIdUI: () => { updateMatchIdWatermark(); },
+      async joinMatchAdmin(roomId, hidden) {
+        if (!LO.Net || !LO.Net.join) throw new Error('Networking unavailable');
+        const joinEl = $('coop-name-join');
+        const rawName = (joinEl && joinEl.value) || loadSavedCallsign() || 'Admin';
+        const clean = saveCallsign(rawName) || 'Admin';
+        const res = await LO.Net.join(roomId, clean, { adminJoin: true, adminHidden: !!hidden });
+        if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
+        if (!res || !res.inGame) {
+          openPanel('coop-lobby', 'title');
+        }
+        return res;
+      },
+      async shutdownMatchAdmin(roomId) {
+        if (!LO.Net || !LO.Net.adminRemoteShutdown) return { ok: false };
+        return await LO.Net.adminRemoteShutdown(roomId, 'Match shut down by Admin');
+      },
     };
     if (LO.isTesting && LO.admin && LO.admin.init) LO.admin.init();
     // expose for debugging
@@ -3534,7 +3837,7 @@ function boot() {
       return;
     }
     el.classList.add('show');
-    const list = Array.isArray(LO.Net.players) ? LO.Net.players : [];
+    const list = Array.isArray(LO.Net.players) ? LO.Net.players.filter(p => p && !p.hiddenAdmin) : [];
     let html = '';
     for (let i = 0; i < list.length; i++) {
       const p = list[i];

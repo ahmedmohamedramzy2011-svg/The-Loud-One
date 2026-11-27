@@ -30,13 +30,16 @@ async function getMeteredIce() {
   if (!rawDomain || !apiKey || !/^[a-zA-Z0-9.-]+$/.test(rawDomain)) return null;
   const data = await fetchJson(`https://${rawDomain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`);
   if (!Array.isArray(data) || !data.length) return null;
-  return data.filter(s => s && s.urls);
+  const list = data.filter(s => s && s.urls && (Array.isArray(s.urls) ? s.urls.length > 0 : String(s.urls).trim().length > 0));
+  return list.length ? list : null;
 }
 
 async function getCloudflareIce() {
   const tokenId = String(process.env.CLOUDFLARE_TURN_TOKEN_ID || '').trim();
   const apiToken = String(process.env.CLOUDFLARE_TURN_API_TOKEN || '').trim();
   if (!tokenId || !apiToken || !/^[a-zA-Z0-9_-]+$/.test(tokenId)) return null;
+  const rawTtl = parseInt(process.env.CLOUDFLARE_TURN_TTL || '86400', 10);
+  const ttl = Number.isFinite(rawTtl) ? Math.max(60, Math.min(86400, rawTtl)) : 86400;
   const data = await fetchJson(
     `https://rtc.live.cloudflare.com/v1/turn/keys/${tokenId}/credentials/generate-ice-servers`,
     {
@@ -45,12 +48,14 @@ async function getCloudflareIce() {
         Authorization: `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ ttl: 86400 }),
+      body: JSON.stringify({ ttl }),
     }
   );
-  const list = data && (Array.isArray(data.iceServers) ? data.iceServers : (data.iceServers ? [data.iceServers] : null));
+  const rawServers = data && (data.iceServers || (data.result && data.result.iceServers));
+  const list = rawServers ? (Array.isArray(rawServers) ? rawServers : [rawServers]) : null;
   if (!list || !list.length) return null;
-  return list.filter(s => s && s.urls);
+  const valid = list.filter(s => s && s.urls && (Array.isArray(s.urls) ? s.urls.length > 0 : String(s.urls).trim().length > 0));
+  return valid.length ? valid : null;
 }
 
 function getCustomTurnIce() {
@@ -79,22 +84,49 @@ function getPeerOpts() {
   return opts;
 }
 
+function readPreferParam(req) {
+  if (req && req.query && typeof req.query.prefer === 'string') {
+    return req.query.prefer.trim().toLowerCase();
+  }
+  try {
+    const u = new URL((req && req.url) || '/', 'http://localhost');
+    return (u.searchParams.get('prefer') || '').trim().toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Content-Type', 'application/json');
 
+  const prefer = readPreferParam(req);
+  const envPriority = String(process.env.TURN_PRIORITY || 'metered-first').trim().toLowerCase();
+  const priority = prefer === 'cloudflare' ? 'cloudflare-first' : envPriority;
+
   const iceServers = DEFAULT_STUN.slice();
   let hasTurn = false;
 
-  const [metered, cloudflare] = await Promise.all([getMeteredIce(), getCloudflareIce()]);
-  if (metered && metered.length) {
-    iceServers.push(...metered);
-    hasTurn = true;
+  const wantMetered = priority !== 'cloudflare-only';
+  const wantCloudflare = priority !== 'metered-only';
+
+  const [metered, cloudflare] = await Promise.all([
+    wantMetered ? getMeteredIce() : Promise.resolve(null),
+    wantCloudflare ? getCloudflareIce() : Promise.resolve(null),
+  ]);
+
+  const orderedTurn = (priority === 'cloudflare-first' || priority === 'cloudflare-only')
+    ? [cloudflare, metered]
+    : [metered, cloudflare];
+
+  for (let i = 0; i < orderedTurn.length; i++) {
+    const list = orderedTurn[i];
+    if (list && list.length) {
+      iceServers.push(...list);
+      hasTurn = true;
+    }
   }
-  if (cloudflare && cloudflare.length) {
-    iceServers.push(...cloudflare);
-    hasTurn = true;
-  }
+
   const custom = getCustomTurnIce();
   if (custom && custom.length) {
     iceServers.push(...custom);
@@ -104,6 +136,12 @@ module.exports = async function handler(req, res) {
   const payload = {
     iceServers,
     hasTurn,
+    providers: {
+      metered: !!(metered && metered.length),
+      cloudflare: !!(cloudflare && cloudflare.length),
+      custom: !!(custom && custom.length),
+    },
+    priority,
     peerOpts: getPeerOpts(),
   };
 
