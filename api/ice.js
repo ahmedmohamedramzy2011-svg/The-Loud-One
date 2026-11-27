@@ -58,12 +58,15 @@ async function getCloudflareIce() {
   return valid.length ? valid : null;
 }
 
-function getCustomTurnIce() {
-  const rawUrl = String(process.env.TURN_URL || '').trim();
-  const username = String(process.env.TURN_USERNAME || '').trim();
-  const credential = String(process.env.TURN_CREDENTIAL || '').trim();
+function getStaticTurnIce(urlVar, userVar, credVar) {
+  const rawUrl = String(process.env[urlVar] || '').trim();
+  const username = String(process.env[userVar] || '').trim();
+  const credential = String(process.env[credVar] || '').trim();
   if (!rawUrl || !username || !credential) return null;
-  const urls = rawUrl.split(',').map(u => u.trim()).filter(Boolean);
+  const urls = rawUrl
+    .split(',')
+    .map(u => u.trim())
+    .filter(u => /^(stuns?|turns?):[^\s]+$/i.test(u));
   if (!urls.length) return null;
   return [{ urls: urls.length === 1 ? urls[0] : urls, username, credential }];
 }
@@ -110,14 +113,20 @@ module.exports = async function handler(req, res) {
   const wantMetered = priority !== 'cloudflare-only';
   const wantCloudflare = priority !== 'metered-only';
 
-  const [metered, cloudflare] = await Promise.all([
+  // 1. Primary Metered (TURN_URL, TURN_USERNAME, TURN_CREDENTIAL)
+  const primaryMetered = wantMetered ? getStaticTurnIce('TURN_URL', 'TURN_USERNAME', 'TURN_CREDENTIAL') : null;
+  // 2. Secondary Metered (TURN_URL_2, TURN_USERNAME_2, TURN_CREDENTIAL_2)
+  const secondaryMetered = wantMetered ? getStaticTurnIce('TURN_URL_2', 'TURN_USERNAME_2', 'TURN_CREDENTIAL_2') : null;
+
+  // Optional dynamic Metered API + 3. Cloudflare TURN fallback
+  const [meteredDynamic, cloudflare] = await Promise.all([
     wantMetered ? getMeteredIce() : Promise.resolve(null),
     wantCloudflare ? getCloudflareIce() : Promise.resolve(null),
   ]);
 
   const orderedTurn = (priority === 'cloudflare-first' || priority === 'cloudflare-only')
-    ? [cloudflare, metered]
-    : [metered, cloudflare];
+    ? [cloudflare, primaryMetered, secondaryMetered, meteredDynamic]
+    : [primaryMetered, secondaryMetered, meteredDynamic, cloudflare];
 
   for (let i = 0; i < orderedTurn.length; i++) {
     const list = orderedTurn[i];
@@ -127,19 +136,14 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  const custom = getCustomTurnIce();
-  if (custom && custom.length) {
-    iceServers.push(...custom);
-    hasTurn = true;
-  }
-
   const payload = {
     iceServers,
     hasTurn,
     providers: {
-      metered: !!(metered && metered.length),
+      primaryMetered: !!(primaryMetered && primaryMetered.length),
+      secondaryMetered: !!(secondaryMetered && secondaryMetered.length),
+      metered: !!(primaryMetered && primaryMetered.length) || !!(secondaryMetered && secondaryMetered.length) || !!(meteredDynamic && meteredDynamic.length),
       cloudflare: !!(cloudflare && cloudflare.length),
-      custom: !!(custom && custom.length),
     },
     priority,
     peerOpts: getPeerOpts(),
