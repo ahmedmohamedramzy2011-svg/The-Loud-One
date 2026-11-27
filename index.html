@@ -100,6 +100,10 @@
           <div class="coop-label">BUILD VERSION</div>
           <button type="button" id="coop-ver-badge" class="coop-ver-pill" title="Click to change build version">v2.8.3</button>
         </div>
+        <div class="coop-ping-wrap">
+          <div class="coop-label">PING</div>
+          <div id="coop-lobby-ping" class="coop-ping-pill" title="Connection latency to host"><i class="ping-dot"></i><span id="coop-lobby-ping-val">-- ms</span></div>
+        </div>
       </div>
       <div class="coop-label" style="margin-top:14px">INVESTIGATORS (MAX 4)</div>
       <div id="coop-roster" class="coop-roster"></div>
@@ -365,6 +369,7 @@
   <div id="coop-voice-bar">
     <button id="hud-mic-btn" type="button">[X] MIC OFF</button>
     <button id="hud-chat-btn" type="button">[T] CHAT</button>
+    <span id="hud-ping-badge" class="hud-ping-badge" title="Connection latency to host"><i class="ping-dot"></i><span id="hud-ping-val">-- ms</span></span>
   </div>
   <div id="coop-chat">
     <div id="hud-chat-log" class="hud-chat-log"></div>

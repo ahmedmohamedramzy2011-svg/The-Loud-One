@@ -201,6 +201,78 @@
         }
       });
     }
+    updatePingUI();
+  }
+  function pingQuality(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return 'wait';
+    if (ms < 80) return 'good';
+    if (ms <= 160) return 'mid';
+    return 'poor';
+  }
+  function updatePingUI() {
+    const info = (Net && Net.getPingInfo) ? Net.getPingInfo() : { isHost: false, pingMs: null, maxClientPing: null, quality: 'none' };
+    const inCoop = !!(Net && Net.isCoop && Net.isCoop());
+    let text = '-- ms';
+    let cls = 'wait';
+    let title = 'Connection latency to host';
+    if (!inCoop) {
+      text = '-- ms';
+      cls = 'wait';
+    } else if (info.isHost) {
+      if (typeof info.maxClientPing === 'number') {
+        text = `HOST · ${info.maxClientPing} ms`;
+        cls = pingQuality(info.maxClientPing);
+        title = `Hosting room (highest squad ping: ${info.maxClientPing} ms)`;
+      } else {
+        text = 'HOST';
+        cls = 'host';
+        title = 'You are hosting this room';
+      }
+    } else if (typeof info.pingMs === 'number') {
+      text = `${info.pingMs} ms`;
+      cls = pingQuality(info.pingMs);
+      title = `Round-trip latency to host: ${info.pingMs} ms`;
+    } else {
+      text = '... ms';
+      cls = 'wait';
+      title = 'Measuring latency to host...';
+    }
+
+    const lPill = $('coop-lobby-ping');
+    const lVal = $('coop-lobby-ping-val');
+    if (lPill) { lPill.className = 'coop-ping-pill ' + cls; lPill.title = title; }
+    if (lVal) lVal.textContent = text;
+
+    const hBadge = $('hud-ping-badge');
+    const hVal = $('hud-ping-val');
+    if (hBadge) { hBadge.className = 'hud-ping-badge ' + cls; hBadge.title = title; }
+    if (hVal) hVal.textContent = text;
+
+    const rosterEl = $('coop-roster');
+    if (rosterEl && Net && Array.isArray(Net.players)) {
+      rosterEl.querySelectorAll('.coop-slot[data-pid]').forEach(slot => {
+        const pid = slot.getAttribute('data-pid');
+        const tag = slot.querySelector('.coop-ping-tag');
+        if (!tag || !pid) return;
+        const p = Net.getPlayer ? Net.getPlayer(pid) : null;
+        if (!p || p.id === 'host') {
+          tag.style.display = 'none';
+          return;
+        }
+        if (typeof p.ping === 'number' && isFinite(p.ping)) {
+          const q = pingQuality(p.ping);
+          tag.style.display = '';
+          tag.className = 'coop-ping-tag ' + q;
+          tag.textContent = `${p.ping} ms`;
+          tag.title = `Latency to host: ${p.ping} ms`;
+        } else {
+          tag.style.display = '';
+          tag.className = 'coop-ping-tag';
+          tag.textContent = '-- ms';
+          tag.title = 'Measuring latency...';
+        }
+      });
+    }
   }
   const MIC_ON_SVG = '<svg class="coop-mic-ico" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/></svg>';
   const MIC_OFF_SVG = '<svg class="coop-mic-ico" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/><line x1="3" y1="3" x2="21" y2="21" stroke="#0b0b0e" stroke-width="4.2" stroke-linecap="round"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
@@ -2743,16 +2815,18 @@
     upv.set(0, 1, 0).applyQuaternion(camera.quaternion);
     A.setListener(camera.position, fwd, upv);
     if (Net && Net.isCoop() && Net.updateVoiceProximity) {
-      const inWorld = (state === 'play' || state === 'spectate' || state === 'dying');
+      const inCutscene = (state === 'opening' || state === 'ending' || state === 'credits' || state === 'loading' || state === 'dying' || state === 'dead' || !!cutscene);
+      const inWorld = !inCutscene && (state === 'play' || state === 'spectate');
       Net.updateVoiceProximity(
-        inWorld ? camera.position : null,
+        camera ? camera.position : null,
         id => {
           const rp = remotePlayers.get(id);
           if (!rp) return null;
           _voiceRemotePos.copy(rp.pos);
           return _voiceRemotePos;
         },
-        inWorld
+        inWorld,
+        inCutscene
       );
       voiceUiAccum += dt;
       if (voiceUiAccum >= 0.12) {
@@ -2942,6 +3016,7 @@
 
       LO.Net.onChat = msg => appendChatMessage(msg);
       LO.Net.onVoiceChange = () => updateVoiceUI();
+      LO.Net.onPingUpdate = () => updatePingUI();
 
       const lobbyMicBtn = $('lobby-mic-btn');
       if (lobbyMicBtn) {
@@ -3013,9 +3088,13 @@
               const role = p.id === 'host' ? 'HOST' : (p.id === LO.Net.localId ? 'YOU' : 'READY');
               const vs = LO.Net.getVoiceState ? LO.Net.getVoiceState(p.id) : { hasMic: !!p.hasMic, muted: !!p.muted, speaking: false };
               const m = rosterMicMeta(vs);
+              const pingTag = p.id === 'host'
+                ? '<span class="coop-ping-tag" style="display:none"></span>'
+                : `<span class="coop-ping-tag ${typeof p.ping === 'number' ? pingQuality(p.ping) : ''}">${typeof p.ping === 'number' ? Math.round(p.ping) + ' ms' : '-- ms'}</span>`;
               html += `<div class="coop-slot" data-pid="${escHtml(p.id)}">
                 <span class="coop-slot-left"><i class="coop-swatch" style="background:${escHtml(p.color || '#4a78a8')}"></i><span>${escHtml(p.name)}</span></span>
                 <span class="coop-slot-right">
+                  ${pingTag}
                   <span class="coop-mic-pill ${m.cls}" data-vstate="${m.state}" title="${m.title}">${m.html}</span>
                   <span class="coop-badge ${p.id === 'host' ? 'host' : ''}">${role}</span>
                 </span>
@@ -3346,7 +3425,7 @@ function boot() {
       }
     });
     setInterval(() => {
-      if (document.hidden && Net && Net.isCoop() && (state === 'play' || state === 'spectate')) {
+      if (document.hidden && Net && Net.isCoop() && (state === 'play' || state === 'spectate' || state === 'opening' || state === 'ending' || state === 'dying')) {
         loop();
       }
     }, 50);

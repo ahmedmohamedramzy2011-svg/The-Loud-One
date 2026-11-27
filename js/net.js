@@ -57,12 +57,16 @@ window.LO = window.LO || {};
     micMuted: false,
     voiceError: '',
     localStream: null,
-    voiceCalls: new Map(), // peerId -> { outgoing, incoming, stream, audioEl, source, gain, panner, analyser, buf, volume, distance, speaking, holdUntil }
+    voiceCalls: new Map(), // peerId -> { outgoing, incoming, stream, audioEl, source, gain, flatGain, panner, analyser, buf, volume, distance, speaking, holdUntil }
     localAnalyser: null,
     localAnalyserBuf: null,
     localSpeaking: false,
     localHoldUntil: 0,
     _voiceMasterGain: null,
+
+    // Latency tracking state
+    pingMs: null,
+    _pingTimer: null,
 
     // Callbacks wired by main.js
     onLobbyUpdate: null,
@@ -73,6 +77,7 @@ window.LO = window.LO || {};
     onDisconnect: null,
     onChat: null,
     onVoiceChange: null,
+    onPingUpdate: null,
 
     sanitizeName,
     sanitizeChat,
@@ -116,6 +121,10 @@ window.LO = window.LO || {};
       if (this.onVoiceChange) this.onVoiceChange();
     },
 
+    _emitPing() {
+      if (this.onPingUpdate) this.onPingUpdate(this.pingMs, this.players);
+    },
+
     _nextFreeSlot() {
       for (let s = 1; s < MAX_PLAYERS; s++) {
         if (!this.players.some(p => p.slot === s)) return s;
@@ -138,6 +147,7 @@ window.LO = window.LO || {};
         ready: false,
         hasMic: false,
         muted: false,
+        ping: id === 'host' ? 0 : null,
       };
     },
 
@@ -223,6 +233,7 @@ window.LO = window.LO || {};
           audioEl: null,
           source: null,
           gain: null,
+          flatGain: null,
           panner: null,
           analyser: null,
           buf: null,
@@ -241,6 +252,7 @@ window.LO = window.LO || {};
       if (entry.source) { try { entry.source.disconnect(); } catch (e) {} entry.source = null; }
       if (entry.analyser) { try { entry.analyser.disconnect(); } catch (e) {} entry.analyser = null; }
       if (entry.gain) { try { entry.gain.disconnect(); } catch (e) {} entry.gain = null; }
+      if (entry.flatGain) { try { entry.flatGain.disconnect(); } catch (e) {} entry.flatGain = null; }
       if (entry.panner) { try { entry.panner.disconnect(); } catch (e) {} entry.panner = null; }
       if (entry.audioEl) {
         try { entry.audioEl.pause(); } catch (e) {}
@@ -261,6 +273,55 @@ window.LO = window.LO || {};
       if (entry.incoming) { try { entry.incoming.close(); } catch (e) {} entry.incoming = null; }
       this._cleanupVoiceAudio(entry);
       this.voiceCalls.delete(id);
+    },
+
+    _wireRemoteWebAudio(entry) {
+      if (!entry || !entry.stream || entry.source) return false;
+      const ctx = this._ensureAudioCtx();
+      if (!ctx || !ctx.createMediaStreamSource) return false;
+      try {
+        const dest = this._voiceMasterGain || ctx.destination;
+        const source = ctx.createMediaStreamSource(entry.stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 64;
+        analyser.smoothingTimeConstant = 0.45;
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        const flatGain = ctx.createGain();
+        flatGain.gain.value = this.inGame ? 0 : 1;
+
+        source.connect(analyser);
+        source.connect(flatGain);
+        flatGain.connect(dest);
+
+        if (ctx.createPanner) {
+          const panner = ctx.createPanner();
+          panner.panningModel = 'HRTF';
+          panner.distanceModel = 'linear';
+          panner.refDistance = 1;
+          panner.maxDistance = 1000;
+          panner.rolloffFactor = 0;
+          source.connect(gain);
+          gain.connect(panner);
+          panner.connect(dest);
+          entry.panner = panner;
+        } else {
+          source.connect(gain);
+          gain.connect(dest);
+        }
+        entry.source = source;
+        entry.analyser = analyser;
+        entry.buf = new Uint8Array(analyser.fftSize);
+        entry.gain = gain;
+        entry.flatGain = flatGain;
+        if (entry.audioEl) {
+          entry.audioEl.muted = true;
+          entry.audioEl.volume = 0;
+        }
+        return true;
+      } catch (err) {
+        return false;
+      }
     },
 
     _attachRemoteVoiceStream(fromId, remoteStream) {
@@ -291,40 +352,7 @@ window.LO = window.LO || {};
         entry.audioEl = el;
       }
 
-      const ctx = this._ensureAudioCtx();
-      if (ctx && ctx.createMediaStreamSource) {
-        try {
-          const source = ctx.createMediaStreamSource(remoteStream);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 64;
-          analyser.smoothingTimeConstant = 0.45;
-          const gain = ctx.createGain();
-          gain.gain.value = this.inGame ? 0 : 1;
-
-          source.connect(analyser);
-          if (ctx.createPanner) {
-            const panner = ctx.createPanner();
-            panner.panningModel = 'HRTF';
-            panner.distanceModel = 'linear';
-            panner.refDistance = 1;
-            panner.maxDistance = 1000;
-            panner.rolloffFactor = 0;
-            source.connect(gain);
-            gain.connect(panner);
-            panner.connect(this._voiceMasterGain || ctx.destination);
-            entry.panner = panner;
-          } else {
-            source.connect(gain);
-            gain.connect(this._voiceMasterGain || ctx.destination);
-          }
-          entry.source = source;
-          entry.analyser = analyser;
-          entry.buf = new Uint8Array(analyser.fftSize);
-          entry.gain = gain;
-        } catch (err) {
-          if (el) el.muted = false;
-        }
-      } else if (el) {
+      if (!this._wireRemoteWebAudio(entry) && el) {
         el.muted = false;
       }
       this._emitVoiceChange();
@@ -542,12 +570,15 @@ window.LO = window.LO || {};
       return rms > 0.022;
     },
 
-    updateVoiceProximity(listenerPos, getRemotePos, inWorld) {
+    updateVoiceProximity(listenerPos, getRemotePos, inWorld, inCutscene) {
       if (!this.isCoop()) return;
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) * 0.001;
       const s = LO.settings || {};
       const userVol = Math.max(0, Math.min(1, (s.master !== undefined ? s.master : 0.8) * (s.voice !== undefined ? s.voice : 1.0)));
       const ctx = LO.audio && LO.audio.ctx;
+      if (ctx && ctx.state === 'suspended' && ctx.resume) {
+        try { ctx.resume(); } catch (e) {}
+      }
       const ctxNow = ctx ? ctx.currentTime : 0;
 
       if (this._voiceMasterGain && ctx) {
@@ -565,20 +596,32 @@ window.LO = window.LO || {};
 
       const me = this.getPlayer(this.localId);
       const localAlive = !me || me.alive !== false;
+      const spatialActive = !!(inWorld && !inCutscene && listenerPos && getRemotePos);
 
       this.voiceCalls.forEach((entry, id) => {
+        if (entry.stream && !entry.source && ctx) {
+          this._wireRemoteWebAudio(entry);
+        }
+        if (entry.audioEl && entry.audioEl.paused && entry.audioEl.srcObject) {
+          try {
+            const pr = entry.audioEl.play && entry.audioEl.play();
+            if (pr && pr.catch) pr.catch(() => {});
+          } catch (e) {}
+        }
+
         const p = this.getPlayer(id);
         if (!p || p.left) {
           entry.volume = 0;
           entry.speaking = false;
           if (entry.gain && ctx) entry.gain.gain.setTargetAtTime(0, ctxNow, 0.04);
+          if (entry.flatGain && ctx) entry.flatGain.gain.setTargetAtTime(0, ctxNow, 0.04);
           if (entry.audioEl && !entry.audioEl.muted) entry.audioEl.volume = 0;
           return;
         }
 
         let att = 1;
         let dist = 0;
-        if (inWorld && listenerPos && getRemotePos) {
+        if (spatialActive) {
           const rpos = getRemotePos(id);
           if (!rpos) {
             att = 0;
@@ -624,8 +667,15 @@ window.LO = window.LO || {};
         entry.distance = dist;
         entry.volume = att;
 
-        if (entry.gain && ctx) {
-          entry.gain.gain.setTargetAtTime(att, ctxNow, 0.05);
+        if (ctx) {
+          if (entry.flatGain) {
+            // In cutscenes, lobby, credits, and death screens, route through flatGain so
+            // camera cuts and HRTF distance never pan or quiet teammates.
+            entry.flatGain.gain.setTargetAtTime(spatialActive ? 0 : att, ctxNow, 0.04);
+            if (entry.gain) entry.gain.gain.setTargetAtTime(spatialActive ? att : 0, ctxNow, 0.04);
+          } else if (entry.gain) {
+            entry.gain.gain.setTargetAtTime(att, ctxNow, 0.05);
+          }
         }
         if (entry.audioEl && !entry.audioEl.muted) {
           entry.audioEl.volume = Math.max(0, Math.min(1, att * userVol));
@@ -640,6 +690,45 @@ window.LO = window.LO || {};
           entry.speaking = false;
         }
       });
+    },
+
+    getPingInfo() {
+      if (!this.isCoop()) return { isHost: false, pingMs: null, maxClientPing: null, quality: 'none' };
+      const isHost = this.mode === 'host';
+      if (isHost) {
+        const pings = this.players
+          .filter(p => p && p.id !== 'host' && !p.left && typeof p.ping === 'number' && isFinite(p.ping))
+          .map(p => p.ping);
+        const maxClientPing = pings.length ? Math.max.apply(null, pings) : null;
+        const quality = maxClientPing === null ? 'host' : (maxClientPing < 80 ? 'good' : maxClientPing <= 160 ? 'mid' : 'poor');
+        return { isHost: true, pingMs: 0, maxClientPing, quality };
+      }
+      const ms = (typeof this.pingMs === 'number' && isFinite(this.pingMs)) ? Math.round(this.pingMs) : null;
+      const quality = ms === null ? 'wait' : (ms < 80 ? 'good' : ms <= 160 ? 'mid' : 'poor');
+      return { isHost: false, pingMs: ms, maxClientPing: null, quality };
+    },
+
+    _broadcastPings() {
+      if (this.mode !== 'host') return;
+      const pings = {};
+      this.players.forEach(p => {
+        if (p && !p.left && typeof p.ping === 'number' && isFinite(p.ping)) pings[p.id] = p.ping;
+      });
+      this.broadcast({ type: 'ping_sync', pings });
+    },
+
+    _startPingLoop() {
+      if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
+      if (this.mode !== 'client') return;
+      const sendPing = () => {
+        if (this.mode !== 'client' || !this.hostConn || !this.hostConn.open) return;
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        try {
+          this.hostConn.send({ type: 'net_ping', t: now, r: this.pingMs });
+        } catch (e) {}
+      };
+      sendPing();
+      this._pingTimer = setInterval(sendPing, 2000);
     },
 
     // ============================================================
@@ -826,6 +915,19 @@ window.LO = window.LO || {};
           this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion }, peerId);
           this._emitLobby();
           if (this.onPlayerJoin) this.onPlayerJoin(p);
+          return;
+        }
+
+        if (msg.type === 'net_ping') {
+          this.sendTo(peerId, { type: 'net_pong', t: msg.t });
+          if (typeof msg.r === 'number' && isFinite(msg.r)) {
+            const p = this.getPlayer(peerId);
+            if (p) {
+              p.ping = Math.max(0, Math.round(msg.r));
+              this._broadcastPings();
+              this._emitPing();
+            }
+          }
           return;
         }
 
@@ -1022,11 +1124,30 @@ window.LO = window.LO || {};
                 this.players = Array.isArray(msg.players) ? msg.players : [];
                 this._emitStatus(`Connected to room ${this.roomCode}`);
                 this._emitLobby();
+                this._startPingLoop();
                 if (this.voiceEnabled) this._broadcastVoiceState();
                 if (!settled) {
                   settled = true;
                   resolve(this.roomCode);
                 }
+                return;
+              }
+              if (msg.type === 'net_pong') {
+                const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                const raw = Math.max(1, Math.round(now - (msg.t || now)));
+                this.pingMs = this.pingMs === null ? raw : Math.round(this.pingMs * 0.45 + raw * 0.55);
+                const me = this.getPlayer(this.localId);
+                if (me) me.ping = this.pingMs;
+                this._emitPing();
+                return;
+              }
+              if (msg.type === 'ping_sync' && msg.pings && typeof msg.pings === 'object') {
+                this.players.forEach(p => {
+                  if (p && p.id !== this.localId && typeof msg.pings[p.id] === 'number') {
+                    p.ping = msg.pings[p.id];
+                  }
+                });
+                this._emitPing();
                 return;
               }
               if (msg.type === 'lobby_sync') {
@@ -1136,6 +1257,8 @@ window.LO = window.LO || {};
 
     leave() {
       this._connectSeq++;
+      if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
+      this.pingMs = null;
       this._notifyLeaving();
       this.disableVoice();
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
@@ -1159,6 +1282,7 @@ window.LO = window.LO || {};
       this.inGame = false;
       this.players = [];
       this.remoteStates.clear();
+      this._emitPing();
     },
   };
 
