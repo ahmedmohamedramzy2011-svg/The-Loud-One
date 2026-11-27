@@ -67,6 +67,7 @@ window.LO = window.LO || {};
     // Latency & Session Registry tracking state
     pingMs: null,
     _pingTimer: null,
+    _hostWatchdogTimer: null,
     startedAt: 0,
     _hostToken: '',
     _heartbeatTimer: null,
@@ -85,6 +86,7 @@ window.LO = window.LO || {};
     onChat: null,
     onVoiceChange: null,
     onPingUpdate: null,
+    onDataTick: null,
     getSessionSnapshot: null,
     getRunSyncState: null,
 
@@ -106,8 +108,14 @@ window.LO = window.LO || {};
     getPlayer(id) {
       return this.players.find(p => p.id === id) || null;
     },
+    getConnectedPlayers() {
+      return this.players.filter(p => p && !p.left && !p.hiddenAdmin && (p.id === this.localId || this.mode !== 'host' || this.conns.has(p.id)));
+    },
+    getLivingConnectedPlayers() {
+      return this.getConnectedPlayers().filter(p => p.alive !== false);
+    },
     getAlivePlayers() {
-      return this.players.filter(p => p.alive && !p.left);
+      return this.getLivingConnectedPlayers();
     },
 
     _peerSignalId(id) {
@@ -158,6 +166,7 @@ window.LO = window.LO || {};
         hasMic: false,
         muted: false,
         ping: id === 'host' ? 0 : null,
+        lastSeen: Date.now(),
         hiddenAdmin: !!o.hiddenAdmin,
       };
     },
@@ -608,7 +617,8 @@ window.LO = window.LO || {};
 
       const me = this.getPlayer(this.localId);
       const localAlive = !me || me.alive !== false;
-      const spatialActive = !!(inWorld && !inCutscene && listenerPos && getRemotePos);
+      const noAtten = !!(s.disableVoiceAttenuation);
+      const spatialActive = !!(inWorld && !inCutscene && !noAtten && listenerPos && getRemotePos);
 
       this.voiceCalls.forEach((entry, id) => {
         if (entry.stream && !entry.source && ctx) {
@@ -665,13 +675,18 @@ window.LO = window.LO || {};
               }
             }
           }
-        } else if (entry.panner && ctx && listenerPos) {
-          if (entry.panner.positionX) {
-            entry.panner.positionX.setValueAtTime(listenerPos.x, ctxNow);
-            entry.panner.positionY.setValueAtTime(listenerPos.y, ctxNow);
-            entry.panner.positionZ.setValueAtTime(listenerPos.z, ctxNow);
-          } else if (entry.panner.setPosition) {
-            entry.panner.setPosition(listenerPos.x, listenerPos.y, listenerPos.z);
+        } else {
+          if (inWorld && !inCutscene && p.alive === false) {
+            att = localAlive ? 0 : 0.45;
+          }
+          if (entry.panner && ctx && listenerPos) {
+            if (entry.panner.positionX) {
+              entry.panner.positionX.setValueAtTime(listenerPos.x, ctxNow);
+              entry.panner.positionY.setValueAtTime(listenerPos.y, ctxNow);
+              entry.panner.positionZ.setValueAtTime(listenerPos.z, ctxNow);
+            } else if (entry.panner.setPosition) {
+              entry.panner.setPosition(listenerPos.x, listenerPos.y, listenerPos.z);
+            }
           }
         }
 
@@ -681,8 +696,8 @@ window.LO = window.LO || {};
 
         if (ctx) {
           if (entry.flatGain) {
-            // In cutscenes, lobby, credits, and death screens, route through flatGain so
-            // camera cuts and HRTF distance never pan or quiet teammates.
+            // In cutscenes, lobby, credits, death screens, or when 3D attenuation is disabled,
+            // route through flatGain so voice volume remains constant regardless of distance.
             entry.flatGain.gain.setTargetAtTime(spatialActive ? 0 : att, ctxNow, 0.04);
             if (entry.gain) entry.gain.gain.setTargetAtTime(spatialActive ? att : 0, ctxNow, 0.04);
           } else if (entry.gain) {
@@ -736,11 +751,40 @@ window.LO = window.LO || {};
         if (this.mode !== 'client' || !this.hostConn || !this.hostConn.open) return;
         const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         try {
-          this.hostConn.send({ type: 'net_ping', t: now, r: this.pingMs });
+          this.hostConn.send({ type: 'PING', t: now, r: this.pingMs });
         } catch (e) {}
       };
       sendPing();
-      this._pingTimer = setInterval(sendPing, 2000);
+      this._pingTimer = setInterval(sendPing, 1000);
+    },
+
+    _startHostWatchdog() {
+      this._stopHostWatchdog();
+      if (this.mode !== 'host') return;
+      this._hostWatchdogTimer = setInterval(() => {
+        if (this.mode !== 'host' || this._closing) return;
+        const now = Date.now();
+        Array.from(this.conns.entries()).forEach(([peerId, conn]) => {
+          const lp = this.getPlayer(peerId);
+          const last = Math.max(
+            (conn && typeof conn._lastSeen === 'number') ? conn._lastSeen : 0,
+            (lp && typeof lp.lastSeen === 'number') ? lp.lastSeen : 0
+          );
+          if (last > 0 && (now - last) > 3000) {
+            try { if (conn && conn.close) conn.close(); } catch (e) {}
+            if (conn && typeof conn._dropPeer === 'function') {
+              conn._dropPeer();
+            }
+          }
+        });
+      }, 500);
+    },
+
+    _stopHostWatchdog() {
+      if (this._hostWatchdogTimer) {
+        clearInterval(this._hostWatchdogTimer);
+        this._hostWatchdogTimer = null;
+      }
     },
 
     // ============================================================
@@ -926,6 +970,7 @@ window.LO = window.LO || {};
             this._emitStatus(`Room ready: ${code}`);
             this._emitLobby();
             this._startRoomHeartbeat();
+            this._startHostWatchdog();
             resolve(code);
           });
 
@@ -975,6 +1020,7 @@ window.LO = window.LO || {};
       const peerId = conn.peer;
       let accepted = false;
       let restartedIce = false;
+      conn._lastSeen = Date.now();
 
       if (conn && conn.on) {
         conn.on('iceStateChanged', st => {
@@ -998,12 +1044,51 @@ window.LO = window.LO || {};
         setTimeout(() => { try { conn.close(); } catch (e) {} }, 150);
       };
 
+      const drop = () => {
+        if (!accepted) return;
+        accepted = false;
+        this.conns.delete(peerId);
+        this.remoteStates.delete(peerId);
+        this._disposeVoiceEntry(peerId);
+        const idx = this.players.findIndex(p => p.id === peerId);
+        if (idx >= 0) {
+          const removed = this.players[idx];
+          if (removed.hiddenAdmin) {
+            this.players.splice(idx, 1);
+            this._emitVoiceChange();
+            return;
+          }
+          if (this.inGame) {
+            removed.left = true;
+            removed.alive = false;
+            removed.hidden = false;
+            removed.hideSpotIdx = -1;
+            this._emitLobby();
+            if (this.onMessage) this.onMessage(peerId, { type: 'player_left', id: peerId });
+          } else {
+            this.players.splice(idx, 1);
+            this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
+            this._emitLobby();
+          }
+          if (this.onPlayerLeave) this.onPlayerLeave(removed);
+          this.pushRoomHeartbeat();
+        }
+        this._emitVoiceChange();
+      };
+      conn._dropPeer = drop;
+
       conn.on('data', msg => {
         if (!msg || typeof msg !== 'object') return;
         if (msg.type === 'ADMIN_SHUTDOWN') {
           this._sendRoomHeartbeat(true);
           return;
         }
+        const now = Date.now();
+        conn._lastSeen = now;
+        const seenPlayer = this.getPlayer(peerId);
+        if (seenPlayer) seenPlayer.lastSeen = now;
+
+        if (this.onDataTick && this.onDataTick(msg, peerId) === true) return;
         if (!accepted) {
           if (msg.type !== 'hello') return;
           const isAdminJoin = !!msg.adminJoin;
@@ -1019,8 +1104,10 @@ window.LO = window.LO || {};
           }
           if (slot < 0) slot = MAX_PLAYERS - 1;
           accepted = true;
+          conn._lastSeen = now;
           this.conns.set(peerId, conn);
           const p = this._makePlayer(peerId, slot, msg.name, { hiddenAdmin: isAdminHidden });
+          p.lastSeen = now;
           this.players.push(p);
           try {
             conn.send({
@@ -1044,7 +1131,13 @@ window.LO = window.LO || {};
           return;
         }
 
-        if (msg.type === 'net_ping') {
+        if (msg.type === 'player_left' || msg.type === 'PLAYER_LEFT') {
+          try { conn.close(); } catch (e) {}
+          drop();
+          return;
+        }
+
+        if (msg.type === 'PING' || msg.type === 'net_ping') {
           this.sendTo(peerId, { type: 'net_pong', t: msg.t });
           if (typeof msg.r === 'number' && isFinite(msg.r)) {
             const p = this.getPlayer(peerId);
@@ -1114,38 +1207,6 @@ window.LO = window.LO || {};
 
         if (this.onMessage) this.onMessage(peerId, msg);
       });
-
-      const drop = () => {
-        if (!accepted) return;
-        accepted = false;
-        this.conns.delete(peerId);
-        this.remoteStates.delete(peerId);
-        this._disposeVoiceEntry(peerId);
-        const idx = this.players.findIndex(p => p.id === peerId);
-        if (idx >= 0) {
-          const removed = this.players[idx];
-          if (removed.hiddenAdmin) {
-            this.players.splice(idx, 1);
-            this._emitVoiceChange();
-            return;
-          }
-          if (this.inGame) {
-            removed.left = true;
-            removed.alive = false;
-            removed.hidden = false;
-            removed.hideSpotIdx = -1;
-            this._emitLobby();
-            if (this.onMessage) this.onMessage(peerId, { type: 'player_left', id: peerId });
-          } else {
-            this.players.splice(idx, 1);
-            this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
-            this._emitLobby();
-          }
-          if (this.onPlayerLeave) this.onPlayerLeave(removed);
-          this.pushRoomHeartbeat();
-        }
-        this._emitVoiceChange();
-      };
 
       conn.on('close', drop);
       conn.on('error', drop);
@@ -1281,6 +1342,7 @@ window.LO = window.LO || {};
                 else if (this.onDisconnect) this.onDisconnect(reason);
                 return;
               }
+              if (this.onDataTick && this.onDataTick(msg, 'host') === true) return;
               if (msg.type === 'welcome') {
                 clearTimeout(timer);
                 this.localId = msg.localId;
@@ -1438,6 +1500,7 @@ window.LO = window.LO || {};
     _teardownTransport() {
       this._connectSeq++;
       this._stopRoomHeartbeat();
+      this._stopHostWatchdog();
       if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
       this.pingMs = null;
       this.disableVoice();
@@ -1479,6 +1542,8 @@ window.LO = window.LO || {};
       const reasonForClients = clientReason || 'Host closed the room.';
       const reasonForSelf = selfReason || reasonForClients;
       this._stopRoomHeartbeat();
+      this._stopHostWatchdog();
+      this.disableVoice();
       this._deleteRoomRegistry(false, false);
       this.broadcast({ type: 'ROOM_CLOSED', reason: reasonForClients });
       setTimeout(() => {
@@ -1497,6 +1562,8 @@ window.LO = window.LO || {};
       if (this._closing) return;
       this._closing = true;
       this._stopRoomHeartbeat();
+      this._stopHostWatchdog();
+      this.disableVoice();
       this._deleteRoomRegistry(false, true);
       this.broadcast({ type: 'ADMIN_SHUTDOWN', reason: msg });
       setTimeout(() => {

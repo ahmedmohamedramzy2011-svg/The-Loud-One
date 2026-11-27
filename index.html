@@ -409,6 +409,20 @@
     <div class="spec-title" id="spec-target">SPECTATING</div>
     <div class="spec-hint">[A / D] or [← / →] Switch Teammate &nbsp;·&nbsp; [V] 1st/3rd Person &nbsp;·&nbsp; [ESC] Menu</div>
   </div>
+  <div id="replay-bar">
+    <div class="replay-head">
+      <span class="replay-badge">GHOST REPLAY</span>
+      <span id="replay-meta" class="replay-meta">RECORDED RUN</span>
+      <span id="replay-time" class="replay-time">00:00 / 00:00</span>
+    </div>
+    <input type="range" id="replay-scrub" min="0" max="1" step="0.01" value="0" aria-label="Replay timeline">
+    <div class="replay-ctrls">
+      <button type="button" id="replay-play-btn" class="replay-btn">[SPACE] PAUSE</button>
+      <button type="button" id="replay-speed-btn" class="replay-btn">[F] 1X</button>
+      <button type="button" id="replay-cam-btn" class="replay-btn">[V] 3RD PERSON</button>
+      <button type="button" id="replay-exit-btn" class="replay-btn exit">[ESC] BACK</button>
+    </div>
+  </div>
   <!-- Touch controls (shown on phones / tablets) -->
   <div id="touch">
     <div id="t-look"></div>
@@ -543,6 +557,7 @@
     </div>
     <nav class="menu">
       <button data-action="retry">TRY AGAIN</button>
+      <button type="button" id="death-replay-btn" data-action="replay" style="display:none">WATCH REPLAY</button>
       <button data-action="quit">QUIT TO TITLE</button>
     </nav>
   </div>

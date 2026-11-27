@@ -50,7 +50,7 @@
   // 60-second AFK auto-kick & Match ID watermark state
   const AFK_WARN_SEC = 50;
   const AFK_KICK_SEC = 60;
-  let afkIdleSec = 0;
+  let afkLastActivityAt = Date.now();
   let afkBannerShown = false;
   let afkLastCountdown = -1;
   let afkKicking = false;
@@ -61,6 +61,29 @@
   let _afkLastPitch = 0;
   let _afkTrackInit = false;
   let _matchIdCopyTimer = null;
+
+  // Match replay logging & Ghost playback state
+  const REPLAY_KEY = 'theLoudOne.replay.v1';
+  const REPLAY_SAMPLE_SEC = 0.12;
+  const REPLAY_SAVE_SEC = 2.0;
+  const REPLAY_MAX_FRAMES = 4500;
+  let replayFrames = [];
+  let replaySampleAccum = 0;
+  let replaySaveAccum = 0;
+  let replayCause = '';
+  const _replayViewDir = new THREE.Vector3();
+  const _replayLookPt = new THREE.Vector3();
+  const _replayCamTarget = new THREE.Vector3();
+  let replayData = null;
+  let replayPlaying = false;
+  let replayTime = 0;
+  let replaySpeed = 1;
+  let replayFirstPerson = false;
+  let replayGhost = null;
+  let replayPathLine = null;
+  let replaySightLine = null;
+  let replayDeathBeacon = null;
+  let replayEnemyVis = null;
 
   function setAfkBanner(showBanner, secsLeft) {
     const el = $('afk-warning');
@@ -83,9 +106,483 @@
     }
   }
 
+  function isAfkPausedState() {
+    return state === 'dying' || state === 'dead' || state === 'opening' ||
+      state === 'ending' || state === 'credits' || state === 'loading' || state === 'replay';
+  }
+
   function resetAfkActivity() {
-    afkIdleSec = 0;
+    afkLastActivityAt = Date.now();
     if (afkBannerShown) setAfkBanner(false);
+  }
+
+  function triggerAfkDisconnect() {
+    if (afkKicking) return;
+    afkKicking = true;
+    resetAfkActivity();
+    const kickReason = 'Disconnected due to inactivity (1 min AFK).';
+    if (Net && Net.isHost && Net.isHost() && Net.closeRoom) {
+      Net.closeRoom(kickReason, kickReason);
+    } else {
+      if (Net && Net.leave) Net.leave();
+      handleCoopForceExit(kickReason);
+    }
+  }
+
+  function checkAfkTimeout() {
+    if (!Net || !Net.isCoop || !Net.isCoop()) {
+      resetAfkActivity();
+      _afkTrackInit = false;
+      afkKicking = false;
+      return false;
+    }
+    if (afkKicking) return true;
+    // Pause AFK timer in Death Screen, Replay, and non-interactive cutscenes/loading
+    if (isAfkPausedState()) {
+      afkLastActivityAt = Date.now();
+      setAfkBanner(false);
+      return false;
+    }
+    const idleSec = Math.max(0, (Date.now() - afkLastActivityAt) / 1000);
+    if (idleSec >= AFK_KICK_SEC) {
+      triggerAfkDisconnect();
+      return true;
+    }
+    if (idleSec >= AFK_WARN_SEC) {
+      setAfkBanner(true, AFK_KICK_SEC - idleSec);
+    } else {
+      setAfkBanner(false);
+    }
+    return false;
+  }
+
+  function onAfkUserInput() {
+    if (checkAfkTimeout()) return;
+    resetAfkActivity();
+  }
+
+  function resetReplayRecording() {
+    replayFrames = [];
+    replaySampleAccum = 0;
+    replaySaveAccum = 0;
+    replayCause = '';
+  }
+
+  function recordReplayFrame(force) {
+    if (!player || !camera) return;
+    camera.getWorldDirection(_replayViewDir);
+    if (!isFinite(player.pos.x) || !isFinite(player.pos.y) || !isFinite(player.pos.z)) return;
+    if (!isFinite(_replayViewDir.x) || !isFinite(_replayViewDir.y) || !isFinite(_replayViewDir.z)) return;
+    const t = +gameTime.toFixed(3);
+    const frame = {
+      t,
+      x: +player.pos.x.toFixed(3),
+      y: +player.pos.y.toFixed(3),
+      z: +player.pos.z.toFixed(3),
+      vx: +_replayViewDir.x.toFixed(4),
+      vy: +_replayViewDir.y.toFixed(4),
+      vz: +_replayViewDir.z.toFixed(4),
+      c: +(player.crouch || 0).toFixed(2),
+      f: player.flashOn ? 1 : 0,
+    };
+    const last = replayFrames.length ? replayFrames[replayFrames.length - 1] : null;
+    if (last && Math.abs(last.t - t) < 0.02) {
+      if (force) replayFrames[replayFrames.length - 1] = frame;
+      return;
+    }
+    if (!force && last) {
+      const moved = Math.hypot(frame.x - last.x, frame.y - last.y, frame.z - last.z);
+      const turned = Math.abs(frame.vx - last.vx) + Math.abs(frame.vy - last.vy) + Math.abs(frame.vz - last.vz);
+      if (moved < 0.01 && turned < 0.005 && frame.c === last.c && frame.f === last.f && (t - last.t) < 0.6) {
+        return;
+      }
+    }
+    if (replayFrames.length >= REPLAY_MAX_FRAMES) replayFrames.shift();
+    replayFrames.push(frame);
+  }
+
+  function saveReplayToStorage(causeOverride) {
+    if (causeOverride) replayCause = causeOverride;
+    if (!replayFrames || replayFrames.length < 2) return;
+    const duration = replayFrames[replayFrames.length - 1].t || gameTime;
+    const payload = {
+      version: 1,
+      seed: currentRunSeed,
+      evSeed: currentEvSeed,
+      gameVersion: S.gameVersion || '2.8.3',
+      cause: replayCause || dieCause || 'siren',
+      callsign: (Net && Net.localName) || loadSavedCallsign() || 'Investigator',
+      duration: +Number(duration || 0).toFixed(2),
+      savedAt: Date.now(),
+      frames: replayFrames,
+    };
+    try {
+      localStorage.setItem(REPLAY_KEY, JSON.stringify(payload));
+    } catch (e) {
+      try {
+        payload.frames = replayFrames.slice(-1800);
+        localStorage.setItem(REPLAY_KEY, JSON.stringify(payload));
+      } catch (e2) { /* storage unavailable or full */ }
+    }
+  }
+
+  function loadReplayFromStorage() {
+    try {
+      const raw = localStorage.getItem(REPLAY_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.frames)) return null;
+      const frames = [];
+      let prevT = -1;
+      for (let i = 0; i < parsed.frames.length && frames.length < REPLAY_MAX_FRAMES; i++) {
+        const f = parsed.frames[i];
+        if (!f || typeof f !== 'object') continue;
+        const t = Number(f.t), x = Number(f.x), y = Number(f.y), z = Number(f.z);
+        let vx = Number(f.vx), vy = Number(f.vy), vz = Number(f.vz);
+        if (!isFinite(t) || !isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+        if (!isFinite(vx) || !isFinite(vy) || !isFinite(vz)) continue;
+        const vLen = Math.hypot(vx, vy, vz);
+        if (vLen > 1e-5) { vx /= vLen; vy /= vLen; vz /= vLen; }
+        else { vx = 0; vy = 0; vz = -1; }
+        const clampedT = Math.max(prevT, Math.max(0, t));
+        prevT = clampedT;
+        frames.push({
+          t: clampedT,
+          x, y, z,
+          vx, vy, vz,
+          c: isFinite(Number(f.c)) ? Math.max(0, Math.min(1, Number(f.c))) : 0,
+          f: f.f ? 1 : 0,
+        });
+      }
+      if (frames.length < 2) return null;
+      const dur = Math.max(0.1, frames[frames.length - 1].t - frames[0].t);
+      return {
+        seed: typeof parsed.seed === 'number' && isFinite(parsed.seed) ? parsed.seed : null,
+        evSeed: typeof parsed.evSeed === 'number' && isFinite(parsed.evSeed) ? parsed.evSeed : null,
+        cause: sanitizeCallsign(parsed.cause || 'siren') || 'siren',
+        callsign: sanitizeCallsign(parsed.callsign || 'Investigator') || 'Investigator',
+        duration: dur,
+        startOffset: frames[0].t,
+        frames,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function syncDeathReplayButton() {
+    const btn = $('death-replay-btn');
+    if (!btn) return;
+    const saved = loadReplayFromStorage();
+    btn.style.display = (saved && saved.frames && saved.frames.length >= 2) ? '' : 'none';
+  }
+
+  function formatReplayTime(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  }
+
+  function syncReplayControlsUI() {
+    const playBtn = $('replay-play-btn');
+    const spdBtn = $('replay-speed-btn');
+    const camBtn = $('replay-cam-btn');
+    const timeEl = $('replay-time');
+    const scrub = $('replay-scrub');
+    const dur = replayData ? replayData.duration : 0;
+    if (playBtn) playBtn.textContent = replayPlaying ? '[SPACE] PAUSE' : '[SPACE] PLAY';
+    if (spdBtn) spdBtn.textContent = `[F] ${replaySpeed}X`;
+    if (camBtn) camBtn.textContent = replayFirstPerson ? '[V] 1ST PERSON' : '[V] 3RD PERSON';
+    if (timeEl) timeEl.textContent = `${formatReplayTime(replayTime)} / ${formatReplayTime(dur)}`;
+    if (scrub) {
+      scrub.max = String(Math.max(0.1, dur));
+      scrub.value = String(Math.max(0, Math.min(dur, replayTime)));
+    }
+  }
+
+  function sampleReplayAt(relSec) {
+    if (!replayData || !replayData.frames || replayData.frames.length < 2) return null;
+    const frames = replayData.frames;
+    const absT = (replayData.startOffset || 0) + Math.max(0, Math.min(replayData.duration, relSec));
+    let lo = 0, hi = frames.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (frames[mid].t <= absT) lo = mid;
+      else hi = mid;
+    }
+    const f0 = frames[lo];
+    const f1 = frames[hi];
+    const span = Math.max(1e-5, f1.t - f0.t);
+    const alpha = f1.t > f0.t ? Math.max(0, Math.min(1, (absT - f0.t) / span)) : 0;
+    const x = f0.x + (f1.x - f0.x) * alpha;
+    const y = f0.y + (f1.y - f0.y) * alpha;
+    const z = f0.z + (f1.z - f0.z) * alpha;
+    let vx = f0.vx + (f1.vx - f0.vx) * alpha;
+    let vy = f0.vy + (f1.vy - f0.vy) * alpha;
+    let vz = f0.vz + (f1.vz - f0.vz) * alpha;
+    const vLen = Math.hypot(vx, vy, vz);
+    if (vLen > 1e-5) { vx /= vLen; vy /= vLen; vz /= vLen; }
+    else { vx = 0; vy = 0; vz = -1; }
+    const crouch = f0.c + (f1.c - f0.c) * alpha;
+    const flashOn = (alpha < 0.5 ? f0.f : f1.f) > 0.5;
+    const dist = Math.hypot(f1.x - f0.x, f1.z - f0.z);
+    const speed = f1.t > f0.t ? dist / span : 0;
+    return {
+      x, y, z, vx, vy, vz,
+      yaw: Math.atan2(-vx, -vz),
+      pitch: Math.asin(Math.max(-1, Math.min(1, vy))),
+      crouch,
+      flashOn,
+      moving: speed > 0.25,
+    };
+  }
+
+  function applyReplayFrame(snap, dt, snapCam) {
+    if (!snap || !replayGhost || !camera) return;
+    replayGhost.pos.set(snap.x, snap.y, snap.z);
+    replayGhost.targetPos.set(snap.x, snap.y, snap.z);
+    replayGhost.yaw = snap.yaw;
+    replayGhost.pitch = snap.pitch;
+    replayGhost.crouch = snap.crouch;
+    replayGhost.flashOn = snap.flashOn;
+    replayGhost.moving = replayPlaying && snap.moving;
+    replayGhost.firstPersonHidden = !!replayFirstPerson;
+    replayGhost.update(Math.min(0.05, dt || 0.016), camera.position);
+    replayGhost.root.position.set(snap.x, snap.y, snap.z);
+    replayGhost.root.rotation.y = snap.yaw;
+
+    const eyeY = snap.y + 1.62 - snap.crouch * 0.42;
+    if (replaySightLine && replaySightLine.geometry) {
+      const posAttr = replaySightLine.geometry.getAttribute('position');
+      if (posAttr) {
+        posAttr.setXYZ(0, snap.x, eyeY, snap.z);
+        posAttr.setXYZ(1, snap.x + snap.vx * 4.5, eyeY + snap.vy * 4.5, snap.z + snap.vz * 4.5);
+        posAttr.needsUpdate = true;
+      }
+    }
+    if (replayFirstPerson) {
+      camera.position.set(snap.x, eyeY, snap.z);
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(snap.pitch, snap.yaw, 0);
+    } else {
+      const hLen = Math.hypot(snap.vx, snap.vz);
+      const hx = hLen > 0.01 ? snap.vx / hLen : -Math.sin(snap.yaw);
+      const hz = hLen > 0.01 ? snap.vz / hLen : -Math.cos(snap.yaw);
+      _replayCamTarget.set(snap.x - hx * 3.8, eyeY + 1.25 - snap.vy * 0.65, snap.z - hz * 3.8);
+      if (snapCam) camera.position.copy(_replayCamTarget);
+      else camera.position.lerp(_replayCamTarget, Math.min(1, (dt || 0.016) * 14));
+      _replayLookPt.set(snap.x + snap.vx * 1.4, eyeY + snap.vy * 0.5, snap.z + snap.vz * 1.4);
+      camera.lookAt(_replayLookPt);
+    }
+  }
+
+  function cleanupGhostReplay() {
+    document.body.classList.remove('replaying');
+    const rb = $('replay-bar');
+    if (rb) rb.classList.remove('show');
+    if (replayGhost) {
+      try { replayGhost.dispose(); } catch (e) {}
+      replayGhost = null;
+    }
+    if (replayPathLine) {
+      if (replayPathLine.parent) replayPathLine.parent.remove(replayPathLine);
+      if (replayPathLine.geometry) replayPathLine.geometry.dispose();
+      if (replayPathLine.material) replayPathLine.material.dispose();
+      replayPathLine = null;
+    }
+    if (replaySightLine) {
+      if (replaySightLine.parent) replaySightLine.parent.remove(replaySightLine);
+      if (replaySightLine.geometry) replaySightLine.geometry.dispose();
+      if (replaySightLine.material) replaySightLine.material.dispose();
+      replaySightLine = null;
+    }
+    if (replayDeathBeacon) {
+      if (replayDeathBeacon.parent) replayDeathBeacon.parent.remove(replayDeathBeacon);
+      if (replayDeathBeacon.geometry) replayDeathBeacon.geometry.dispose();
+      if (replayDeathBeacon.material) replayDeathBeacon.material.dispose();
+      replayDeathBeacon = null;
+    }
+    if (replayEnemyVis) {
+      if (siren && siren.root) siren.root.visible = replayEnemyVis.siren;
+      if (fastone && fastone.root) fastone.root.visible = replayEnemyVis.fastone;
+      if (sneaky && sneaky.root) sneaky.root.visible = replayEnemyVis.sneaky;
+      if (moths && moths.root) moths.root.visible = replayEnemyVis.moths;
+      replayEnemyVis = null;
+    }
+    replayPlaying = false;
+  }
+
+  function startGhostReplay() {
+    const loaded = loadReplayFromStorage();
+    if (!loaded || !loaded.frames || loaded.frames.length < 2) {
+      showHint('No saved match replay available yet.', 3000);
+      return;
+    }
+    cleanupGhostReplay();
+    replayData = loaded;
+    LO.TVFX.clear();
+    A.stopDeathMusic();
+    A.stopRinging();
+    clearTimeout(deathTimer);
+    A.stopVoices();
+    A.silenceWorld(true);
+    clearGlitch();
+    clearFlashStrobe();
+    clearFallFx();
+    hideAllScreens();
+    if (document.pointerLockElement) {
+      try { document.exitPointerLock(); } catch (e) {}
+    }
+
+    if (!world || !scene || (replayData.seed !== null && replayData.seed !== currentRunSeed)) {
+      buildWorld(
+        replayData.seed !== null ? replayData.seed : undefined,
+        replayData.evSeed !== null ? replayData.evSeed : undefined
+      );
+      currentRunSeed = replayData.seed;
+      currentEvSeed = replayData.evSeed;
+    }
+
+    replayEnemyVis = {
+      siren: !!(siren && siren.root && siren.root.visible),
+      fastone: !!(fastone && fastone.root && fastone.root.visible),
+      sneaky: !!(sneaky && sneaky.root && sneaky.root.visible),
+      moths: !!(moths && moths.root && moths.root.visible),
+    };
+    if (siren && siren.root) siren.root.visible = false;
+    if (fastone && fastone.root) fastone.root.visible = false;
+    if (sneaky && sneaky.root) sneaky.root.visible = false;
+    if (moths && moths.root) moths.root.visible = false;
+    remotePlayers.forEach(rp => { if (rp && rp.root) rp.root.visible = false; });
+
+    replayGhost = new LO.RemotePlayer(scene, world, {
+      id: 'replay-ghost',
+      slot: 0,
+      name: `${replayData.callsign} · GHOST`,
+      color: '#7ce8ff',
+      jacketHex: 0x52c8f2,
+    });
+    if (Array.isArray(replayGhost._mats)) {
+      const cyanTint = new THREE.Color(0x7ce8ff);
+      replayGhost._mats.forEach(m => {
+        if (!m) return;
+        if (replayGhost.tagSprite && m === replayGhost.tagSprite.material) {
+          m.opacity = 0.88;
+          return;
+        }
+        m.transparent = true;
+        m.opacity = 0.44;
+        m.depthWrite = false;
+        if (m.color) m.color.lerp(cyanTint, 0.55);
+        if (m.emissive) {
+          m.emissive.setHex(0x2899cc);
+          m.emissiveIntensity = 0.65;
+        }
+      });
+    }
+
+    const pathPts = replayData.frames.map(f => new THREE.Vector3(f.x, f.y + 0.14, f.z));
+    const pathGeo = new THREE.BufferGeometry().setFromPoints(pathPts);
+    const pathMat = new THREE.LineBasicMaterial({ color: 0x6ce2ff, transparent: true, opacity: 0.45 });
+    replayPathLine = new THREE.Line(pathGeo, pathMat);
+    scene.add(replayPathLine);
+
+    const sightGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(),
+      new THREE.Vector3(0, 0, -4.5),
+    ]);
+    const sightMat = new THREE.LineBasicMaterial({ color: 0xbef5ff, transparent: true, opacity: 0.85 });
+    replaySightLine = new THREE.Line(sightGeo, sightMat);
+    scene.add(replaySightLine);
+
+    const lastF = replayData.frames[replayData.frames.length - 1];
+    const beaconGeo = new THREE.CylinderGeometry(0.06, 0.24, 1.85, 12);
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff5a52, transparent: true, opacity: 0.42 });
+    replayDeathBeacon = new THREE.Mesh(beaconGeo, beaconMat);
+    replayDeathBeacon.position.set(lastF.x, lastF.y + 0.92, lastF.z);
+    scene.add(replayDeathBeacon);
+
+    replayTime = 0;
+    replayPlaying = true;
+    replaySpeed = 1;
+    replayFirstPerson = false;
+    state = 'replay';
+    document.body.classList.add('replaying');
+    document.body.classList.remove('spectating');
+    show('hud');
+    const rb = $('replay-bar');
+    if (rb) rb.classList.add('show');
+    const metaEl = $('replay-meta');
+    if (metaEl) metaEl.textContent = `${replayData.cause.toUpperCase()} · ${replayData.callsign}`;
+    $('fade').style.transition = 'none';
+    $('fade').style.opacity = 0;
+    applyDisplay();
+    if (camera) { camera.fov = S.fov; camera.updateProjectionMatrix(); }
+
+    const snap0 = sampleReplayAt(0);
+    if (snap0) applyReplayFrame(snap0, 0.016, true);
+    syncReplayControlsUI();
+    updateMatchIdWatermark();
+  }
+
+  function updateGhostReplay(dt) {
+    if (!replayData || !replayGhost) return;
+    if (replayPlaying) {
+      replayTime += dt * replaySpeed;
+      if (replayTime >= replayData.duration) {
+        replayTime = replayData.duration;
+        replayPlaying = false;
+      }
+    }
+    const snap = sampleReplayAt(replayTime);
+    if (snap) applyReplayFrame(snap, dt, !replayPlaying);
+    if (world && world.update) {
+      _worldUpdateOpts.pos = replayGhost.pos;
+      _worldUpdateOpts.disturbed = false;
+      _worldUpdateOpts.still = true;
+      _worldUpdateOpts.enabled = false;
+      _worldUpdateOpts.threats = null;
+      _worldUpdateOpts.onScatter = null;
+      world.update(dt, replayTime, _worldUpdateOpts);
+    }
+    syncReplayControlsUI();
+  }
+
+  function exitGhostReplay() {
+    if (state !== 'replay') return;
+    cleanupGhostReplay();
+    state = 'dead';
+    hideAllScreens();
+    show('death');
+    $('damage').style.opacity = 0;
+    $('fade').style.transition = 'none';
+    $('fade').style.opacity = 0;
+    syncDeathReplayButton();
+    if (V().deathRoom && deathRoom) {
+      $('death').classList.remove('legacy');
+      deathRoom.show(dieCause);
+      deathShown = true;
+      A.playMusic(null, 0.3);
+      if (!Net || !Net.isCoop()) {
+        const kickToTitle = () => {
+          if (state !== 'dead') return;
+          ui.fadeOut(0.25);
+          setTimeout(goTitle, 300);
+        };
+        clearTimeout(deathTimer);
+        if (!A.playDeathMusic(kickToTitle)) deathTimer = setTimeout(kickToTitle, 58000);
+      } else {
+        A.playDeathMusic(() => {});
+      }
+    } else {
+      $('death').classList.add('legacy');
+      const D = DEATHS[dieCause] || DEATHS.siren;
+      $('death-title').textContent = D.title;
+      $('death-tip').textContent = D.tips[(Math.random() * D.tips.length) | 0] || '';
+      A.playMusic('title', 1.5);
+    }
+    updateMatchIdWatermark();
   }
 
   function copyMatchIdToClipboard(sourceBtn) {
@@ -123,7 +620,7 @@
     const inMatch = isCoop && (
       state === 'opening' || state === 'play' || state === 'paused' ||
       state === 'spectate' || state === 'dying' || state === 'dead' ||
-      state === 'ending' || state === 'credits'
+      state === 'replay' || state === 'ending' || state === 'credits'
     );
     document.body.classList.toggle('in-coop-match', inMatch);
     const pauseEl = $('pause');
@@ -172,8 +669,8 @@
       return;
     }
     if (afkKicking) return;
-    // Pause AFK timer in Death Screen and non-interactive cutscenes/loading
-    if (state === 'dying' || state === 'dead' || state === 'opening' || state === 'ending' || state === 'credits' || state === 'loading') {
+    if (isAfkPausedState()) {
+      afkLastActivityAt = Date.now();
       setAfkBanner(false);
       return;
     }
@@ -200,24 +697,7 @@
       _afkTrackInit = false;
     }
 
-    afkIdleSec += dt;
-    if (afkIdleSec >= AFK_KICK_SEC) {
-      afkKicking = true;
-      resetAfkActivity();
-      const kickReason = 'Disconnected due to inactivity (1 min AFK).';
-      if (Net.isHost && Net.isHost() && Net.closeRoom) {
-        Net.closeRoom(kickReason, kickReason);
-      } else {
-        if (Net.leave) Net.leave();
-        handleCoopForceExit(kickReason);
-      }
-      return;
-    }
-    if (afkIdleSec >= AFK_WARN_SEC) {
-      setAfkBanner(true, AFK_KICK_SEC - afkIdleSec);
-    } else {
-      setAfkBanner(false);
-    }
+    checkAfkTimeout();
   }
 
   function sanitizeCallsign(raw) {
@@ -349,7 +829,9 @@
         lStat.textContent = 'Transmitting voice to squad...';
         lStat.className = 'coop-mic-status talking';
       } else {
-        lStat.textContent = 'Microphone live — 3D proximity voice active';
+        lStat.textContent = S.disableVoiceAttenuation
+          ? 'Microphone live — constant voice volume active (no 3D attenuation)'
+          : 'Microphone live — 3D proximity voice active';
         lStat.className = 'coop-mic-status';
       }
     }
@@ -891,6 +1373,7 @@
           if (rpMeta) rpMeta.alive = false;
           Net.sendTo(caughtPlayer.id, { type: 'player_caught' });
           Net.broadcast({ type: 'player_dead', id: caughtPlayer.id, cause: 'siren' }, caughtPlayer.id);
+          checkMatchOver();
         }
         return;
       }
@@ -1354,6 +1837,7 @@
   }
 
   function goTitle() {
+    cleanupGhostReplay();
     clearGlitch();
     clearFlashStrobe();
     A.silenceWorld(false);
@@ -1469,6 +1953,7 @@
   }
 
   function startGame(skipIntro, seed, evSeed) {
+    cleanupGhostReplay();
     clearGlitch();
     LO.TVFX.clear();
     A.stopDeathMusic(); A.stopRinging(); clearTimeout(deathTimer);
@@ -1540,7 +2025,10 @@
     resetHudCache();
     resetAfkActivity();
     _afkTrackInit = false;
+    resetReplayRecording();
     state = 'play';
+    recordReplayFrame(true);
+    saveReplayToStorage();
     show('hud');
     updateMatchIdWatermark();
     updateVoiceUI();
@@ -1835,12 +2323,38 @@
       el.style.transform = '';
     }
   }
+  function checkMatchOver() {
+    if (!Net || !Net.isHost || !Net.isHost() || !Net.inGame || coopTeamWiped) return false;
+    if (state === 'ending' || state === 'credits' || state === 'dead' || state === 'replay' || state === 'title' || state === 'gate') {
+      return false;
+    }
+    const livingConnectedPlayers = Net.getLivingConnectedPlayers
+      ? Net.getLivingConnectedPlayers()
+      : Net.players.filter(p => p && !p.left && !p.hiddenAdmin && p.alive !== false && (p.id === Net.localId || (Net.conns && Net.conns.has(p.id))));
+    if (livingConnectedPlayers.length === 0) {
+      coopTeamWiped = true;
+      if (Net.broadcast) Net.broadcast({ type: 'team_wipe' });
+      if (state === 'spectate' || state === 'paused' || coopMenuOpen) {
+        coopMenuOpen = false;
+        if ($('pause')) show('pause', false);
+        showTeamWipeDeath();
+      } else if (state !== 'dying') {
+        showTeamWipeDeath();
+      }
+      return true;
+    }
+    return false;
+  }
+
   function markLocalDeadInCoop(cause) {
     if (!Net || !Net.isCoop()) return;
     const me = Net.getPlayer(Net.localId);
     if (me) me.alive = false;
     if (Net.isClient()) Net.sendToHost({ type: 'player_dead', cause });
-    else if (Net.isHost()) Net.broadcast({ type: 'player_dead', id: 'host', cause });
+    else if (Net.isHost()) {
+      Net.broadcast({ type: 'player_dead', id: 'host', cause });
+      checkMatchOver();
+    }
     updateCoopTeamHUD();
   }
 
@@ -1853,6 +2367,8 @@
     if (fastone && (!Net || !Net.isCoop())) { fastone.clearHighlight(); if (cause !== 'fastone') fastone.reset(); }
     else if (fastone) fastone.clearHighlight();
     if (state !== 'play') return;
+    recordReplayFrame(true);
+    saveReplayToStorage(cause);
     dieCause = cause;
     state = 'dying';
     coopMenuOpen = false;
@@ -1882,6 +2398,8 @@
     if (fastone && (!Net || !Net.isCoop())) fastone.reset();
     if (state === 'play' && !siren.catchDisabled && (!Net || !Net.isCoop())) A.silenceWorld(true);
     if (state !== 'play' || siren.catchDisabled) return;
+    recordReplayFrame(true);
+    saveReplayToStorage('siren');
     dieCause = 'siren';
     state = 'dying';
     coopMenuOpen = false;
@@ -1971,8 +2489,13 @@
   function cycleSpectate(dir) {
     if (state !== 'spectate' || !Net) return;
     // Only living, connected teammates can be spectated.
-    const alive = Net.players.filter(p => p.alive !== false && !p.left && !p.hiddenAdmin && p.id !== Net.localId);
-    if (!alive.length) return;
+    const alive = Net.getLivingConnectedPlayers
+      ? Net.getLivingConnectedPlayers().filter(p => p.id !== Net.localId)
+      : Net.players.filter(p => p.alive !== false && !p.left && !p.hiddenAdmin && p.id !== Net.localId);
+    if (!alive.length) {
+      if (Net.isHost && Net.isHost()) checkMatchOver();
+      return;
+    }
     const curIdx = alive.findIndex(p => p.id === spectateId);
     const nextIdx = curIdx < 0
       ? (dir < 0 ? alive.length - 1 : 0)
@@ -2005,6 +2528,7 @@
     if (retryBtn) {
       retryBtn.style.display = (Net && Net.isClient()) ? 'none' : '';
     }
+    syncDeathReplayButton();
     const deathEl = $('death');
     if (!V().deathRoom) {
       LO.TVFX.clear();
@@ -2014,6 +2538,7 @@
       $('death-title').textContent = D.title;
       $('death-tip').textContent = D.tips[(Math.random() * D.tips.length) | 0] || '';
       show('death');
+      syncDeathReplayButton();
       $('damage').style.opacity = 0;
       $('fade').style.transition = 'none'; $('fade').style.opacity = 0;
       A.playMusic('title', 1.5);
@@ -2024,6 +2549,7 @@
     LO.TVFX.off(() => {
       hideAllScreens();
       show('death');
+      syncDeathReplayButton();
       $('damage').style.opacity = 0;
       deathRoom.show(dieCause);
       deathShown = true;
@@ -2048,7 +2574,14 @@
     {
       if (state !== 'dying') return;
       if (Net && Net.isCoop()) {
-        const aliveMates = Net.players.filter(p => p.alive !== false && !p.left && p.id !== Net.localId);
+        if (Net.isHost()) checkMatchOver();
+        if (coopTeamWiped) {
+          showTeamWipeDeath();
+          return;
+        }
+        const aliveMates = Net.getLivingConnectedPlayers
+          ? Net.getLivingConnectedPlayers().filter(p => p.id !== Net.localId)
+          : Net.players.filter(p => p.alive !== false && !p.left && !p.hiddenAdmin && p.id !== Net.localId);
         if (aliveMates.length > 0 && !coopTeamWiped) {
           enterSpectate(aliveMates[0].id);
           return;
@@ -2063,6 +2596,7 @@
       const retryBtn = document.querySelector('#death button[data-action="retry"]');
       if (retryBtn) retryBtn.style.display = '';
       state = 'dead';
+      syncDeathReplayButton();
       deathShown = false;
       A.setSilentOne(0); A.setExposure(0); A.setMothFlutter(0); A.setTenant(0);
       A.setBreathing && A.setBreathing(0);
@@ -2081,6 +2615,7 @@
         $('death-title').textContent = D.title;
         $('death-tip').textContent = D.tips[(Math.random() * D.tips.length) | 0] || '';
         show('death');
+        syncDeathReplayButton();
         $('damage').style.opacity = 0;
         $('fade').style.transition = 'none'; $('fade').style.opacity = 0;
         A.playMusic('title', 1.5);
@@ -2092,6 +2627,7 @@
       LO.TVFX.off(() => {
         hideAllScreens();
         show('death');
+        syncDeathReplayButton();
         $('damage').style.opacity = 0;
         deathRoom.show(dieCause);
         deathShown = true;
@@ -2854,6 +3390,18 @@
           else A.playMusic('explore', 4);
           A.intensity = Math.min(1, near * 0.7 + ((siren.state === 'investigate' || siren.state === 'investigate_breach') ? 0.4 : siren.state === 'search' ? 0.5 : 0));
           A.setHeartbeat(siren.state === 'wander' ? near * 0.5 : Math.max(0.35, near));
+
+          // Log coordinate + camera view vector frames for Ghost Match Replay
+          replaySampleAccum += simDt;
+          if (replaySampleAccum >= REPLAY_SAMPLE_SEC) {
+            replaySampleAccum = 0;
+            recordReplayFrame(false);
+          }
+          replaySaveAccum += simDt;
+          if (replaySaveAccum >= REPLAY_SAVE_SEC) {
+            replaySaveAccum = 0;
+            saveReplayToStorage();
+          }
         }
       }
     } else if (state === 'dying') {
@@ -2930,15 +3478,32 @@
           broadcastHostWorldSnap();
         }
       }
-      let targetRp = spectateId ? remotePlayers.get(spectateId) : null;
-      if (!targetRp || !targetRp.alive) {
-        const alive = Net ? Net.players.filter(p => p.alive !== false && !p.left && p.id !== Net.localId) : [];
+      const spectateMeta = (spectateId && Net && Net.getPlayer) ? Net.getPlayer(spectateId) : null;
+      const spectateConnected = !!(
+        spectateMeta &&
+        !spectateMeta.left &&
+        !spectateMeta.hiddenAdmin &&
+        spectateMeta.alive !== false &&
+        (!Net.isHost || !Net.isHost() || (Net.conns && Net.conns.has(spectateId)))
+      );
+      let targetRp = (spectateId && spectateConnected) ? remotePlayers.get(spectateId) : null;
+      if (!spectateConnected || !targetRp || !targetRp.alive) {
+        if (targetRp) targetRp.firstPersonHidden = false;
+        const alive = (Net && Net.getLivingConnectedPlayers)
+          ? Net.getLivingConnectedPlayers().filter(p => p.id !== Net.localId)
+          : (Net ? Net.players.filter(p => p.alive !== false && !p.left && !p.hiddenAdmin && p.id !== Net.localId) : []);
         if (alive.length > 0) {
-          if (targetRp) targetRp.firstPersonHidden = false;
           spectateId = alive[0].id;
           targetRp = remotePlayers.get(spectateId);
           lastSpecLabelText = '';
           updateSpectateLabel();
+        } else {
+          if (spectateId && remotePlayers.has(spectateId)) {
+            remotePlayers.get(spectateId).firstPersonHidden = false;
+          }
+          spectateId = null;
+          targetRp = null;
+          if (Net && Net.isHost && Net.isHost()) checkMatchOver();
         }
       }
       remotePlayers.forEach((rp, id) => {
@@ -2990,6 +3555,10 @@
         updateSpectateLabel();
         updateCoopTeamHUD();
       }
+    } else if (state === 'replay') {
+      A.setReverbZone && A.setReverbZone(false, false);
+      A.setSubMode && A.setSubMode('');
+      updateGhostReplay(dt);
     } else if (state !== 'play') {
       A.setReverbZone && A.setReverbZone(false, false);
       A.setSubMode && A.setSubMode('');
@@ -3010,7 +3579,7 @@
     A.setListener(camera.position, fwd, upv);
     updateAfkTracker(dt);
     if (Net && Net.isCoop() && Net.updateVoiceProximity) {
-      const inCutscene = (state === 'opening' || state === 'ending' || state === 'credits' || state === 'loading' || state === 'dying' || state === 'dead' || !!cutscene);
+      const inCutscene = (state === 'opening' || state === 'ending' || state === 'credits' || state === 'loading' || state === 'dying' || state === 'dead' || state === 'replay' || !!cutscene);
       const inWorld = !inCutscene && (state === 'play' || state === 'spectate');
       Net.updateVoiceProximity(
         camera ? camera.position : null,
@@ -3123,6 +3692,7 @@
             startGame(true);
           }
           break;
+        case 'replay': startGhostReplay(); break;
         case 'quit': ui.fadeOut(0.6); setTimeout(goTitle, 650); break;
       }
     });
@@ -3141,6 +3711,51 @@
       }
       const ae = document.activeElement;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+      if (state === 'replay') {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          exitGhostReplay();
+          return;
+        }
+        if (e.code === 'Space' && !e.repeat) {
+          e.preventDefault();
+          if (replayData && replayTime >= replayData.duration) replayTime = 0;
+          replayPlaying = !replayPlaying;
+          syncReplayControlsUI();
+          return;
+        }
+        if (e.code === 'KeyV' && !e.repeat) {
+          e.preventDefault();
+          replayFirstPerson = !replayFirstPerson;
+          const snap = sampleReplayAt(replayTime);
+          if (snap) applyReplayFrame(snap, 0.016, true);
+          syncReplayControlsUI();
+          return;
+        }
+        if (e.code === 'KeyF' && !e.repeat) {
+          e.preventDefault();
+          replaySpeed = replaySpeed === 1 ? 2 : replaySpeed === 2 ? 4 : 1;
+          syncReplayControlsUI();
+          return;
+        }
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
+          e.preventDefault();
+          replayTime = Math.max(0, replayTime - 2);
+          const snap = sampleReplayAt(replayTime);
+          if (snap) applyReplayFrame(snap, 0.016, true);
+          syncReplayControlsUI();
+          return;
+        }
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') {
+          e.preventDefault();
+          const dur = replayData ? replayData.duration : 0;
+          replayTime = Math.min(dur, replayTime + 2);
+          const snap = sampleReplayAt(replayTime);
+          if (snap) applyReplayFrame(snap, 0.016, true);
+          syncReplayControlsUI();
+          return;
+        }
+      }
       if (Net && Net.isCoop() && (state === 'play' || state === 'spectate') && !coopMenuOpen && !(LO.admin && LO.admin.open)) {
         if ((e.code === 'KeyT' || e.code === 'Enter') && !e.repeat) {
           e.preventDefault();
@@ -3162,19 +3777,53 @@
         else if ((state === 'play' || state === 'spectate') && !coopMenuOpen) pause();
       }
     });
-    window.addEventListener('keydown', resetAfkActivity, { passive: true });
-    window.addEventListener('keyup', resetAfkActivity, { passive: true });
-    window.addEventListener('mousedown', resetAfkActivity, { passive: true });
-    window.addEventListener('touchstart', resetAfkActivity, { passive: true });
-    window.addEventListener('wheel', resetAfkActivity, { passive: true });
-    window.addEventListener('input', resetAfkActivity, { passive: true });
+    window.addEventListener('keydown', onAfkUserInput, { passive: true });
+    window.addEventListener('keyup', onAfkUserInput, { passive: true });
+    window.addEventListener('mousedown', onAfkUserInput, { passive: true });
+    window.addEventListener('touchstart', onAfkUserInput, { passive: true });
+    window.addEventListener('wheel', onAfkUserInput, { passive: true });
+    window.addEventListener('input', onAfkUserInput, { passive: true });
     window.addEventListener('mousemove', e => {
       const dx = Math.abs(e.movementX || 0) + (afkMouseX !== null ? Math.abs(e.clientX - afkMouseX) : 0);
       const dy = Math.abs(e.movementY || 0) + (afkMouseY !== null ? Math.abs(e.clientY - afkMouseY) : 0);
       afkMouseX = e.clientX;
       afkMouseY = e.clientY;
-      if (dx > 0 || dy > 0) resetAfkActivity();
+      if (dx > 0 || dy > 0) onAfkUserInput();
     }, { passive: true });
+    const rpPlay = $('replay-play-btn');
+    if (rpPlay) rpPlay.addEventListener('click', () => {
+      A.click(true);
+      if (replayData && replayTime >= replayData.duration) replayTime = 0;
+      replayPlaying = !replayPlaying;
+      syncReplayControlsUI();
+    });
+    const rpSpeed = $('replay-speed-btn');
+    if (rpSpeed) rpSpeed.addEventListener('click', () => {
+      A.click(true);
+      replaySpeed = replaySpeed === 1 ? 2 : replaySpeed === 2 ? 4 : 1;
+      syncReplayControlsUI();
+    });
+    const rpCam = $('replay-cam-btn');
+    if (rpCam) rpCam.addEventListener('click', () => {
+      A.click(true);
+      replayFirstPerson = !replayFirstPerson;
+      const snap = sampleReplayAt(replayTime);
+      if (snap) applyReplayFrame(snap, 0.016, true);
+      syncReplayControlsUI();
+    });
+    const rpExit = $('replay-exit-btn');
+    if (rpExit) rpExit.addEventListener('click', () => {
+      A.click(true);
+      exitGhostReplay();
+    });
+    const rpScrub = $('replay-scrub');
+    if (rpScrub) rpScrub.addEventListener('input', () => {
+      replayTime = parseFloat(rpScrub.value) || 0;
+      replayPlaying = false;
+      const snap = sampleReplayAt(replayTime);
+      if (snap) applyReplayFrame(snap, 0.016, true);
+      syncReplayControlsUI();
+    });
     const matchIdBtn = $('coop-match-id');
     if (matchIdBtn) matchIdBtn.addEventListener('click', e => { e.stopPropagation(); copyMatchIdToClipboard(matchIdBtn); });
     const pauseMatchBtn = $('pause-match-id');
@@ -3232,6 +3881,9 @@
       LO.Net.onChat = msg => appendChatMessage(msg);
       LO.Net.onVoiceChange = () => updateVoiceUI();
       LO.Net.onPingUpdate = () => updatePingUI();
+      LO.Net.onDataTick = () => checkAfkTimeout();
+      LO.Net.checkMatchOver = () => checkMatchOver();
+      LO.Net.onPlayerLeave = () => checkMatchOver();
 
       const lobbyMicBtn = $('lobby-mic-btn');
       if (lobbyMicBtn) {
@@ -3636,16 +4288,11 @@
           if (typeof updateSpectateLabel === 'function') updateSpectateLabel();
           if (Net.isHost()) {
             Net.broadcast({ type: 'player_dead', id: deadId, cause: msg.cause });
-            const anyAlive = Net.players.some(p => p.alive !== false && !p.left);
-            if (!anyAlive && !coopTeamWiped) {
-              coopTeamWiped = true;
-              Net.broadcast({ type: 'team_wipe' });
-              if (state === 'spectate' || state === 'dying') showTeamWipeDeath();
-            }
+            checkMatchOver();
           }
         } else if (msg.type === 'team_wipe') {
           if (!coopTeamWiped) showTeamWipeDeath();
-        } else if (msg.type === 'player_left') {
+        } else if (msg.type === 'player_left' || msg.type === 'PLAYER_LEFT') {
           const leftId = msg.id || senderId;
           const mate = Net.getPlayer ? Net.getPlayer(leftId) : null;
           if (mate) { mate.left = true; mate.alive = false; mate.hidden = false; mate.hideSpotIdx = -1; }
@@ -3664,12 +4311,7 @@
           if (typeof updateSpectateLabel === 'function') updateSpectateLabel();
           if (Net.isHost()) {
             Net.broadcast({ type: 'player_left', id: leftId });
-            const anyAlive = Net.players.some(p => p.alive !== false && !p.left);
-            if (!anyAlive && !coopTeamWiped && Net.inGame) {
-              coopTeamWiped = true;
-              Net.broadcast({ type: 'team_wipe' });
-              if (state === 'spectate' || state === 'dying') showTeamWipeDeath();
-            }
+            checkMatchOver();
           }
         }
       };
@@ -3702,6 +4344,7 @@ function boot() {
     clock.start();
     loop();
     document.addEventListener('visibilitychange', () => {
+      if (checkAfkTimeout()) return;
       if (!document.hidden) {
         clock.getDelta();
         if (!_rafPending) {
@@ -3712,9 +4355,10 @@ function boot() {
     });
     setInterval(() => {
       if (document.hidden && Net && Net.isCoop()) {
+        if (checkAfkTimeout()) return;
         loop();
       }
-    }, 50);
+    }, 100);
     const gate = $('gate');
     const leaveGate = () => {
       if (state !== 'gate') return;

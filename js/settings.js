@@ -22,7 +22,7 @@ window.LO = window.LO || {};
     headBob: true,
     showFps: false,
     // audio
-    master: 0.8, music: 0.6, sfx: 0.9, voice: 1.0, subtitles: true, tts: true,
+    master: 0.8, music: 0.6, sfx: 0.9, voice: 1.0, disableVoiceAttenuation: false, subtitles: true, tts: true,
     // controls
     sensitivity: 1.0, invertY: false,
     fastDeath: false,
@@ -182,6 +182,7 @@ window.LO = window.LO || {};
     { key: 'music', label: 'Music', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
     { key: 'sfx', label: 'Sound Effects', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
     { key: 'voice', label: 'Voices', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+    { key: 'disableVoiceAttenuation', label: 'Disable 3D Voice Attenuation', desc: 'Keep voice chat volume constant regardless of distance', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
     { key: 'tts', label: 'Spoken Voice Lines', desc: 'Off shows subtitles only', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
     { key: 'subtitles', label: 'Subtitles', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
     { section: 'GAMEPLAY' },

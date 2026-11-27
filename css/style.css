@@ -759,7 +759,7 @@ body.still #bars label, body.still #health-num, body.still .hide-text {
 /* ---------- v2.0: death room (3D scene renders behind this) ---------- */
 #death { background: none; }
 #death .death-inner { top: auto; bottom: 6vh; transform: translateX(-50%); }
-#death .menu { flex-direction: row; gap: 36px; justify-content: center; }
+#death .menu { flex-direction: row; flex-wrap: wrap; gap: 22px 36px; justify-content: center; }
 #death .menu button { text-shadow: 0 0 10px #000; }
 #death .menu button::before { display: none; }
 #death.legacy { background: radial-gradient(ellipse at center, rgba(60,0,0,0.85), #000 75%); }
@@ -1304,6 +1304,97 @@ body.in-coop-match #pause-match-id { display: inline-block; }
   flex-wrap: wrap;
   gap: 6px;
   flex-shrink: 0;
+}
+
+/* ---------- Match Replay Ghost Playback ---------- */
+#replay-bar {
+  display: none;
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  width: min(92vw, 560px);
+  padding: 12px 16px;
+  background: rgba(8, 10, 14, 0.9);
+  border: 1px solid rgba(124, 232, 255, 0.38);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.85), 0 0 24px rgba(100, 210, 255, 0.14);
+  z-index: 26;
+  pointer-events: auto;
+}
+#replay-bar.show { display: block; }
+.replay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.replay-badge {
+  font-family: var(--font-title);
+  font-size: 16px;
+  letter-spacing: 2.2px;
+  color: #8cecff;
+}
+.replay-meta {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--ink-dim);
+  flex: 1;
+}
+.replay-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #e6f7ff;
+  letter-spacing: 0.8px;
+}
+#replay-scrub {
+  width: 100%;
+  accent-color: #6ce2ff;
+  cursor: pointer;
+  margin: 2px 0 10px;
+}
+.replay-ctrls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.replay-btn {
+  font-family: var(--font-title);
+  font-size: 14px;
+  letter-spacing: 1.6px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(232, 226, 212, 0.24);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.replay-btn:hover {
+  border-color: #7ce8ff;
+  color: #fff;
+  background: rgba(124, 232, 255, 0.16);
+}
+.replay-btn.exit {
+  border-color: rgba(209, 26, 26, 0.55);
+  color: #ffb8b3;
+}
+.replay-btn.exit:hover {
+  border-color: var(--red);
+  background: rgba(209, 26, 26, 0.25);
+  color: #fff;
+}
+body.replaying #bars,
+body.replaying #crosshair,
+body.replaying #prompt,
+body.replaying #hint-btn,
+body.replaying #hint-arrow,
+body.replaying #status-box,
+body.replaying #objective,
+body.replaying #map-hud-badge,
+body.replaying #touch {
+  display: none !important;
 }
 
 
