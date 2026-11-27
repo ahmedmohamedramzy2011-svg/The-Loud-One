@@ -35,6 +35,9 @@
   let lastCoopHudHtml = null;
   let lastSpecLabelText = '';
   let netSyncAccum = 0;
+  let _lastSentNetX = 0, _lastSentNetY = 0, _lastSentNetZ = 0;
+  let _lastSentNetYaw = 0, _lastSentNetFlags = -1, _lastSentNetInit = false;
+  let _lastSentMetaHealth = -1, _lastSentMetaHideIdx = -1;
   let coopMenuOpen = false;
   let spectateId = null;
   let spectateFirstPerson = false;
@@ -46,6 +49,38 @@
   const _voiceRemotePos = new THREE.Vector3();
   let currentRunSeed = null;
   let currentEvSeed = null;
+
+  function resetNetSyncCache() {
+    netSyncAccum = 0;
+    _lastSentNetInit = false;
+    _lastSentNetFlags = -1;
+    _lastSentMetaHealth = -1;
+    _lastSentMetaHideIdx = -1;
+  }
+
+  function hasLocalTransformDelta(st) {
+    if (!st || !player || player.alive === false) return false;
+    const me = (Net && Net.getPlayer) ? Net.getPlayer(Net.localId) : null;
+    if (me && me.alive === false) return false;
+    const flags = (Net && Net.computeTransformFlags) ? Net.computeTransformFlags(st) : 0;
+    if (!_lastSentNetInit) return true;
+    const dx = (st.x || 0) - _lastSentNetX;
+    const dy = (st.y || 0) - _lastSentNetY;
+    const dz = (st.z || 0) - _lastSentNetZ;
+    let dyaw = (st.yaw || 0) - _lastSentNetYaw;
+    while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+    while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    return (dx * dx + dy * dy + dz * dz) > (0.015 * 0.015) || Math.abs(dyaw) > 0.012 || flags !== _lastSentNetFlags;
+  }
+
+  function markLocalTransformSent(st) {
+    _lastSentNetX = Number(st.x) || 0;
+    _lastSentNetY = Number(st.y) || 0;
+    _lastSentNetZ = Number(st.z) || 0;
+    _lastSentNetYaw = Number(st.yaw) || 0;
+    _lastSentNetFlags = (Net && Net.computeTransformFlags) ? Net.computeTransformFlags(st) : 0;
+    _lastSentNetInit = true;
+  }
 
   // 60-second AFK auto-kick & Match ID watermark state
   const AFK_WARN_SEC = 50;
@@ -993,7 +1028,7 @@
       cycleSpectate(step);
     }
   });
-  const SYNC_INTERVAL = 0.04; // 25 Hz
+  const SYNC_INTERVAL = 0.05; // 20 Hz (50 ms)
   const V = () => LO.ver ? LO.ver() : { hint: true, darkLight: true, tenant: true, sirenFast: true, health: true, silent: true, wind: true, windStillness: true, rocks: true, echo: true, moths: true, exposure: true, deathRoom: true, tenantBlind: true, fastDeathAllowed: true, sneaky: true, fastone: true, sirenSmash: true, fastoneV2: true, staminaBuff: true, flashSway: true, dynamicSubs: true, proximityAmbient: true, richInteriors: true, cleanSubs: true, extBirdsong: true, envShake: true, forestBirds: true, birdFade: true, forestRing: true, echoClosePause: true, townMap: true, hazards: true, perfOpt276: true, reverb: true };
   // ---- hint system: unlocks after 3 minutes without finding evidence ----
   const HINT_DELAY = 180;
@@ -1852,6 +1887,7 @@
     coopTeamWiped = false;
     lastWorldSnap = null;
     lastCoopHudHtml = null;
+    resetNetSyncCache();
     resetAfkActivity();
     afkKicking = false;
     if (Net && Net.isCoop()) {
@@ -1900,6 +1936,7 @@
   function resetRun(seed, evSeed) {
     lastWorldSnap = null;
     lastCoopHudHtml = null;
+    resetNetSyncCache();
     currentRunSeed = seed !== undefined ? seed : null;
     currentEvSeed = evSeed !== undefined ? evSeed : null;
     if (seed !== undefined) {
@@ -3212,13 +3249,27 @@
   const _onBirdScatter = p => { A.birdScatter && A.birdScatter(p); };
   const _worldUpdateOpts = { pos: null, disturbed: false, still: false, enabled: true, threats: null, onScatter: _onBirdScatter };
   let _rafPending = false;
-  function broadcastHostWorldSnap() {
-    if (!Net || !Net.isHost() || !Net.broadcast) return;
-    const snapPlayers = [];
-    if (player) {
-      const lp = player.getNetState ? player.getNetState() : {};
-      lp.id = 'host';
-      snapPlayers.push(lp);
+  function buildLocalNetState() {
+    if (!player) return null;
+    return player.getNetState ? player.getNetState() : {
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      yaw: player.yaw, pitch: player.pitch, crouch: player.crouch || 0,
+      flashOn: !!player.flashOn, cameraUp: !!player.cameraUp,
+      hidden: !!(player.hidden || player.hideAnim),
+      hideSpotIdx: player.hidden && player.hidden.idx !== undefined ? player.hidden.idx : -1,
+      alive: player.alive !== false, moving: !!player.moving,
+      sprinting: !!player.sprinting, noiseRadius: player.noiseRadius || 0,
+      health: player.health !== undefined ? player.health : 100,
+    };
+  }
+
+  function syncLocalPlayerNetState() {
+    if (!Net || !Net.isCoop || !Net.isCoop() || !player) return;
+    if (player.alive === false) return; // Stop sending transform packets when local player is dead
+    const lp = buildLocalNetState();
+    if (!lp) return;
+    const isHost = Net.isHost && Net.isHost();
+    if (isHost) {
       const hm = Net.getPlayer('host');
       if (hm) {
         hm.alive = player.alive !== false;
@@ -3227,35 +3278,28 @@
         hm.health = lp.health;
       }
     }
-    Net.players.forEach(np => {
-      if (!np || np.id === 'host' || np.left || np.hiddenAdmin) return;
-      const st = Net.remoteStates && Net.remoteStates.get(np.id);
-      if (st) {
-        snapPlayers.push({
-          id: np.id,
-          x: st.x,
-          y: st.y,
-          z: st.z,
-          yaw: st.yaw,
-          pitch: st.pitch,
-          crouch: st.crouch || 0,
-          flashOn: !!st.flashOn,
-          cameraUp: !!st.cameraUp,
-          hidden: !!st.hidden,
-          hideSpotIdx: st.hideSpotIdx !== undefined ? st.hideSpotIdx : -1,
-          alive: np.alive !== false && !np.left,
-          moving: !!st.moving,
-          sprinting: !!st.sprinting,
-          noiseRadius: st.noiseRadius || 0,
-          health: typeof np.health === 'number' ? np.health : (typeof st.health === 'number' ? st.health : 100),
-        });
-      }
-    });
+    if (hasLocalTransformDelta(lp) && Net.sendTransformPacket) {
+      Net.sendTransformPacket(lp, isHost ? 0 : Net.localSlot);
+      markLocalTransformSent(lp);
+    }
+    const hp = typeof lp.health === 'number' ? Math.round(lp.health) : 100;
+    const hIdx = lp.hideSpotIdx !== undefined ? lp.hideSpotIdx : -1;
+    if (hp !== _lastSentMetaHealth || hIdx !== _lastSentMetaHideIdx) {
+      _lastSentMetaHealth = hp;
+      _lastSentMetaHideIdx = hIdx;
+      const meta = { type: 'p_meta', id: Net.localId, health: hp, hideSpotIdx: hIdx, hidden: !!lp.hidden };
+      if (isHost && Net.broadcast) Net.broadcast(meta);
+      else if (!isHost && Net.sendToHost) Net.sendToHost(meta);
+    }
+  }
+
+  function broadcastHostWorldSnap() {
+    if (!Net || !Net.isHost() || !Net.broadcast) return;
+    syncLocalPlayerNetState();
     Net.broadcast({
       type: 'world_snap',
       siren: siren ? siren.getNetState() : null,
       moths: moths ? moths.getNetSync() : null,
-      players: snapPlayers,
     });
   }
 
@@ -3316,18 +3360,8 @@
             netSyncAccum = 0;
             if (Net.isHost()) {
               broadcastHostWorldSnap();
-            } else if (Net.sendToHost) {
-              const pkt = player.getNetState ? player.getNetState() : {
-                x: player.pos.x, y: player.pos.y, z: player.pos.z,
-                yaw: player.yaw, pitch: player.pitch, crouch: player.crouch || 0,
-                flashOn: !!player.flashOn, cameraUp: !!player.cameraUp,
-                hidden: !!player.hidden, hideSpotIdx: -1,
-                alive: player.alive !== false, moving: !!player.moving,
-                sprinting: !!player.sprinting, noiseRadius: player.noiseRadius || 0,
-                health: player.health !== undefined ? player.health : 100,
-              };
-              pkt.type = 'p_state';
-              Net.sendToHost(pkt);
+            } else {
+              syncLocalPlayerNetState();
             }
           }
           coopHudAccum += simDt;
@@ -4097,6 +4131,14 @@
         } else if (msg.type === 'begin_play') {
           if (typeof endCutscene === 'function') endCutscene();
           if (typeof beginPlay === 'function') beginPlay();
+        } else if (msg.type === 'p_meta') {
+          const rp = remotePlayers.get(senderId);
+          if (rp) {
+            if (typeof msg.health === 'number') rp.health = msg.health;
+            if (msg.hideSpotIdx !== undefined) rp.hideSpotIdx = msg.hideSpotIdx;
+            if (msg.hidden !== undefined) rp.hidden = !!msg.hidden;
+            syncHideSpotOccupation(senderId, rp.hidden && rp.alive !== false, rp.hideSpotIdx, rp);
+          }
         } else if (msg.type === 'p_state') {
           syncRemotePlayersRoster();
           const mate = Net.getPlayer ? Net.getPlayer(senderId) : null;

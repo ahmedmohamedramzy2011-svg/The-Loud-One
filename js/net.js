@@ -20,6 +20,130 @@ window.LO = window.LO || {};
   const VOICE_REF_DIST = 3.0;
   const VOICE_MAX_DIST = 34.0;
 
+  // Binary packet protocol constants (compact WebRTC bandwidth optimization)
+  const PKT_TRANSFORM = 0x01;
+  const PKT_KEEPALIVE_PING = 0x02;
+  const PKT_KEEPALIVE_PONG = 0x03;
+  const PKT_TRANSFORM_BASE = 0x10; // 0x10 | (slot & 0x0f) -> 1-byte type carrying slot 0..3
+  const TRANSFORM_BYTE_LENGTH = 16;
+
+  function wrapAngle(a) {
+    let w = (Number(a) || 0) % (Math.PI * 2);
+    if (w > Math.PI) w -= Math.PI * 2;
+    if (w < -Math.PI) w += Math.PI * 2;
+    return w;
+  }
+
+  function computeTransformFlags(st) {
+    if (!st) return 0;
+    let flags = 0;
+    if (st.alive !== false) flags |= 1;
+    if ((st.crouch || 0) > 0.5) flags |= 2;
+    if (st.flashOn) flags |= 4;
+    if (st.cameraUp) flags |= 8;
+    if (st.hidden) flags |= 16;
+    if (st.moving) flags |= 32;
+    if (st.sprinting) flags |= 64;
+    return flags;
+  }
+
+  function encodeTransformPacket(st, slot) {
+    const buf = new ArrayBuffer(TRANSFORM_BYTE_LENGTH);
+    const dv = new DataView(buf);
+    const hasSlot = typeof slot === 'number' && slot >= 0 && slot <= 15;
+    dv.setUint8(0, hasSlot ? (PKT_TRANSFORM_BASE | (slot & 0x0f)) : PKT_TRANSFORM);
+    dv.setFloat32(1, Number(st && st.x) || 0, true);
+    dv.setFloat32(5, Number(st && st.y) || 0, true);
+    dv.setFloat32(9, Number(st && st.z) || 0, true);
+    const qYaw = Math.max(-32767, Math.min(32767, Math.round((wrapAngle(st && st.yaw) / Math.PI) * 32767)));
+    dv.setInt16(13, qYaw, true);
+    dv.setUint8(15, computeTransformFlags(st));
+    return buf;
+  }
+
+  function toUint8View(msg) {
+    if (!msg) return null;
+    if (msg instanceof ArrayBuffer) return new Uint8Array(msg);
+    if (ArrayBuffer.isView(msg)) return new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength);
+    return null;
+  }
+
+  function decodeTransformPacket(raw, prev) {
+    const bytes = toUint8View(raw);
+    if (!bytes || bytes.byteLength !== TRANSFORM_BYTE_LENGTH) return null;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const b0 = dv.getUint8(0);
+    const isSlotted = (b0 & 0xf0) === PKT_TRANSFORM_BASE;
+    if (!isSlotted && b0 !== PKT_TRANSFORM) return null;
+    const x = dv.getFloat32(1, true);
+    const y = dv.getFloat32(5, true);
+    const z = dv.getFloat32(9, true);
+    if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return null;
+    const yaw = (dv.getInt16(13, true) / 32767) * Math.PI;
+    const flags = dv.getUint8(15);
+    const hidden = !!(flags & 16);
+    const moving = !!(flags & 32);
+    const sprinting = !!(flags & 64);
+    const crouch = (flags & 2) ? 1 : 0;
+    return {
+      type: 'p_state',
+      slot: isSlotted ? (b0 & 0x0f) : null,
+      x,
+      y,
+      z,
+      yaw,
+      pitch: (prev && typeof prev.pitch === 'number') ? prev.pitch : 0,
+      crouch,
+      flashOn: !!(flags & 4),
+      cameraUp: !!(flags & 8),
+      hidden,
+      hideSpotIdx: hidden ? ((prev && prev.hideSpotIdx !== undefined) ? prev.hideSpotIdx : -1) : -1,
+      alive: !!(flags & 1),
+      moving,
+      sprinting,
+      noiseRadius: moving ? (sprinting ? 35 : (crouch > 0.5 ? 4 : 15)) : 0,
+      health: (prev && typeof prev.health === 'number') ? prev.health : 100,
+    };
+  }
+
+  function optimizeOpusSdp(sdp) {
+    if (!sdp || typeof sdp !== 'string') return sdp;
+    const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
+    const lines = sdp.split(/\r?\n/);
+    const opusPts = new Set();
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^a=rtpmap:(\d+)\s+opus\/48000/i.exec(lines[i]);
+      if (m) opusPts.add(m[1]);
+    }
+    if (!opusPts.size) return sdp;
+    const updatedPts = new Set();
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fmtpMatch = /^a=fmtp:(\d+)\s*(.*)$/i.exec(line);
+      if (fmtpMatch && opusPts.has(fmtpMatch[1])) {
+        const pt = fmtpMatch[1];
+        const parts = fmtpMatch[2]
+          .split(';')
+          .map(s => s.trim())
+          .filter(s => s && !/^(maxaveragebitrate|usedtx|stereo)=/i.test(s));
+        parts.push('maxaveragebitrate=20000', 'usedtx=1', 'stereo=0');
+        out.push(`a=fmtp:${pt} ${parts.join(';')}`);
+        updatedPts.add(pt);
+      } else {
+        out.push(line);
+      }
+    }
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = /^a=rtpmap:(\d+)\s+opus\/48000/i.exec(out[i]);
+      if (m && opusPts.has(m[1]) && !updatedPts.has(m[1])) {
+        out.splice(i + 1, 0, `a=fmtp:${m[1]} minptime=10;useinbandfec=1;maxaveragebitrate=20000;usedtx=1;stereo=0`);
+        updatedPts.add(m[1]);
+      }
+    }
+    return out.join(eol);
+  }
+
   function genCode() {
     let s = '';
     for (let i = 0; i < 5; i++) s += CODE_CHARS[(Math.random() * CODE_CHARS.length) | 0];
@@ -66,6 +190,8 @@ window.LO = window.LO || {};
 
     // Latency & Session Registry tracking state
     pingMs: null,
+    _lastPingSentAt: 0,
+    _lastSyncedPing: null,
     _pingTimer: null,
     _hostWatchdogTimer: null,
     startedAt: 0,
@@ -92,6 +218,15 @@ window.LO = window.LO || {};
 
     sanitizeName,
     sanitizeChat,
+    optimizeOpusSdp,
+    computeTransformFlags,
+    encodeTransformPacket,
+    decodeTransformPacket,
+    PKT_TRANSFORM,
+    PKT_TRANSFORM_BASE,
+    PKT_KEEPALIVE_PING,
+    PKT_KEEPALIVE_PONG,
+    TRANSFORM_BYTE_LENGTH,
     SLOT_COLORS,
     JACKET_COLORS,
     MAX_PLAYERS,
@@ -394,7 +529,7 @@ window.LO = window.LO || {};
       }
       entry.incoming = call;
       try {
-        call.answer();
+        call.answer(undefined, { sdpTransform: optimizeOpusSdp });
       } catch (e) {
         return;
       }
@@ -435,6 +570,7 @@ window.LO = window.LO || {};
         try {
           const call = this.peer.call(this._peerSignalId(id), this.localStream, {
             metadata: { fromId: this.localId },
+            sdpTransform: optimizeOpusSdp,
           });
           if (!call) return;
           entry.outgoing = call;
@@ -744,15 +880,38 @@ window.LO = window.LO || {};
       this.broadcast({ type: 'ping_sync', pings });
     },
 
+    sendKeepalivePing() {
+      if (this.mode !== 'client' || !this.hostConn || !this.hostConn.open) return false;
+      this._lastPingSentAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      try {
+        const pingBuf = new Uint8Array([PKT_KEEPALIVE_PING]);
+        this.hostConn.send(pingBuf.buffer);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    sendTransformPacket(state, slot) {
+      if (!state) return false;
+      const useSlot = typeof slot === 'number' ? slot : this.localSlot;
+      const buf = encodeTransformPacket(state, useSlot);
+      if (this.mode === 'client') {
+        if (!this.hostConn || !this.hostConn.open) return false;
+        try { this.hostConn.send(buf); return true; } catch (e) { return false; }
+      }
+      if (this.mode === 'host') {
+        this.broadcast(buf);
+        return true;
+      }
+      return false;
+    },
+
     _startPingLoop() {
       if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
       if (this.mode !== 'client') return;
       const sendPing = () => {
-        if (this.mode !== 'client' || !this.hostConn || !this.hostConn.open) return;
-        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-        try {
-          this.hostConn.send({ type: 'PING', t: now, r: this.pingMs });
-        } catch (e) {}
+        this.sendKeepalivePing();
       };
       sendPing();
       this._pingTimer = setInterval(sendPing, 1000);
@@ -1078,7 +1237,50 @@ window.LO = window.LO || {};
       conn._dropPeer = drop;
 
       conn.on('data', msg => {
-        if (!msg || typeof msg !== 'object') return;
+        if (!msg) return;
+        const bin = toUint8View(msg);
+        if (bin) {
+          const now = Date.now();
+          conn._lastSeen = now;
+          const seenPlayer = this.getPlayer(peerId);
+          if (seenPlayer) seenPlayer.lastSeen = now;
+
+          if (this.onDataTick && this.onDataTick(msg, peerId) === true) return;
+          if (!accepted) return;
+
+          if (bin.byteLength === 1 && bin[0] === PKT_KEEPALIVE_PING) {
+            try {
+              const pongBuf = new Uint8Array([PKT_KEEPALIVE_PONG]);
+              this.sendTo(peerId, pongBuf.buffer);
+            } catch (e) {}
+            return;
+          }
+
+          if (bin.byteLength === TRANSFORM_BYTE_LENGTH) {
+            if (seenPlayer && seenPlayer.hiddenAdmin) return;
+            const prev = this.remoteStates.get(peerId);
+            const st = decodeTransformPacket(bin, prev);
+            if (!st) return;
+            this.remoteStates.set(peerId, st);
+            if (seenPlayer) {
+              if (seenPlayer.alive !== false && !seenPlayer.left) {
+                seenPlayer.alive = st.alive !== false;
+              }
+              seenPlayer.hidden = !!st.hidden;
+              if (!st.hidden) seenPlayer.hideSpotIdx = -1;
+            }
+            const slotNum = (seenPlayer && typeof seenPlayer.slot === 'number') ? seenPlayer.slot : (st.slot !== null ? st.slot : 1);
+            const fwd = new Uint8Array(TRANSFORM_BYTE_LENGTH);
+            fwd.set(bin);
+            fwd[0] = PKT_TRANSFORM_BASE | (slotNum & 0x0f);
+            this.broadcast(fwd.buffer, peerId);
+            if (this.onMessage) this.onMessage(peerId, st);
+            return;
+          }
+          return;
+        }
+
+        if (typeof msg !== 'object') return;
         if (msg.type === 'ADMIN_SHUTDOWN') {
           this._sendRoomHeartbeat(true);
           return;
@@ -1150,6 +1352,18 @@ window.LO = window.LO || {};
           return;
         }
 
+        if (msg.type === 'ping_r') {
+          if (typeof msg.r === 'number' && isFinite(msg.r)) {
+            const p = this.getPlayer(peerId);
+            if (p) {
+              p.ping = Math.max(0, Math.round(msg.r));
+              this._broadcastPings();
+              this._emitPing();
+            }
+          }
+          return;
+        }
+
         if (msg.type === 'rename') {
           const p = this.getPlayer(peerId);
           if (p) {
@@ -1188,6 +1402,25 @@ window.LO = window.LO || {};
           };
           this.broadcast(pkt);
           if (this.onChat) this.onChat(pkt);
+          return;
+        }
+
+        if (msg.type === 'p_meta') {
+          const p = this.getPlayer(peerId);
+          if (p && p.hiddenAdmin) return;
+          const prev = this.remoteStates.get(peerId) || { type: 'p_state' };
+          if (typeof msg.health === 'number') prev.health = msg.health;
+          if (msg.hideSpotIdx !== undefined) prev.hideSpotIdx = msg.hideSpotIdx;
+          if (typeof msg.pitch === 'number') prev.pitch = msg.pitch;
+          if (msg.hidden !== undefined) prev.hidden = !!msg.hidden;
+          this.remoteStates.set(peerId, prev);
+          if (p) {
+            if (typeof msg.health === 'number') p.health = msg.health;
+            if (msg.hideSpotIdx !== undefined) p.hideSpotIdx = msg.hideSpotIdx;
+            if (msg.hidden !== undefined) p.hidden = !!msg.hidden;
+          }
+          this.broadcast(Object.assign({}, msg, { id: peerId }), peerId);
+          if (this.onMessage) this.onMessage(peerId, Object.assign({ type: 'p_meta' }, prev));
           return;
         }
 
@@ -1321,7 +1554,45 @@ window.LO = window.LO || {};
             });
 
             conn.on('data', msg => {
-              if (this.hostConn !== conn || !msg || typeof msg !== 'object') return;
+              if (this.hostConn !== conn || !msg) return;
+              const bin = toUint8View(msg);
+              if (bin) {
+                if (this.onDataTick && this.onDataTick(msg, 'host') === true) return;
+                if (bin.byteLength === 1 && bin[0] === PKT_KEEPALIVE_PONG) {
+                  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                  const sent = this._lastPingSentAt || now;
+                  const raw = Math.max(1, Math.round(now - sent));
+                  this.pingMs = this.pingMs === null ? raw : Math.round(this.pingMs * 0.45 + raw * 0.55);
+                  const me = this.getPlayer(this.localId);
+                  if (me) me.ping = this.pingMs;
+                  this._emitPing();
+                  if (!this.inGame && (this._lastSyncedPing === null || Math.abs(this.pingMs - this._lastSyncedPing) >= 6)) {
+                    this._lastSyncedPing = this.pingMs;
+                    this.sendToHost({ type: 'ping_r', r: this.pingMs });
+                  }
+                  return;
+                }
+                if (bin.byteLength === TRANSFORM_BYTE_LENGTH) {
+                  const b0 = bin[0];
+                  const slot = (b0 & 0xf0) === PKT_TRANSFORM_BASE ? (b0 & 0x0f) : 0;
+                  const target = this.players.find(pl => pl && pl.slot === slot && !pl.hiddenAdmin);
+                  if (!target || target.id === this.localId) return;
+                  const prev = this.remoteStates.get(target.id);
+                  const st = decodeTransformPacket(bin, prev);
+                  if (!st) return;
+                  this.remoteStates.set(target.id, st);
+                  if (!target.left) {
+                    if (target.alive !== false) target.alive = st.alive !== false;
+                    target.hidden = !!st.hidden;
+                    if (!st.hidden) target.hideSpotIdx = -1;
+                  }
+                  if (this.onMessage) this.onMessage(target.id, st);
+                  return;
+                }
+                return;
+              }
+
+              if (typeof msg !== 'object') return;
               if (msg.type === 'reject') {
                 fail(msg.reason || 'Host rejected connection.');
                 return;
@@ -1420,6 +1691,22 @@ window.LO = window.LO || {};
                 if (this.onChat) this.onChat(msg);
                 return;
               }
+              if (msg.type === 'p_meta' && msg.id && msg.id !== this.localId) {
+                const prev = this.remoteStates.get(msg.id) || { type: 'p_state' };
+                if (typeof msg.health === 'number') prev.health = msg.health;
+                if (msg.hideSpotIdx !== undefined) prev.hideSpotIdx = msg.hideSpotIdx;
+                if (typeof msg.pitch === 'number') prev.pitch = msg.pitch;
+                if (msg.hidden !== undefined) prev.hidden = !!msg.hidden;
+                this.remoteStates.set(msg.id, prev);
+                const lp = this.getPlayer(msg.id);
+                if (lp && !lp.left) {
+                  if (typeof msg.health === 'number') lp.health = msg.health;
+                  if (msg.hideSpotIdx !== undefined) lp.hideSpotIdx = msg.hideSpotIdx;
+                  if (msg.hidden !== undefined) lp.hidden = !!msg.hidden;
+                }
+                if (this.onMessage) this.onMessage(msg.id, Object.assign({}, prev, { type: 'p_meta' }));
+                return;
+              }
               if (msg.type === 'world_snap' && Array.isArray(msg.players)) {
                 for (let i = 0; i < msg.players.length; i++) {
                   const ps = msg.players[i];
@@ -1503,6 +1790,8 @@ window.LO = window.LO || {};
       this._stopHostWatchdog();
       if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
       this.pingMs = null;
+      this._lastPingSentAt = 0;
+      this._lastSyncedPing = null;
       this.disableVoice();
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
       this.voiceCalls.clear();
