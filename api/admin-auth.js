@@ -7,9 +7,7 @@ const crypto = require('crypto');
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
 function getAdminSecret() {
-  const raw = process.env.ADMIN_SECRET;
-  if (typeof raw !== 'string' || !raw.length) return '';
-  return raw;
+  return String(process.env.ADMIN_SECRET || '').trim();
 }
 
 function timingSafeEqualStr(a, b) {
@@ -179,6 +177,7 @@ function verifyScopedTicket(token) {
 
 handler.verifyAdminRequest = verifyAdminRequest;
 handler.verifyAdminToken = verifyAdminToken;
+handler.timingSafeEqualStr = timingSafeEqualStr;
 handler.getAdminSecret = getAdminSecret;
 handler.issueScopedTicket = issueScopedTicket;
 handler.verifyScopedTicket = verifyScopedTicket;

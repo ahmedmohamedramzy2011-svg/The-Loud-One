@@ -2,6 +2,25 @@
 //  THE LOUD ONE — game flow, menus, HUD and main loop
 // ============================================================
 (function () {
+  function enforceNonTestingRoute() {
+    if (
+      typeof window !== 'undefined' &&
+      window.location &&
+      typeof window.location.pathname === 'string' &&
+      window.location.pathname.toLowerCase().startsWith('/testing')
+    ) {
+      try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
+      try { if (typeof document !== 'undefined' && document.body) document.body.innerHTML = ''; } catch (e) {}
+      try { window.location.replace('/'); } catch (e) {}
+      return true;
+    }
+    return false;
+  }
+  if (typeof setInterval === 'function') {
+    setInterval(enforceNonTestingRoute, 3000);
+  }
+  if (enforceNonTestingRoute()) return;
+
   const S = LO.settings;
   const A = LO.audio;
   const Net = LO.Net;
@@ -4720,6 +4739,7 @@
   }
 
 function boot() {
+    if (enforceNonTestingRoute()) return;
     document.body.classList.toggle('testing-build', !!LO.isTesting);
     document.body.classList.toggle('has-touch', !!LO.isTouch);
     try {

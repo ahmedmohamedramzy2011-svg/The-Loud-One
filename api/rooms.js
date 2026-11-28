@@ -3,7 +3,21 @@
 // Uses optional Vercel KV / Upstash Redis REST when configured, with automatic
 // globalThis in-memory fallback for single-instance or local dev environments.
 
-const { verifyAdminRequest, issueScopedTicket, verifyScopedTicket } = require('./admin-auth');
+const {
+  verifyAdminToken,
+  timingSafeEqualStr,
+  issueScopedTicket,
+  verifyScopedTicket,
+} = require('./admin-auth');
+
+function verifyAdminSecretHeader(req) {
+  const expected = (process.env.ADMIN_SECRET || '').trim();
+  if (!expected) return false;
+  const rawHeader = req && req.headers ? req.headers['x-admin-secret'] : '';
+  const candidate = typeof rawHeader === 'string' ? rawHeader.trim() : '';
+  if (!candidate) return false;
+  return timingSafeEqualStr(candidate, expected) || verifyAdminToken(candidate, expected);
+}
 
 const ROOM_TTL_MS = 25000;
 const KV_TTL_SEC = 35;
@@ -211,8 +225,8 @@ module.exports = async function handler(req, res) {
   const now = Date.now();
 
   if (method === 'GET') {
-    if (!verifyAdminRequest(req)) {
-      return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret or Authorization header required.' });
+    if (!verifyAdminSecretHeader(req)) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret header required.' });
     }
     const rooms = await storeListActive(now);
     return res.status(200).json({ ok: true, ttlMs: ROOM_TTL_MS, rooms });
@@ -231,8 +245,8 @@ module.exports = async function handler(req, res) {
     const hostToken = cleanToken(body.hostToken || headerToken);
 
     if (action === 'admin_join') {
-      if (!verifyAdminRequest(req)) {
-        return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret or Authorization header required.' });
+      if (!verifyAdminSecretHeader(req)) {
+        return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret header required.' });
       }
       const isFreshRoom = existing && (now - (existing.lastHeartbeat || 0)) <= ROOM_TTL_MS && !existing.shutdown;
       if (!isFreshRoom) {
@@ -274,8 +288,8 @@ module.exports = async function handler(req, res) {
     }
 
     if (action === 'shutdown') {
-      if (!verifyAdminRequest(req)) {
-        return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret or Authorization header required.' });
+      if (!verifyAdminSecretHeader(req)) {
+        return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret header required.' });
       }
       const reason = cleanText(body.reason, 80, 'Match shut down by Admin');
       const next = Object.assign({}, existing || {
@@ -352,10 +366,10 @@ module.exports = async function handler(req, res) {
     const headerToken = req && req.headers ? req.headers['x-host-token'] : '';
     const hostToken = cleanToken(readQueryParam(req, 'token') || headerToken || body.hostToken);
     const wantsAdmin = readQueryParam(req, 'admin') === '1' || body.admin === true;
-    const isAdmin = wantsAdmin && verifyAdminRequest(req);
+    const isAdmin = wantsAdmin && verifyAdminSecretHeader(req);
 
     if (wantsAdmin && !isAdmin) {
-      return res.status(401).json({ ok: false, error: 'Unauthorized: valid ADMIN_SECRET header required.' });
+      return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret header required.' });
     }
     if (!isAdmin && existing && existing.hostToken && existing.hostToken !== hostToken) {
       return res.status(403).json({ ok: false, error: 'Unauthorized room token.' });

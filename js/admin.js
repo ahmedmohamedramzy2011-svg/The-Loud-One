@@ -1351,6 +1351,10 @@
             try {
               await H.joinMatchAdmin(sess.roomId, admin.adminJoinHidden);
             } catch (err) {
+              if (err && err.status === 401) {
+                evictUnauthorizedAdmin();
+                return;
+              }
               setStatus((err && err.message) ? err.message : `Failed to join ${sess.roomId}.`);
               joinBtn.disabled = false;
               joinBtn.textContent = admin.adminJoinHidden ? 'Join (Hidden)' : 'Join Match';
@@ -1376,7 +1380,7 @@
                 shutBtn.disabled = false;
                 shutBtn.textContent = 'Shut Down Match';
                 if (res && res.status === 401) {
-                  admin.closePanel();
+                  evictUnauthorizedAdmin();
                 }
               }
             } catch (err) {
@@ -1406,6 +1410,21 @@
     return `${m}m ${String(s).padStart(2, '0')}s`;
   }
 
+  function evictUnauthorizedAdmin() {
+    if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
+    try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
+    admin.sessions = [];
+    admin.sessionsError = 'Admin authorization required.';
+    admin.closePanel(true);
+    const panelEl = $('admin-panel');
+    if (panelEl) panelEl.classList.remove('active');
+    try {
+      if (typeof window !== 'undefined' && window.location && typeof window.location.replace === 'function') {
+        window.location.replace('/');
+      }
+    } catch (e) {}
+  }
+
   async function refreshSessions() {
     if (admin.sessionsLoading) return;
     const token = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
@@ -1427,10 +1446,7 @@
         cache: 'no-store',
       });
       if (res && res.status === 401) {
-        if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
-        admin.sessions = [];
-        admin.sessionsError = 'Admin session expired. Press Ctrl+Shift+F9 to verify.';
-        admin.closePanel();
+        evictUnauthorizedAdmin();
         return;
       }
       if (!res || !res.ok) throw new Error('Could not load active rooms.');
@@ -1443,6 +1459,7 @@
       if (admin.open && admin.activeTab === 'multiplayer') renderBody();
     }
   }
+  admin.refreshSessions = refreshSessions;
 
   function refreshLiveUI() {
     const H = host();

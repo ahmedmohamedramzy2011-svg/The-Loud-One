@@ -2061,7 +2061,10 @@ window.LO = window.LO || {};
       const json = await res.json().catch(() => ({}));
       if (res && res.status === 401) {
         if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
-        throw new Error((json && json.error) || 'Admin authorization required.');
+        try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
+        const err = new Error((json && json.error) || 'Admin authorization required.');
+        err.status = 401;
+        throw err;
       }
       if (!res || !res.ok || !json || !json.adminJoinToken) {
         throw new Error((json && json.error) || 'Failed to authorize admin join.');
@@ -2105,8 +2108,9 @@ window.LO = window.LO || {};
         }
       }
       if (!ok) {
-        if (status === 401 && LO.AdminAuth && LO.AdminAuth.clear) {
-          LO.AdminAuth.clear();
+        if (status === 401) {
+          if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
+          try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
         }
         return { ok: false, status, error: errMsg || 'Failed to shut down match.' };
       }
