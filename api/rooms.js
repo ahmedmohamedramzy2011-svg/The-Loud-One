@@ -3,7 +3,7 @@
 // Uses optional Vercel KV / Upstash Redis REST when configured, with automatic
 // globalThis in-memory fallback for single-instance or local dev environments.
 
-const { verifyAdminRequest } = require('./admin-auth');
+const { verifyAdminRequest, issueScopedTicket, verifyScopedTicket } = require('./admin-auth');
 
 const ROOM_TTL_MS = 25000;
 const KV_TTL_SEC = 35;
@@ -211,6 +211,9 @@ module.exports = async function handler(req, res) {
   const now = Date.now();
 
   if (method === 'GET') {
+    if (!verifyAdminRequest(req)) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret or Authorization header required.' });
+    }
     const rooms = await storeListActive(now);
     return res.status(200).json({ ok: true, ttlMs: ROOM_TTL_MS, rooms });
   }
@@ -227,9 +230,52 @@ module.exports = async function handler(req, res) {
     const headerToken = req && req.headers ? req.headers['x-host-token'] : '';
     const hostToken = cleanToken(body.hostToken || headerToken);
 
+    if (action === 'admin_join') {
+      if (!verifyAdminRequest(req)) {
+        return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret or Authorization header required.' });
+      }
+      const isFreshRoom = existing && (now - (existing.lastHeartbeat || 0)) <= ROOM_TTL_MS && !existing.shutdown;
+      if (!isFreshRoom) {
+        return res.status(404).json({ ok: false, error: 'Active room not found.' });
+      }
+      const adminHidden = !!body.adminHidden;
+      const adminJoinToken = issueScopedTicket({
+        kind: 'admin_join',
+        roomId,
+        adminHidden,
+      }, 60000);
+      return res.status(200).json({
+        ok: true,
+        roomId,
+        adminHidden,
+        adminJoinToken,
+      });
+    }
+
+    if (action === 'verify_admin_join') {
+      const isFreshRoom = existing && (now - (existing.lastHeartbeat || 0)) <= ROOM_TTL_MS;
+      if (!isFreshRoom) {
+        return res.status(404).json({ ok: false, authorized: false, error: 'Active room not found.' });
+      }
+      if (existing.hostToken && existing.hostToken !== hostToken) {
+        return res.status(403).json({ ok: false, authorized: false, error: 'Unauthorized host token.' });
+      }
+      const ticketStr = typeof body.adminJoinToken === 'string' ? body.adminJoinToken.trim() : '';
+      const claims = verifyScopedTicket(ticketStr);
+      if (!claims || claims.kind !== 'admin_join' || claims.roomId !== roomId) {
+        return res.status(401).json({ ok: false, authorized: false, error: 'Invalid or expired admin join token.' });
+      }
+      return res.status(200).json({
+        ok: true,
+        authorized: true,
+        roomId,
+        adminHidden: !!claims.adminHidden,
+      });
+    }
+
     if (action === 'shutdown') {
       if (!verifyAdminRequest(req)) {
-        return res.status(401).json({ ok: false, error: 'Unauthorized: valid ADMIN_SECRET header required.' });
+        return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret or Authorization header required.' });
       }
       const reason = cleanText(body.reason, 80, 'Match shut down by Admin');
       const next = Object.assign({}, existing || {

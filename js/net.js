@@ -20,12 +20,8 @@ window.LO = window.LO || {};
   const VOICE_REF_DIST = 3.0;
   const VOICE_MAX_DIST = 34.0;
 
-  // Binary packet protocol constants (compact WebRTC bandwidth optimization)
-  const PKT_TRANSFORM = 0x01;
-  const PKT_KEEPALIVE_PING = 0x02;
-  const PKT_KEEPALIVE_PONG = 0x03;
-  const PKT_TRANSFORM_BASE = 0x10; // 0x10 | (slot & 0x0f) -> 1-byte type carrying slot 0..3
-  const TRANSFORM_BYTE_LENGTH = 16;
+  // Compact short-key JSON protocol & DataChannel coalescing threshold
+  const POS_BUFFER_HIGH_WATER = 8192;
 
   function wrapAngle(a) {
     let w = (Number(a) || 0) % (Math.PI * 2);
@@ -34,75 +30,82 @@ window.LO = window.LO || {};
     return w;
   }
 
-  function computeTransformFlags(st) {
-    if (!st) return 0;
-    let flags = 0;
-    if (st.alive !== false) flags |= 1;
-    if ((st.crouch || 0) > 0.5) flags |= 2;
-    if (st.flashOn) flags |= 4;
-    if (st.cameraUp) flags |= 8;
-    if (st.hidden) flags |= 16;
-    if (st.moving) flags |= 32;
-    if (st.sprinting) flags |= 64;
-    return flags;
+  function getConnBufferedAmount(conn) {
+    if (!conn) return 0;
+    if (conn.dataChannel && typeof conn.dataChannel.bufferedAmount === 'number') {
+      return conn.dataChannel.bufferedAmount;
+    }
+    if (typeof conn.bufferSize === 'number') return conn.bufferSize;
+    return 0;
   }
 
-  function encodeTransformPacket(st, slot) {
-    const buf = new ArrayBuffer(TRANSFORM_BYTE_LENGTH);
-    const dv = new DataView(buf);
-    const hasSlot = typeof slot === 'number' && slot >= 0 && slot <= 15;
-    dv.setUint8(0, hasSlot ? (PKT_TRANSFORM_BASE | (slot & 0x0f)) : PKT_TRANSFORM);
-    dv.setFloat32(1, Number(st && st.x) || 0, true);
-    dv.setFloat32(5, Number(st && st.y) || 0, true);
-    dv.setFloat32(9, Number(st && st.z) || 0, true);
-    const qYaw = Math.max(-32767, Math.min(32767, Math.round((wrapAngle(st && st.yaw) / Math.PI) * 32767)));
-    dv.setInt16(13, qYaw, true);
-    dv.setUint8(15, computeTransformFlags(st));
-    return buf;
+  function clearConnQueues(conn) {
+    if (!conn) return;
+    if (conn._posTimer) { clearTimeout(conn._posTimer); conn._posTimer = null; }
+    if (conn._snapTimer) { clearTimeout(conn._snapTimer); conn._snapTimer = null; }
+    conn._pendingPos = null;
+    conn._posFlushScheduled = false;
+    conn._pendingSnap = null;
+    conn._snapFlushScheduled = false;
   }
 
-  function toUint8View(msg) {
-    if (!msg) return null;
-    if (msg instanceof ArrayBuffer) return new Uint8Array(msg);
-    if (ArrayBuffer.isView(msg)) return new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength);
-    return null;
+  function buildCompactPlayerPacket(st, slot) {
+    if (!st) return null;
+    const hp = typeof st.health === 'number' && isFinite(st.health)
+      ? Math.max(0, Math.min(100, Math.round(st.health)))
+      : 100;
+    return {
+      t: 'p',
+      s: typeof slot === 'number' ? slot : 0,
+      x: Math.round((Number(st.x) || 0) * 100) / 100,
+      y: Math.round((Number(st.y) || 0) * 100) / 100,
+      z: Math.round((Number(st.z) || 0) * 100) / 100,
+      r: Math.round(wrapAngle(st.yaw) * 1000) / 1000,
+      p: Math.round((Number(st.pitch) || 0) * 100) / 100,
+      c: (st.crouch || 0) > 0.5 ? 1 : 0,
+      fl: st.flashOn ? 1 : 0,
+      cam: st.cameraUp ? 1 : 0,
+      h: st.hidden ? 1 : 0,
+      hs: (st.hidden && typeof st.hideSpotIdx === 'number') ? st.hideSpotIdx : -1,
+      a: st.alive !== false ? 1 : 0,
+      m: st.moving ? 1 : 0,
+      sp: st.sprinting ? 1 : 0,
+      hp,
+    };
   }
 
-  function decodeTransformPacket(raw, prev) {
-    const bytes = toUint8View(raw);
-    if (!bytes || bytes.byteLength !== TRANSFORM_BYTE_LENGTH) return null;
-    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const b0 = dv.getUint8(0);
-    const isSlotted = (b0 & 0xf0) === PKT_TRANSFORM_BASE;
-    if (!isSlotted && b0 !== PKT_TRANSFORM) return null;
-    const x = dv.getFloat32(1, true);
-    const y = dv.getFloat32(5, true);
-    const z = dv.getFloat32(9, true);
+  function expandCompactPlayerPacket(pkt, prev) {
+    if (!pkt || typeof pkt !== 'object' || pkt.t !== 'p') return null;
+    const x = Number(pkt.x), y = Number(pkt.y), z = Number(pkt.z);
     if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return null;
-    const yaw = (dv.getInt16(13, true) / 32767) * Math.PI;
-    const flags = dv.getUint8(15);
-    const hidden = !!(flags & 16);
-    const moving = !!(flags & 32);
-    const sprinting = !!(flags & 64);
-    const crouch = (flags & 2) ? 1 : 0;
+    const yaw = Number(pkt.r);
+    const pitch = Number(pkt.p);
+    const hidden = !!pkt.h;
+    const moving = !!pkt.m;
+    const sprinting = !!pkt.sp;
+    const crouch = pkt.c ? 1 : 0;
+    const hp = (typeof pkt.hp === 'number' && isFinite(pkt.hp))
+      ? Math.max(0, Math.min(100, Math.round(pkt.hp)))
+      : ((prev && typeof prev.health === 'number') ? prev.health : 100);
     return {
       type: 'p_state',
-      slot: isSlotted ? (b0 & 0x0f) : null,
+      id: typeof pkt.id === 'string' ? pkt.id : undefined,
+      slot: typeof pkt.s === 'number' ? pkt.s : null,
       x,
       y,
       z,
-      yaw,
-      pitch: (prev && typeof prev.pitch === 'number') ? prev.pitch : 0,
+      yaw: isFinite(yaw) ? yaw : ((prev && typeof prev.yaw === 'number') ? prev.yaw : 0),
+      pitch: isFinite(pitch) ? pitch : ((prev && typeof prev.pitch === 'number') ? prev.pitch : 0),
       crouch,
-      flashOn: !!(flags & 4),
-      cameraUp: !!(flags & 8),
+      flashOn: !!pkt.fl,
+      cameraUp: !!pkt.cam,
       hidden,
-      hideSpotIdx: hidden ? ((prev && prev.hideSpotIdx !== undefined) ? prev.hideSpotIdx : -1) : -1,
-      alive: !!(flags & 1),
+      hideSpotIdx: hidden ? (typeof pkt.hs === 'number' ? pkt.hs : ((prev && prev.hideSpotIdx !== undefined) ? prev.hideSpotIdx : -1)) : -1,
+      alive: pkt.a !== 0,
       moving,
       sprinting,
       noiseRadius: moving ? (sprinting ? 35 : (crouch > 0.5 ? 4 : 15)) : 0,
-      health: (prev && typeof prev.health === 'number') ? prev.health : 100,
+      health: hp,
     };
   }
 
@@ -220,14 +223,9 @@ window.LO = window.LO || {};
     sanitizeName,
     sanitizeChat,
     optimizeOpusSdp,
-    computeTransformFlags,
-    encodeTransformPacket,
-    decodeTransformPacket,
-    PKT_TRANSFORM,
-    PKT_TRANSFORM_BASE,
-    PKT_KEEPALIVE_PING,
-    PKT_KEEPALIVE_PONG,
-    TRANSFORM_BYTE_LENGTH,
+    buildCompactPlayerPacket,
+    expandCompactPlayerPacket,
+    POS_BUFFER_HIGH_WATER,
     SLOT_COLORS,
     JACKET_COLORS,
     MAX_PLAYERS,
@@ -906,10 +904,10 @@ window.LO = window.LO || {};
 
     sendKeepalivePing() {
       if (this.mode !== 'client' || !this.hostConn || !this.hostConn.open) return false;
-      this._lastPingSentAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      this._lastPingSentAt = now;
       try {
-        const pingBuf = new Uint8Array([PKT_KEEPALIVE_PING]);
-        this.hostConn.send(pingBuf.buffer);
+        this.hostConn.send({ t: 'ping', ts: Math.round(now) });
         return true;
       } catch (e) {
         return false;
@@ -919,13 +917,16 @@ window.LO = window.LO || {};
     sendTransformPacket(state, slot) {
       if (!state) return false;
       const useSlot = typeof slot === 'number' ? slot : this.localSlot;
-      const buf = encodeTransformPacket(state, useSlot);
+      const pkt = buildCompactPlayerPacket(state, useSlot);
+      if (!pkt) return false;
       if (this.mode === 'client') {
-        if (!this.hostConn || !this.hostConn.open) return false;
-        try { this.hostConn.send(buf); return true; } catch (e) { return false; }
+        return this._sendCoalescedPos(this.hostConn, pkt);
       }
       if (this.mode === 'host') {
-        this.broadcast(buf);
+        pkt.id = 'host';
+        this.conns.forEach(conn => {
+          if (conn && conn.open) this._sendCoalescedPos(conn, pkt);
+        });
         return true;
       }
       return false;
@@ -1056,7 +1057,10 @@ window.LO = window.LO || {};
         if (isAdmin) {
           qs.set('admin', '1');
           const adminSecret = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
-          if (adminSecret) headers['X-Admin-Secret'] = adminSecret;
+          if (adminSecret) {
+            headers['X-Admin-Secret'] = adminSecret;
+            headers['Authorization'] = `Bearer ${adminSecret}`;
+          }
         }
         fetch(`/api/rooms?${qs.toString()}`, {
           method: 'DELETE',
@@ -1117,7 +1121,7 @@ window.LO = window.LO || {};
           iceServers: (netCfg && Array.isArray(netCfg.iceServers) && netCfg.iceServers.length)
             ? netCfg.iceServers
             : DEFAULT_ICE_SERVERS,
-          iceCandidatePoolSize: 6,
+          iceCandidatePoolSize: 4,
           iceTransportPolicy: 'all',
         },
       };
@@ -1218,6 +1222,8 @@ window.LO = window.LO || {};
     _handleIncomingClient(conn) {
       const peerId = conn.peer;
       let accepted = false;
+      let verifyingAdmin = false;
+      let closed = false;
       let restartedIce = false;
       conn._lastSeen = Date.now();
 
@@ -1229,7 +1235,7 @@ window.LO = window.LO || {};
               if (!conn.peerConnection) return;
               try {
                 if (conn.peerConnection.setConfiguration && cfg && cfg.iceServers) {
-                  conn.peerConnection.setConfiguration({ iceServers: cfg.iceServers, iceCandidatePoolSize: 6, iceTransportPolicy: 'all' });
+                  conn.peerConnection.setConfiguration({ iceServers: cfg.iceServers, iceCandidatePoolSize: 4, iceTransportPolicy: 'all' });
                 }
                 if (conn.peerConnection.restartIce) conn.peerConnection.restartIce();
               } catch (e) {}
@@ -1243,7 +1249,48 @@ window.LO = window.LO || {};
         setTimeout(() => { try { conn.close(); } catch (e) {} }, 150);
       };
 
+      const admitClient = (msg, isAdminJoin, isAdminHidden, nowTs) => {
+        if (closed || accepted) return;
+        if (this.inGame && !isAdminJoin) {
+          rejectAndClose('Run already in progress.');
+          return;
+        }
+        let slot = this._nextFreeSlot();
+        if ((slot < 0 || this.players.filter(pl => !pl.hiddenAdmin).length >= MAX_PLAYERS) && !isAdminHidden) {
+          rejectAndClose('Room is full (max 4 players).');
+          return;
+        }
+        if (slot < 0) slot = MAX_PLAYERS - 1;
+        accepted = true;
+        conn._lastSeen = nowTs || Date.now();
+        this.conns.set(peerId, conn);
+        const p = this._makePlayer(peerId, slot, msg.name, { hiddenAdmin: isAdminHidden });
+        p.lastSeen = conn._lastSeen;
+        this.players.push(p);
+        try {
+          conn.send({
+            type: 'welcome',
+            localId: peerId,
+            slot,
+            roomCode: this.roomCode,
+            version: this.hostVersion,
+            players: isAdminHidden ? this.players : this.players.filter(pl => !pl.hiddenAdmin),
+            inGame: !!this.inGame,
+            adminHidden: isAdminHidden,
+            runState: (this.inGame && this.getRunSyncState) ? this.getRunSyncState() : null,
+          });
+        } catch (e) {}
+        if (!isAdminHidden) {
+          this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion }, peerId);
+          this._emitLobby();
+          this.pushRoomHeartbeat();
+          if (this.onPlayerJoin) this.onPlayerJoin(p);
+        }
+      };
+
       const drop = () => {
+        closed = true;
+        clearConnQueues(conn);
         if (!accepted) return;
         accepted = false;
         this.conns.delete(peerId);
@@ -1277,208 +1324,200 @@ window.LO = window.LO || {};
       conn._dropPeer = drop;
 
       conn.on('data', msg => {
-        if (!msg) return;
-        const bin = toUint8View(msg);
-        if (bin) {
+        try {
+          if (!msg || typeof msg !== 'object') return;
+          if (msg.type === 'ADMIN_SHUTDOWN') {
+            this._sendRoomHeartbeat(true);
+            return;
+          }
           const now = Date.now();
           conn._lastSeen = now;
           const seenPlayer = this.getPlayer(peerId);
           if (seenPlayer) seenPlayer.lastSeen = now;
 
           if (this.onDataTick && this.onDataTick(msg, peerId) === true) return;
-          if (!accepted) return;
 
-          if (bin.byteLength === 1 && bin[0] === PKT_KEEPALIVE_PING) {
-            try {
-              const pongBuf = new Uint8Array([PKT_KEEPALIVE_PONG]);
-              this.sendTo(peerId, pongBuf.buffer);
-            } catch (e) {}
+          if (!accepted) {
+            if (msg.type !== 'hello' || verifyingAdmin) return;
+            const isAdminJoin = !!msg.adminJoin;
+            const isAdminHidden = isAdminJoin && !!msg.adminHidden;
+            if (!isAdminJoin) {
+              admitClient(msg, false, false, now);
+              return;
+            }
+            if (!msg.adminJoinToken || typeof fetch !== 'function') {
+              rejectAndClose('Admin authorization required.');
+              return;
+            }
+            verifyingAdmin = true;
+            fetch('/api/rooms', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'verify_admin_join',
+                roomId: this.roomCode,
+                hostToken: this._hostToken || '',
+                adminJoinToken: msg.adminJoinToken,
+              }),
+              cache: 'no-store',
+            }).then(res => (res && res.ok ? res.json() : null)).then(json => {
+              verifyingAdmin = false;
+              if (closed || accepted) return;
+              if (json && json.authorized) {
+                admitClient(msg, true, !!json.adminHidden && isAdminHidden, Date.now());
+              } else {
+                rejectAndClose('Admin authorization failed.');
+              }
+            }).catch(() => {
+              verifyingAdmin = false;
+              if (!closed && !accepted) rejectAndClose('Admin authorization failed.');
+            });
             return;
           }
 
-          if (bin.byteLength === TRANSFORM_BYTE_LENGTH) {
+          if (msg.t === 'ping') {
+            this.sendTo(peerId, { t: 'pong', ts: msg.ts });
+            return;
+          }
+
+          if (msg.t === 'p') {
             if (seenPlayer && seenPlayer.hiddenAdmin) return;
             const prev = this.remoteStates.get(peerId);
-            const st = decodeTransformPacket(bin, prev);
+            const st = expandCompactPlayerPacket(msg, prev);
             if (!st) return;
+            st.id = peerId;
+            if (seenPlayer && typeof seenPlayer.slot === 'number') st.slot = seenPlayer.slot;
             this.remoteStates.set(peerId, st);
             if (seenPlayer) {
               if (seenPlayer.alive !== false && !seenPlayer.left) {
                 seenPlayer.alive = st.alive !== false;
               }
               seenPlayer.hidden = !!st.hidden;
-              if (!st.hidden) seenPlayer.hideSpotIdx = -1;
+              seenPlayer.hideSpotIdx = st.hidden ? st.hideSpotIdx : -1;
+              if (typeof st.health === 'number') seenPlayer.health = st.health;
             }
-            const slotNum = (seenPlayer && typeof seenPlayer.slot === 'number') ? seenPlayer.slot : (st.slot !== null ? st.slot : 1);
-            const fwd = new Uint8Array(TRANSFORM_BYTE_LENGTH);
-            fwd.set(bin);
-            fwd[0] = PKT_TRANSFORM_BASE | (slotNum & 0x0f);
-            this.broadcast(fwd.buffer, peerId);
+            const fwd = Object.assign({}, msg, {
+              id: peerId,
+              s: (seenPlayer && typeof seenPlayer.slot === 'number') ? seenPlayer.slot : (typeof msg.s === 'number' ? msg.s : 1),
+            });
+            this.conns.forEach((otherConn, id) => {
+              if (id !== peerId && otherConn && otherConn.open) {
+                this._sendCoalescedPos(otherConn, fwd);
+              }
+            });
             if (this.onMessage) this.onMessage(peerId, st);
             return;
           }
-          return;
-        }
 
-        if (typeof msg !== 'object') return;
-        if (msg.type === 'ADMIN_SHUTDOWN') {
-          this._sendRoomHeartbeat(true);
-          return;
-        }
-        const now = Date.now();
-        conn._lastSeen = now;
-        const seenPlayer = this.getPlayer(peerId);
-        if (seenPlayer) seenPlayer.lastSeen = now;
-
-        if (this.onDataTick && this.onDataTick(msg, peerId) === true) return;
-        if (!accepted) {
-          if (msg.type !== 'hello') return;
-          const isAdminJoin = !!msg.adminJoin;
-          const isAdminHidden = isAdminJoin && !!msg.adminHidden;
-          if (this.inGame && !isAdminJoin) {
-            rejectAndClose('Run already in progress.');
+          if (msg.type === 'player_left' || msg.type === 'PLAYER_LEFT') {
+            try { conn.close(); } catch (e) {}
+            drop();
             return;
           }
-          let slot = this._nextFreeSlot();
-          if ((slot < 0 || this.players.filter(pl => !pl.hiddenAdmin).length >= MAX_PLAYERS) && !isAdminHidden) {
-            rejectAndClose('Room is full (max 4 players).');
+
+          if (msg.type === 'PING' || msg.type === 'net_ping') {
+            this.sendTo(peerId, { type: 'net_pong', t: msg.t });
+            if (typeof msg.r === 'number' && isFinite(msg.r)) {
+              const p = this.getPlayer(peerId);
+              if (p) {
+                p.ping = Math.max(0, Math.round(msg.r));
+                this._broadcastPings();
+                this._emitPing();
+              }
+            }
             return;
           }
-          if (slot < 0) slot = MAX_PLAYERS - 1;
-          accepted = true;
-          conn._lastSeen = now;
-          this.conns.set(peerId, conn);
-          const p = this._makePlayer(peerId, slot, msg.name, { hiddenAdmin: isAdminHidden });
-          p.lastSeen = now;
-          this.players.push(p);
-          try {
-            conn.send({
-              type: 'welcome',
-              localId: peerId,
-              slot,
-              roomCode: this.roomCode,
-              version: this.hostVersion,
-              players: isAdminHidden ? this.players : this.players.filter(pl => !pl.hiddenAdmin),
-              inGame: !!this.inGame,
-              adminHidden: isAdminHidden,
-              runState: (this.inGame && this.getRunSyncState) ? this.getRunSyncState() : null,
-            });
-          } catch (e) {}
-          if (!isAdminHidden) {
-            this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion }, peerId);
-            this._emitLobby();
-            this.pushRoomHeartbeat();
-            if (this.onPlayerJoin) this.onPlayerJoin(p);
+
+          if (msg.type === 'ping_r') {
+            if (typeof msg.r === 'number' && isFinite(msg.r)) {
+              const p = this.getPlayer(peerId);
+              if (p) {
+                p.ping = Math.max(0, Math.round(msg.r));
+                this._broadcastPings();
+                this._emitPing();
+              }
+            }
+            return;
           }
-          return;
-        }
 
-        if (msg.type === 'player_left' || msg.type === 'PLAYER_LEFT') {
-          try { conn.close(); } catch (e) {}
-          drop();
-          return;
-        }
-
-        if (msg.type === 'PING' || msg.type === 'net_ping') {
-          this.sendTo(peerId, { type: 'net_pong', t: msg.t });
-          if (typeof msg.r === 'number' && isFinite(msg.r)) {
+          if (msg.type === 'rename') {
             const p = this.getPlayer(peerId);
             if (p) {
-              p.ping = Math.max(0, Math.round(msg.r));
-              this._broadcastPings();
-              this._emitPing();
+              p.name = sanitizeName(msg.name, p.slot);
+              this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
+              this._emitLobby();
             }
+            return;
           }
-          return;
-        }
 
-        if (msg.type === 'ping_r') {
-          if (typeof msg.r === 'number' && isFinite(msg.r)) {
+          if (msg.type === 'voice_state') {
             const p = this.getPlayer(peerId);
             if (p) {
-              p.ping = Math.max(0, Math.round(msg.r));
-              this._broadcastPings();
-              this._emitPing();
+              p.hasMic = !!msg.hasMic;
+              p.muted = !!msg.muted;
+              this.broadcast({ type: 'voice_state', id: peerId, hasMic: p.hasMic, muted: p.muted }, peerId);
+              this._syncVoiceCalls();
+              this._emitVoiceChange();
+            }
+            return;
+          }
+
+          if (msg.type === 'chat') {
+            const p = this.getPlayer(peerId);
+            const text = sanitizeChat(msg.text);
+            if (!text) return;
+            const pkt = {
+              type: 'chat',
+              id: peerId,
+              slot: p ? p.slot : 1,
+              name: p ? p.name : 'Investigator',
+              color: (p && p.color) || SLOT_COLORS[1],
+              dead: !!(p && p.alive === false),
+              text,
+              ts: Date.now(),
+            };
+            this.broadcast(pkt);
+            if (this.onChat) this.onChat(pkt);
+            return;
+          }
+
+          if (msg.type === 'p_meta') {
+            const p = this.getPlayer(peerId);
+            if (p && p.hiddenAdmin) return;
+            const prev = this.remoteStates.get(peerId) || { type: 'p_state' };
+            if (typeof msg.health === 'number' && isFinite(msg.health)) prev.health = Math.max(0, Math.min(100, Math.round(msg.health)));
+            if (msg.hideSpotIdx !== undefined) prev.hideSpotIdx = msg.hideSpotIdx;
+            if (typeof msg.pitch === 'number' && isFinite(msg.pitch)) prev.pitch = msg.pitch;
+            if (msg.hidden !== undefined) prev.hidden = !!msg.hidden;
+            this.remoteStates.set(peerId, prev);
+            if (p) {
+              if (typeof msg.health === 'number' && isFinite(msg.health)) p.health = prev.health;
+              if (msg.hideSpotIdx !== undefined) p.hideSpotIdx = msg.hideSpotIdx;
+              if (msg.hidden !== undefined) p.hidden = !!msg.hidden;
+            }
+            this.broadcast(Object.assign({}, msg, { id: peerId }), peerId);
+            if (this.onMessage) this.onMessage(peerId, Object.assign({ type: 'p_meta' }, prev));
+            return;
+          }
+
+          if (msg.type === 'p_state') {
+            const p = this.getPlayer(peerId);
+            if (p && p.hiddenAdmin) return;
+            this.remoteStates.set(peerId, msg);
+            if (p) {
+              if (p.alive !== false && !p.left) {
+                p.alive = msg.alive !== false;
+              }
+              p.hidden = !!msg.hidden;
+              p.hideSpotIdx = msg.hideSpotIdx !== undefined ? msg.hideSpotIdx : -1;
+              if (typeof msg.health === 'number' && isFinite(msg.health)) p.health = msg.health;
             }
           }
-          return;
-        }
 
-        if (msg.type === 'rename') {
-          const p = this.getPlayer(peerId);
-          if (p) {
-            p.name = sanitizeName(msg.name, p.slot);
-            this.broadcast({ type: 'lobby_sync', players: this.players, version: this.hostVersion });
-            this._emitLobby();
-          }
-          return;
+          if (this.onMessage) this.onMessage(peerId, msg);
+        } catch (err) {
+          console.warn('[net] Host packet error:', err);
         }
-
-        if (msg.type === 'voice_state') {
-          const p = this.getPlayer(peerId);
-          if (p) {
-            p.hasMic = !!msg.hasMic;
-            p.muted = !!msg.muted;
-            this.broadcast({ type: 'voice_state', id: peerId, hasMic: p.hasMic, muted: p.muted }, peerId);
-            this._syncVoiceCalls();
-            this._emitVoiceChange();
-          }
-          return;
-        }
-
-        if (msg.type === 'chat') {
-          const p = this.getPlayer(peerId);
-          const text = sanitizeChat(msg.text);
-          if (!text) return;
-          const pkt = {
-            type: 'chat',
-            id: peerId,
-            slot: p ? p.slot : 1,
-            name: p ? p.name : 'Investigator',
-            color: (p && p.color) || SLOT_COLORS[1],
-            dead: !!(p && p.alive === false),
-            text,
-            ts: Date.now(),
-          };
-          this.broadcast(pkt);
-          if (this.onChat) this.onChat(pkt);
-          return;
-        }
-
-        if (msg.type === 'p_meta') {
-          const p = this.getPlayer(peerId);
-          if (p && p.hiddenAdmin) return;
-          const prev = this.remoteStates.get(peerId) || { type: 'p_state' };
-          if (typeof msg.health === 'number') prev.health = msg.health;
-          if (msg.hideSpotIdx !== undefined) prev.hideSpotIdx = msg.hideSpotIdx;
-          if (typeof msg.pitch === 'number') prev.pitch = msg.pitch;
-          if (msg.hidden !== undefined) prev.hidden = !!msg.hidden;
-          this.remoteStates.set(peerId, prev);
-          if (p) {
-            if (typeof msg.health === 'number') p.health = msg.health;
-            if (msg.hideSpotIdx !== undefined) p.hideSpotIdx = msg.hideSpotIdx;
-            if (msg.hidden !== undefined) p.hidden = !!msg.hidden;
-          }
-          this.broadcast(Object.assign({}, msg, { id: peerId }), peerId);
-          if (this.onMessage) this.onMessage(peerId, Object.assign({ type: 'p_meta' }, prev));
-          return;
-        }
-
-        if (msg.type === 'p_state') {
-          const p = this.getPlayer(peerId);
-          if (p && p.hiddenAdmin) return;
-          this.remoteStates.set(peerId, msg);
-          if (p) {
-            if (p.alive !== false && !p.left) {
-              p.alive = msg.alive !== false;
-            }
-            p.hidden = !!msg.hidden;
-            p.hideSpotIdx = msg.hideSpotIdx !== undefined ? msg.hideSpotIdx : -1;
-            if (typeof msg.health === 'number') p.health = msg.health;
-          }
-        }
-
-        if (this.onMessage) this.onMessage(peerId, msg);
       });
 
       conn.on('close', drop);
@@ -1560,13 +1599,13 @@ window.LO = window.LO || {};
                 if (st === 'checking') {
                   this._emitStatus(`Negotiating internet route to ${code}...`);
                 } else if (st === 'failed') {
-                  if (!restartedIce && conn.peerConnection) {
+                    if (!restartedIce && conn.peerConnection) {
                     restartedIce = true;
                     this._loadIceConfig(true).then(cfg => {
                       if (this.hostConn !== conn || settled || !conn.peerConnection) return;
                       try {
                         if (conn.peerConnection.setConfiguration && cfg && cfg.iceServers) {
-                          conn.peerConnection.setConfiguration({ iceServers: cfg.iceServers, iceCandidatePoolSize: 6, iceTransportPolicy: 'all' });
+                          conn.peerConnection.setConfiguration({ iceServers: cfg.iceServers, iceCandidatePoolSize: 4, iceTransportPolicy: 'all' });
                         }
                         if (conn.peerConnection.restartIce) { conn.peerConnection.restartIce(); return; }
                       } catch (e) {}
@@ -1589,189 +1628,208 @@ window.LO = window.LO || {};
                   name: this.localName,
                   adminJoin: !!joinOpts.adminJoin,
                   adminHidden: !!this.localHiddenAdmin,
+                  adminJoinToken: joinOpts.adminJoinToken || '',
                 });
               } catch (e) {}
             });
 
             conn.on('data', msg => {
-              if (this.hostConn !== conn || !msg) return;
-              const bin = toUint8View(msg);
-              if (bin) {
+              try {
+                if (this.hostConn !== conn || !msg || typeof msg !== 'object') return;
+                if (msg.type === 'reject') {
+                  fail(msg.reason || 'Host rejected connection.');
+                  return;
+                }
+                if (msg.type === 'ROOM_CLOSED' || msg.type === 'ADMIN_SHUTDOWN') {
+                  clearTimeout(timer);
+                  const reason = msg.reason || (msg.type === 'ADMIN_SHUTDOWN' ? 'Match shut down by Admin' : 'Room closed by host.');
+                  const kind = msg.type === 'ADMIN_SHUTDOWN' ? 'admin' : 'closed';
+                  this.hostConn = null;
+                  clearConnQueues(conn);
+                  try { conn.close(); } catch (e) {}
+                  this.leave();
+                  if (!settled) {
+                    settled = true;
+                    this._emitStatus(reason, true);
+                    reject(new Error(reason));
+                  }
+                  if (this.onForceExit) this.onForceExit(reason, kind);
+                  else if (this.onDisconnect) this.onDisconnect(reason);
+                  return;
+                }
                 if (this.onDataTick && this.onDataTick(msg, 'host') === true) return;
-                if (bin.byteLength === 1 && bin[0] === PKT_KEEPALIVE_PONG) {
+
+                if (msg.t === 'pong') {
                   const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-                  const sent = this._lastPingSentAt || now;
+                  const sent = (typeof msg.ts === 'number' && isFinite(msg.ts)) ? msg.ts : (this._lastPingSentAt || now);
                   const raw = Math.max(1, Math.round(now - sent));
                   this.pingMs = this.pingMs === null ? raw : Math.round(this.pingMs * 0.45 + raw * 0.55);
                   const me = this.getPlayer(this.localId);
                   if (me) me.ping = this.pingMs;
                   this._emitPing();
-                  if (!this.inGame && (this._lastSyncedPing === null || Math.abs(this.pingMs - this._lastSyncedPing) >= 6)) {
+                  const deltaThreshold = this.inGame ? 12 : 6;
+                  if (this._lastSyncedPing === null || Math.abs(this.pingMs - this._lastSyncedPing) >= deltaThreshold) {
                     this._lastSyncedPing = this.pingMs;
                     this.sendToHost({ type: 'ping_r', r: this.pingMs });
                   }
                   return;
                 }
-                if (bin.byteLength === TRANSFORM_BYTE_LENGTH) {
-                  const b0 = bin[0];
-                  const slot = (b0 & 0xf0) === PKT_TRANSFORM_BASE ? (b0 & 0x0f) : 0;
-                  const target = this.players.find(pl => pl && pl.slot === slot && !pl.hiddenAdmin);
+
+                if (msg.t === 'p') {
+                  const slot = typeof msg.s === 'number' ? msg.s : 0;
+                  const target = (typeof msg.id === 'string' && this.getPlayer(msg.id))
+                    || this.players.find(pl => pl && pl.slot === slot && !pl.hiddenAdmin);
                   if (!target || target.id === this.localId) return;
                   const prev = this.remoteStates.get(target.id);
-                  const st = decodeTransformPacket(bin, prev);
+                  const st = expandCompactPlayerPacket(msg, prev);
                   if (!st) return;
+                  st.id = target.id;
                   this.remoteStates.set(target.id, st);
                   if (!target.left) {
                     if (target.alive !== false) target.alive = st.alive !== false;
                     target.hidden = !!st.hidden;
-                    if (!st.hidden) target.hideSpotIdx = -1;
+                    target.hideSpotIdx = st.hidden ? st.hideSpotIdx : -1;
+                    if (typeof st.health === 'number') target.health = st.health;
                   }
                   if (this.onMessage) this.onMessage(target.id, st);
                   return;
                 }
-                return;
-              }
 
-              if (typeof msg !== 'object') return;
-              if (msg.type === 'reject') {
-                fail(msg.reason || 'Host rejected connection.');
-                return;
-              }
-              if (msg.type === 'ROOM_CLOSED' || msg.type === 'ADMIN_SHUTDOWN') {
-                clearTimeout(timer);
-                const reason = msg.reason || (msg.type === 'ADMIN_SHUTDOWN' ? 'Match shut down by Admin' : 'Room closed by host.');
-                const kind = msg.type === 'ADMIN_SHUTDOWN' ? 'admin' : 'closed';
-                this.hostConn = null;
-                try { conn.close(); } catch (e) {}
-                this.leave();
-                if (!settled) {
-                  settled = true;
-                  this._emitStatus(reason, true);
-                  reject(new Error(reason));
-                }
-                if (this.onForceExit) this.onForceExit(reason, kind);
-                else if (this.onDisconnect) this.onDisconnect(reason);
-                return;
-              }
-              if (this.onDataTick && this.onDataTick(msg, 'host') === true) return;
-              if (msg.type === 'welcome') {
-                clearTimeout(timer);
-                this.localId = msg.localId;
-                this.localSlot = msg.slot;
-                this.roomCode = msg.roomCode || code;
-                this.hostVersion = msg.version || null;
-                this.inGame = !!msg.inGame;
-                this.localHiddenAdmin = !!msg.adminHidden;
-                this.players = Array.isArray(msg.players) ? msg.players : [];
-                this._emitStatus(`Connected to room ${this.roomCode}`);
-                this._emitLobby();
-                this._startPingLoop();
-                if (LO.audio && LO.audio.syncMix) LO.audio.syncMix();
-                if (this.voiceEnabled) this._broadcastVoiceState();
-                else if (LO.settings && LO.settings.voiceAutoJoin && !this.localHiddenAdmin && this.isVoiceSupported()) {
-                  this.enableVoice({ preserveMute: true }).catch(() => {});
-                }
-                if (!settled) {
-                  settled = true;
-                  resolve({
-                    roomCode: this.roomCode,
-                    inGame: this.inGame,
-                    adminHidden: this.localHiddenAdmin,
-                    runState: msg.runState || null,
-                  });
-                }
-                if (this.inGame && this.onMessage) {
-                  this.onMessage('host', {
-                    type: 'admin_midjoin',
-                    adminHidden: this.localHiddenAdmin,
-                    runState: msg.runState || null,
-                  });
-                }
-                return;
-              }
-              if (msg.type === 'net_pong') {
-                const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-                const raw = Math.max(1, Math.round(now - (msg.t || now)));
-                this.pingMs = this.pingMs === null ? raw : Math.round(this.pingMs * 0.45 + raw * 0.55);
-                const me = this.getPlayer(this.localId);
-                if (me) me.ping = this.pingMs;
-                this._emitPing();
-                return;
-              }
-              if (msg.type === 'ping_sync' && msg.pings && typeof msg.pings === 'object') {
-                this.players.forEach(p => {
-                  if (p && p.id !== this.localId && typeof msg.pings[p.id] === 'number') {
-                    p.ping = msg.pings[p.id];
+                if (msg.type === 'welcome') {
+                  clearTimeout(timer);
+                  this.localId = msg.localId;
+                  this.localSlot = msg.slot;
+                  this.roomCode = msg.roomCode || code;
+                  this.hostVersion = msg.version || null;
+                  this.inGame = !!msg.inGame;
+                  this.localHiddenAdmin = !!msg.adminHidden;
+                  this.players = Array.isArray(msg.players) ? msg.players : [];
+                  this._emitStatus(`Connected to room ${this.roomCode}`);
+                  this._emitLobby();
+                  this._startPingLoop();
+                  if (LO.audio && LO.audio.syncMix) LO.audio.syncMix();
+                  if (this.voiceEnabled) this._broadcastVoiceState();
+                  else if (LO.settings && LO.settings.voiceAutoJoin && !this.localHiddenAdmin && this.isVoiceSupported()) {
+                    this.enableVoice({ preserveMute: true }).catch(() => {});
                   }
-                });
-                this._emitPing();
-                return;
-              }
-              if (msg.type === 'lobby_sync') {
-                this.hostVersion = msg.version || this.hostVersion;
-                const prevIds = new Set(this.players.map(p => p.id));
-                this.players = Array.isArray(msg.players) ? msg.players : [];
-                const nextIds = new Set(this.players.map(p => p.id));
-                prevIds.forEach(id => {
-                  if (!nextIds.has(id) && id !== this.localId) {
-                    this.remoteStates.delete(id);
-                    this._disposeVoiceEntry(id);
-                    if (this.onPlayerLeave) this.onPlayerLeave({ id });
+                  if (!settled) {
+                    settled = true;
+                    resolve({
+                      roomCode: this.roomCode,
+                      inGame: this.inGame,
+                      adminHidden: this.localHiddenAdmin,
+                      runState: msg.runState || null,
+                    });
                   }
-                });
-                this._emitLobby();
-                return;
-              }
-              if (msg.type === 'voice_state') {
-                const p = this.getPlayer(msg.id);
-                if (p) {
-                  p.hasMic = !!msg.hasMic;
-                  p.muted = !!msg.muted;
-                  this._emitVoiceChange();
+                  if (this.inGame && this.onMessage) {
+                    this.onMessage('host', {
+                      type: 'admin_midjoin',
+                      adminHidden: this.localHiddenAdmin,
+                      runState: msg.runState || null,
+                    });
+                  }
+                  return;
                 }
-                return;
-              }
-              if (msg.type === 'chat') {
-                if (this.onChat) this.onChat(msg);
-                return;
-              }
-              if (msg.type === 'p_meta' && msg.id && msg.id !== this.localId) {
-                const prev = this.remoteStates.get(msg.id) || { type: 'p_state' };
-                if (typeof msg.health === 'number') prev.health = msg.health;
-                if (msg.hideSpotIdx !== undefined) prev.hideSpotIdx = msg.hideSpotIdx;
-                if (typeof msg.pitch === 'number') prev.pitch = msg.pitch;
-                if (msg.hidden !== undefined) prev.hidden = !!msg.hidden;
-                this.remoteStates.set(msg.id, prev);
-                const lp = this.getPlayer(msg.id);
-                if (lp && !lp.left) {
-                  if (typeof msg.health === 'number') lp.health = msg.health;
-                  if (msg.hideSpotIdx !== undefined) lp.hideSpotIdx = msg.hideSpotIdx;
-                  if (msg.hidden !== undefined) lp.hidden = !!msg.hidden;
+                if (msg.type === 'net_pong') {
+                  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                  const raw = Math.max(1, Math.round(now - (msg.t || now)));
+                  this.pingMs = this.pingMs === null ? raw : Math.round(this.pingMs * 0.45 + raw * 0.55);
+                  const me = this.getPlayer(this.localId);
+                  if (me) me.ping = this.pingMs;
+                  this._emitPing();
+                  return;
                 }
-                if (this.onMessage) this.onMessage(msg.id, Object.assign({}, prev, { type: 'p_meta' }));
-                return;
-              }
-              if (msg.type === 'world_snap' && Array.isArray(msg.players)) {
-                for (let i = 0; i < msg.players.length; i++) {
-                  const ps = msg.players[i];
-                  if (!ps || ps.id === this.localId) continue;
-                  this.remoteStates.set(ps.id, ps);
-                  const lp = this.getPlayer(ps.id);
+                if (msg.type === 'ping_sync' && msg.pings && typeof msg.pings === 'object') {
+                  this.players.forEach(p => {
+                    if (p && p.id !== this.localId && typeof msg.pings[p.id] === 'number') {
+                      p.ping = msg.pings[p.id];
+                    }
+                  });
+                  this._emitPing();
+                  return;
+                }
+                if (msg.type === 'lobby_sync') {
+                  this.hostVersion = msg.version || this.hostVersion;
+                  const prevIds = new Set(this.players.map(p => p.id));
+                  this.players = Array.isArray(msg.players) ? msg.players : [];
+                  const nextIds = new Set(this.players.map(p => p.id));
+                  prevIds.forEach(id => {
+                    if (!nextIds.has(id) && id !== this.localId) {
+                      this.remoteStates.delete(id);
+                      this._disposeVoiceEntry(id);
+                      if (this.onPlayerLeave) this.onPlayerLeave({ id });
+                    }
+                  });
+                  this._emitLobby();
+                  return;
+                }
+                if (msg.type === 'voice_state') {
+                  const p = this.getPlayer(msg.id);
+                  if (p) {
+                    p.hasMic = !!msg.hasMic;
+                    p.muted = !!msg.muted;
+                    this._emitVoiceChange();
+                  }
+                  return;
+                }
+                if (msg.type === 'chat') {
+                  if (this.onChat) this.onChat(msg);
+                  return;
+                }
+                if (msg.type === 'p_meta' && msg.id && msg.id !== this.localId) {
+                  const prev = this.remoteStates.get(msg.id) || { type: 'p_state' };
+                  if (typeof msg.health === 'number' && isFinite(msg.health)) prev.health = Math.max(0, Math.min(100, Math.round(msg.health)));
+                  if (msg.hideSpotIdx !== undefined) prev.hideSpotIdx = msg.hideSpotIdx;
+                  if (typeof msg.pitch === 'number' && isFinite(msg.pitch)) prev.pitch = msg.pitch;
+                  if (msg.hidden !== undefined) prev.hidden = !!msg.hidden;
+                  this.remoteStates.set(msg.id, prev);
+                  const lp = this.getPlayer(msg.id);
                   if (lp && !lp.left) {
-                    if (lp.alive !== false) lp.alive = ps.alive !== false;
-                    lp.hidden = !!ps.hidden;
-                    lp.hideSpotIdx = ps.hideSpotIdx !== undefined ? ps.hideSpotIdx : -1;
-                    if (typeof ps.health === 'number') lp.health = ps.health;
+                    if (typeof msg.health === 'number' && isFinite(msg.health)) lp.health = prev.health;
+                    if (msg.hideSpotIdx !== undefined) lp.hideSpotIdx = msg.hideSpotIdx;
+                    if (msg.hidden !== undefined) lp.hidden = !!msg.hidden;
+                  }
+                  if (this.onMessage) this.onMessage(msg.id, Object.assign({}, prev, { type: 'p_meta' }));
+                  return;
+                }
+                if (msg.type === 'world_snap' && Array.isArray(msg.players)) {
+                  for (let i = 0; i < msg.players.length; i++) {
+                    const ps = msg.players[i];
+                    if (!ps || !ps.id || ps.id === this.localId) continue;
+                    const hp = typeof ps.hp === 'number' ? ps.hp : (typeof ps.health === 'number' ? ps.health : undefined);
+                    const alive = ps.a !== undefined ? !!ps.a : (ps.alive !== undefined ? ps.alive !== false : undefined);
+                    const hidden = ps.h !== undefined ? !!ps.h : (ps.hidden !== undefined ? !!ps.hidden : undefined);
+                    const hideSpotIdx = ps.hs !== undefined ? ps.hs : ps.hideSpotIdx;
+                    const prev = this.remoteStates.get(ps.id) || { type: 'p_state', id: ps.id };
+                    if (typeof hp === 'number' && isFinite(hp)) prev.health = Math.max(0, Math.min(100, Math.round(hp)));
+                    if (alive !== undefined) prev.alive = alive;
+                    if (hidden !== undefined) prev.hidden = hidden;
+                    if (hideSpotIdx !== undefined) prev.hideSpotIdx = hidden === false ? -1 : hideSpotIdx;
+                    if (typeof ps.x === 'number' && isFinite(ps.x)) prev.x = ps.x;
+                    if (typeof ps.y === 'number' && isFinite(ps.y)) prev.y = ps.y;
+                    if (typeof ps.z === 'number' && isFinite(ps.z)) prev.z = ps.z;
+                    this.remoteStates.set(ps.id, prev);
+                    const lp = this.getPlayer(ps.id);
+                    if (lp && !lp.left) {
+                      if (alive !== undefined && lp.alive !== false) lp.alive = alive;
+                      if (hidden !== undefined) lp.hidden = hidden;
+                      if (hideSpotIdx !== undefined) lp.hideSpotIdx = hidden === false ? -1 : hideSpotIdx;
+                      if (typeof prev.health === 'number') lp.health = prev.health;
+                    }
                   }
                 }
+                if (this.onMessage) this.onMessage('host', msg);
+              } catch (err) {
+                console.warn('[net] Client packet error:', err);
               }
-              if (this.onMessage) this.onMessage('host', msg);
             });
 
             conn.on('close', () => {
+              clearConnQueues(conn);
               if (this.hostConn === conn) fail('Disconnected from host.');
             });
             conn.on('error', () => {
+              clearConnQueues(conn);
               if (this.hostConn === conn) fail('Connection to host failed.');
             });
           });
@@ -1793,6 +1851,65 @@ window.LO = window.LO || {};
       });
     },
 
+    _flushCoalescedPos(conn) {
+      if (!conn) return;
+      conn._posFlushScheduled = false;
+      if (conn._posTimer) { clearTimeout(conn._posTimer); conn._posTimer = null; }
+      const pkt = conn._pendingPos;
+      if (!pkt || !conn.open) { conn._pendingPos = null; return; }
+      if (getConnBufferedAmount(conn) > POS_BUFFER_HIGH_WATER) {
+        conn._posFlushScheduled = true;
+        const dc = conn.dataChannel;
+        if (dc && typeof dc.bufferedAmountLowThreshold === 'number' && !conn._hasBufLowHook && dc.addEventListener) {
+          conn._hasBufLowHook = true;
+          try {
+            dc.bufferedAmountLowThreshold = 2048;
+            dc.addEventListener('bufferedamountlow', () => {
+              if (conn._pendingPos && conn.open) this._flushCoalescedPos(conn);
+              if (conn._pendingSnap && conn.open) this._flushCoalescedSnap(conn);
+            });
+          } catch (e) {}
+        }
+        conn._posTimer = setTimeout(() => { this._flushCoalescedPos(conn); }, 35);
+        return;
+      }
+      conn._pendingPos = null;
+      try { conn.send(pkt); } catch (e) {}
+    },
+
+    _sendCoalescedPos(conn, pkt) {
+      if (!conn || !conn.open || !pkt) return false;
+      conn._pendingPos = pkt;
+      if (conn._posFlushScheduled) return true;
+      conn._posFlushScheduled = true;
+      conn._posTimer = setTimeout(() => { this._flushCoalescedPos(conn); }, 0);
+      return true;
+    },
+
+    _flushCoalescedSnap(conn) {
+      if (!conn) return;
+      conn._snapFlushScheduled = false;
+      if (conn._snapTimer) { clearTimeout(conn._snapTimer); conn._snapTimer = null; }
+      const pkt = conn._pendingSnap;
+      if (!pkt || !conn.open) { conn._pendingSnap = null; return; }
+      if (getConnBufferedAmount(conn) > POS_BUFFER_HIGH_WATER) {
+        conn._snapFlushScheduled = true;
+        conn._snapTimer = setTimeout(() => { this._flushCoalescedSnap(conn); }, 35);
+        return;
+      }
+      conn._pendingSnap = null;
+      try { conn.send(pkt); } catch (e) {}
+    },
+
+    _sendCoalescedSnap(conn, pkt) {
+      if (!conn || !conn.open || !pkt) return false;
+      conn._pendingSnap = pkt;
+      if (conn._snapFlushScheduled) return true;
+      conn._snapFlushScheduled = true;
+      conn._snapTimer = setTimeout(() => { this._flushCoalescedSnap(conn); }, 0);
+      return true;
+    },
+
     sendTo(peerId, msg) {
       if (this.mode !== 'host') return;
       const conn = this.conns.get(peerId);
@@ -1803,10 +1920,16 @@ window.LO = window.LO || {};
 
     broadcast(msg, excludePeerId) {
       if (this.mode !== 'host') return;
+      const isPos = !!(msg && msg.t === 'p');
+      const isSnap = !!(msg && msg.type === 'world_snap');
       this.conns.forEach((conn, id) => {
         if (id === excludePeerId) return;
         if (conn && conn.open) {
-          try { conn.send(msg); } catch (e) {}
+          if (isPos) this._sendCoalescedPos(conn, msg);
+          else if (isSnap) this._sendCoalescedSnap(conn, msg);
+          else {
+            try { conn.send(msg); } catch (e) {}
+          }
         }
       });
     },
@@ -1814,6 +1937,10 @@ window.LO = window.LO || {};
     sendToHost(msg) {
       if (this.mode !== 'client') return;
       if (this.hostConn && this.hostConn.open) {
+        if (msg && msg.t === 'p') {
+          this._sendCoalescedPos(this.hostConn, msg);
+          return;
+        }
         try { this.hostConn.send(msg); } catch (e) {}
       }
     },
@@ -1840,9 +1967,13 @@ window.LO = window.LO || {};
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
       this.voiceCalls.clear();
       this.voiceError = '';
-      this.conns.forEach(conn => { try { conn.close(); } catch (e) {} });
+      this.conns.forEach(conn => {
+        clearConnQueues(conn);
+        try { conn.close(); } catch (e) {}
+      });
       this.conns.clear();
       if (this.hostConn) {
+        clearConnQueues(this.hostConn);
         try { this.hostConn.close(); } catch (e) {}
         this.hostConn = null;
       }
@@ -1906,6 +2037,37 @@ window.LO = window.LO || {};
       }, 120);
     },
 
+    async authorizeAdminJoin(rawCode, adminHidden) {
+      const code = String(rawCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+      if (!code) throw new Error('Invalid room ID.');
+      const adminSecret = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+      if (!adminSecret) throw new Error('Admin authorization required.');
+      if (typeof fetch !== 'function') throw new Error('Network unavailable.');
+      const res = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Secret': adminSecret,
+          'Authorization': `Bearer ${adminSecret}`,
+        },
+        body: JSON.stringify({
+          action: 'admin_join',
+          roomId: code,
+          adminHidden: !!adminHidden,
+        }),
+        cache: 'no-store',
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res && res.status === 401) {
+        if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
+        throw new Error((json && json.error) || 'Admin authorization required.');
+      }
+      if (!res || !res.ok || !json || !json.adminJoinToken) {
+        throw new Error((json && json.error) || 'Failed to authorize admin join.');
+      }
+      return json.adminJoinToken;
+    },
+
     async adminRemoteShutdown(rawCode, reason) {
       const code = String(rawCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
       if (!code) return { ok: false, error: 'Invalid room ID.' };
@@ -1924,6 +2086,7 @@ window.LO = window.LO || {};
             headers: {
               'Content-Type': 'application/json',
               'X-Admin-Secret': adminSecret,
+              'Authorization': `Bearer ${adminSecret}`,
             },
             body: JSON.stringify({ action: 'shutdown', roomId: code, reason: msg }),
             cache: 'no-store',

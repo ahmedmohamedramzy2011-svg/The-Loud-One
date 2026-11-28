@@ -10,6 +10,49 @@ const DEFAULT_STUN = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
+function urlLatencyRank(url) {
+  const s = String(url || '').trim().toLowerCase();
+  const isTurns = s.startsWith('turns:');
+  const has443 = /:443(?:[/?]|$)/.test(s);
+  const has3478 = /:3478(?:[/?]|$)/.test(s);
+  const isTcp = /transport=tcp/.test(s);
+  if (isTurns && has443) return 0; // Lowest-latency firewall-friendly TLS 443 endpoint
+  if (has443) return 1;
+  if (isTurns) return 2;
+  if (has3478 && !isTcp) return 3;
+  if (has3478) return 4;
+  return 5;
+}
+
+function sortUrlsTls443First(urls) {
+  const arr = Array.isArray(urls) ? urls.slice() : [urls];
+  return arr
+    .map(u => String(u || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => urlLatencyRank(a) - urlLatencyRank(b));
+}
+
+function prioritizeTurnServers(list) {
+  if (!Array.isArray(list) || !list.length) return list;
+  return list
+    .map(entry => {
+      if (!entry || !entry.urls) return null;
+      const sortedUrls = sortUrlsTls443First(entry.urls);
+      if (!sortedUrls.length) return null;
+      return Object.assign({}, entry, {
+        urls: sortedUrls.length === 1 ? sortedUrls[0] : sortedUrls,
+        _rank: urlLatencyRank(sortedUrls[0]),
+      });
+    })
+    .filter(Boolean)
+    .sort((a, b) => a._rank - b._rank)
+    .map(entry => {
+      const clean = Object.assign({}, entry);
+      delete clean._rank;
+      return clean;
+    });
+}
+
 async function fetchJson(url, opts, timeoutMs = 4000) {
   const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const t = ac ? setTimeout(() => ac.abort(), timeoutMs) : null;
@@ -31,7 +74,7 @@ async function getMeteredIce() {
   const data = await fetchJson(`https://${rawDomain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`);
   if (!Array.isArray(data) || !data.length) return null;
   const list = data.filter(s => s && s.urls && (Array.isArray(s.urls) ? s.urls.length > 0 : String(s.urls).trim().length > 0));
-  return list.length ? list : null;
+  return list.length ? prioritizeTurnServers(list) : null;
 }
 
 async function getCloudflareIce() {
@@ -55,7 +98,7 @@ async function getCloudflareIce() {
   const list = rawServers ? (Array.isArray(rawServers) ? rawServers : [rawServers]) : null;
   if (!list || !list.length) return null;
   const valid = list.filter(s => s && s.urls && (Array.isArray(s.urls) ? s.urls.length > 0 : String(s.urls).trim().length > 0));
-  return valid.length ? valid : null;
+  return valid.length ? prioritizeTurnServers(valid) : null;
 }
 
 function getStaticTurnIce(urlVar, userVar, credVar) {
@@ -68,7 +111,18 @@ function getStaticTurnIce(urlVar, userVar, credVar) {
     .map(u => u.trim())
     .filter(u => /^(stuns?|turns?):[^\s]+$/i.test(u));
   if (!urls.length) return null;
-  return [{ urls: urls.length === 1 ? urls[0] : urls, username, credential }];
+  const sorted = sortUrlsTls443First(urls);
+  // Emit TLS port 443 endpoints as a dedicated leading entry so ICE probes them first
+  const tls443 = sorted.filter(u => urlLatencyRank(u) <= 1);
+  const other = sorted.filter(u => urlLatencyRank(u) > 1);
+  const out = [];
+  if (tls443.length) {
+    out.push({ urls: tls443.length === 1 ? tls443[0] : tls443, username, credential });
+  }
+  if (other.length) {
+    out.push({ urls: other.length === 1 ? other[0] : other, username, credential });
+  }
+  return out;
 }
 
 function getPeerOpts() {

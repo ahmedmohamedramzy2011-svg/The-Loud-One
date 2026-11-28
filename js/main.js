@@ -37,7 +37,10 @@
   let netSyncAccum = 0;
   let _lastSentNetX = 0, _lastSentNetY = 0, _lastSentNetZ = 0;
   let _lastSentNetYaw = 0, _lastSentNetFlags = -1, _lastSentNetInit = false;
+  let _lastSentPosAt = 0;
   let _lastSentMetaHealth = -1, _lastSentMetaHideIdx = -1;
+  let _startGameTimer = null;
+  let _runPlayStarted = false;
   let coopMenuOpen = false;
   let spectateId = null;
   let spectateFirstPerson = false;
@@ -54,15 +57,31 @@
     netSyncAccum = 0;
     _lastSentNetInit = false;
     _lastSentNetFlags = -1;
+    _lastSentPosAt = 0;
     _lastSentMetaHealth = -1;
     _lastSentMetaHideIdx = -1;
+  }
+
+  function computeLocalTransformSig(st) {
+    if (!st) return 0;
+    let sig = 0;
+    if ((st.crouch || 0) > 0.5) sig |= 1;
+    if (st.flashOn) sig |= 2;
+    if (st.cameraUp) sig |= 4;
+    if (st.hidden) sig |= 8;
+    if (st.alive !== false) sig |= 16;
+    if (st.moving) sig |= 32;
+    if (st.sprinting) sig |= 64;
+    const hideCode = ((typeof st.hideSpotIdx === 'number' ? st.hideSpotIdx : -1) + 2) & 0xff;
+    const pitchCode = Math.round((Number(st.pitch) || 0) * 100) & 0xfff;
+    return sig | (hideCode << 8) | (pitchCode << 16);
   }
 
   function hasLocalTransformDelta(st) {
     if (!st || !player || player.alive === false) return false;
     const me = (Net && Net.getPlayer) ? Net.getPlayer(Net.localId) : null;
     if (me && me.alive === false) return false;
-    const flags = (Net && Net.computeTransformFlags) ? Net.computeTransformFlags(st) : 0;
+    const flags = computeLocalTransformSig(st);
     if (!_lastSentNetInit) return true;
     const dx = (st.x || 0) - _lastSentNetX;
     const dy = (st.y || 0) - _lastSentNetY;
@@ -78,7 +97,7 @@
     _lastSentNetY = Number(st.y) || 0;
     _lastSentNetZ = Number(st.z) || 0;
     _lastSentNetYaw = Number(st.yaw) || 0;
-    _lastSentNetFlags = (Net && Net.computeTransformFlags) ? Net.computeTransformFlags(st) : 0;
+    _lastSentNetFlags = computeLocalTransformSig(st);
     _lastSentNetInit = true;
   }
 
@@ -1383,9 +1402,31 @@
     player.onDamage = (amount, cause) => {
       if (player.health > 0 && cause !== 'tenant') A.hurt();
       const d = $('damage');
-      d.style.transition = 'none'; d.style.opacity = 0.9;
-      setTimeout(() => { d.style.transition = 'opacity 0.8s'; d.style.opacity = 0; }, 60);
+      if (d) {
+        d.style.transition = 'none'; d.style.opacity = 0.9;
+        setTimeout(() => { d.style.transition = 'opacity 0.8s'; d.style.opacity = 0; }, 60);
+      }
       if (cause === 'silent' || cause === 'tenant') A.silentHit();
+      if (Net && Net.isCoop && Net.isCoop() && player.alive !== false && !Net.localHiddenAdmin) {
+        const hp = Math.max(0, Math.min(100, Math.round(player.health || 0)));
+        const hIdx = player.hidden && player.hidden.idx !== undefined ? player.hidden.idx : -1;
+        _lastSentMetaHealth = hp;
+        _lastSentMetaHideIdx = hIdx;
+        const meta = {
+          type: 'p_meta',
+          id: Net.localId,
+          health: hp,
+          hideSpotIdx: hIdx,
+          hidden: !!(player.hidden || player.hideAnim),
+        };
+        if (Net.isHost && Net.isHost()) {
+          const hm = Net.getPlayer && Net.getPlayer('host');
+          if (hm) hm.health = hp;
+          if (Net.broadcast) Net.broadcast(meta);
+        } else if (Net.sendToHost) {
+          Net.sendToHost(meta);
+        }
+      }
     };
     player.onDeath = cause => dieBy(cause);
     player.onExposure = kind => {
@@ -1977,6 +2018,8 @@
   }
 
   function goTitle() {
+    if (_startGameTimer) { clearTimeout(_startGameTimer); _startGameTimer = null; }
+    _runPlayStarted = false;
     cleanupGhostReplay();
     clearGlitch();
     clearFlashStrobe();
@@ -2039,6 +2082,7 @@
   //  GAME FLOW
   // ============================================================
   function resetRun(seed, evSeed) {
+    _runPlayStarted = false;
     lastWorldSnap = null;
     lastCoopHudHtml = null;
     resetNetSyncCache();
@@ -2057,7 +2101,7 @@
     document.body.classList.remove('spectating');
     const sb = $('spectate-bar'); if (sb) sb.classList.remove('show');
     if (Net && Net.isCoop()) {
-      Net.players.forEach(p => { p.alive = true; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
+      Net.players.forEach(p => { p.alive = !p.hiddenAdmin; p.hidden = false; p.hideSpotIdx = -1; p.health = 100; });
       syncRemotePlayersRoster();
     }
     titleSpot.intensity = 0; siren.root.visible = true; $('title-fade').style.opacity = 0;
@@ -2095,6 +2139,8 @@
   }
 
   function startGame(skipIntro, seed, evSeed) {
+    if (_startGameTimer) { clearTimeout(_startGameTimer); _startGameTimer = null; }
+    if (cutscene) endCutscene();
     cleanupGhostReplay();
     clearGlitch();
     LO.TVFX.clear();
@@ -2103,17 +2149,21 @@
     A.stopVoices();
     hideAllScreens();
     state = 'loading';
-    if (seed !== undefined) buildWorld(seed, evSeed);
     resetRun(seed, evSeed);
     ui.fadeOut(0.8);
-    setTimeout(() => {
+    _startGameTimer = setTimeout(() => {
+      _startGameTimer = null;
+      if (state !== 'loading') return;
       if (skipIntro) { beginPlay(); return; }
       state = 'opening';
       show('cutscene');
-      document.querySelector('.skip-hint').style.display = ''; $('skip-bar').style.display = '';
+      const skipHint = document.querySelector('.skip-hint');
+      const skipBar = $('skip-bar');
+      if (skipHint) skipHint.style.display = '';
+      if (skipBar) skipBar.style.display = '';
       cutCtx = makeCutCtx(() => {
         endCutscene();
-        if (Net && Net.isHost()) Net.broadcast({ type: 'begin_play' });
+        if (Net && Net.isHost && Net.isHost()) Net.broadcast({ type: 'begin_play' });
         beginPlay();
       });
       cutscene = LO.Cutscenes.opening(cutCtx);
@@ -2128,13 +2178,20 @@
     };
   }
   function endCutscene() {
+    if (_startGameTimer) { clearTimeout(_startGameTimer); _startGameTimer = null; }
     if (cutCtx) cutCtx.cleanup.forEach(f => { try { f(); } catch (e) { console.warn(e); } });
     cutscene = null; cutCtx = null;
-    skipHeld = 0; $('skip-bar').firstChild.style.width = '0';
+    skipHeld = 0;
+    const sb = $('skip-bar');
+    const bar = sb && (sb.firstElementChild || sb.firstChild);
+    if (bar && bar.style) bar.style.width = '0';
     ui.caption('');
   }
 
   function beginPlay() {
+    if (_runPlayStarted) return;
+    _runPlayStarted = true;
+    if (_startGameTimer) { clearTimeout(_startGameTimer); _startGameTimer = null; }
     A.silenceWorld(false);
     A.stopVoices();
     hideAllScreens();
@@ -2271,6 +2328,43 @@
     'That\'s five. That should do it.',
     'More proof. Good.',
   ];
+  function applyEvidenceSync(foundIds, evName, finderName, reset, finderId) {
+    if (!world || !Array.isArray(world.evidence)) return;
+    if (reset) {
+      world.evidence.forEach(e => { e.found = false; });
+      evidenceCount = 0;
+      endingQueued = false;
+      if (player) { player.calm = false; player.noSilent = false; }
+      hintTarget = null;
+      updateEvidenceUI();
+      return;
+    }
+    let newlyAdded = 0;
+    if (Array.isArray(foundIds)) {
+      const idSet = new Set(foundIds);
+      world.evidence.forEach(e => {
+        if (idSet.has(e.id) && !e.found) {
+          e.found = true;
+          newlyAdded++;
+        }
+      });
+    }
+    evidenceCount = world.evidence.filter(e => e.found).length;
+    if (hintTarget && hintTarget.found) hintTarget = null;
+    updateEvidenceUI();
+    if (newlyAdded > 0 && (!Net || finderId !== Net.localId)) {
+      lastEvidenceTime = gameTime;
+      A.evidenceSting();
+      if (evName) {
+        const who = finderName ? `${finderName} photographed` : 'Evidence photographed';
+        showHint(`${who}: ${evName}`, 3600);
+      }
+    }
+    if (Net && Net.isHost && Net.isHost() && evidenceCount >= EVIDENCE_NEEDED && !endingQueued) {
+      queueEnding();
+    }
+  }
+
   function onPhoto(ev) {
     if (V().photoStrobe) triggerFlashStrobe(0.92, 0.025, 0.155);
     else triggerFlashStrobe(0.85, 0.04, 0.36);
@@ -2281,19 +2375,28 @@
     if (Net && Net.isClient()) {
       if (!ev.found) {
         ev.found = true;
+        evidenceCount = world && Array.isArray(world.evidence)
+          ? world.evidence.filter(e => e.found).length
+          : (evidenceCount + 1);
+        lastEvidenceTime = gameTime;
+        if (ev === hintTarget) hintTarget = null;
         A.evidenceSting();
-        Net.sendToHost({ type: 'ev_found', evId: ev.id });
+        updateEvidenceUI();
+        A.say('player', EVIDENCE_LINES[Math.min(EVIDENCE_LINES.length - 1, Math.max(0, evidenceCount - 1))]);
       }
+      Net.sendToHost({ type: 'ev_found', evId: ev.id });
       return;
     }
     if (ev.found) return;
     ev.found = true;
-    evidenceCount++;
+    evidenceCount = world && Array.isArray(world.evidence)
+      ? world.evidence.filter(e => e.found).length
+      : (evidenceCount + 1);
     lastEvidenceTime = gameTime;
     if (ev === hintTarget) hintTarget = null;
     A.evidenceSting();
     updateEvidenceUI();
-    A.say('player', EVIDENCE_LINES[Math.min(EVIDENCE_LINES.length - 1, evidenceCount - 1)]);
+    A.say('player', EVIDENCE_LINES[Math.min(EVIDENCE_LINES.length - 1, Math.max(0, evidenceCount - 1))]);
     if (Net && Net.isHost()) {
       Net.broadcast({
         type: 'ev_sync',
@@ -2301,6 +2404,7 @@
         evidenceCount,
         evName: ev.name,
         finderName: Net.localName,
+        finderId: 'host',
       });
       Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
     }
@@ -2373,8 +2477,12 @@
     hideAllScreens();
     ui.fadeOut(1.5);
     setTimeout(() => {
+      if (state !== 'ending') return;
       show('cutscene');
-      document.querySelector('.skip-hint').style.display = 'none'; $('skip-bar').style.display = 'none';
+      const skipHint = document.querySelector('.skip-hint');
+      const skipBar = $('skip-bar');
+      if (skipHint) skipHint.style.display = 'none';
+      if (skipBar) skipBar.style.display = 'none';
       camera.fov = 60; camera.updateProjectionMatrix();
       cutCtx = makeCutCtx(() => { endCutscene(); rollCredits(); });
       cutscene = LO.Cutscenes.ending(cutCtx);
@@ -3370,7 +3478,7 @@
 
   function syncLocalPlayerNetState() {
     if (!Net || !Net.isCoop || !Net.isCoop() || !player) return;
-    if (player.alive === false) return; // Stop sending transform packets when local player is dead
+    if (player.alive === false || Net.localHiddenAdmin) return;
     const lp = buildLocalNetState();
     if (!lp) return;
     const isHost = Net.isHost && Net.isHost();
@@ -3383,9 +3491,12 @@
         hm.health = lp.health;
       }
     }
-    if (hasLocalTransformDelta(lp) && Net.sendTransformPacket) {
+    const now = Date.now();
+    const shouldSendPos = hasLocalTransformDelta(lp) || (now - _lastSentPosAt) >= 500;
+    if (shouldSendPos && Net.sendTransformPacket) {
       Net.sendTransformPacket(lp, isHost ? 0 : Net.localSlot);
       markLocalTransformSent(lp);
+      _lastSentPosAt = now;
     }
     const hp = typeof lp.health === 'number' ? Math.round(lp.health) : 100;
     const hIdx = lp.hideSpotIdx !== undefined ? lp.hideSpotIdx : -1;
@@ -3401,10 +3512,52 @@
   function broadcastHostWorldSnap() {
     if (!Net || !Net.isHost() || !Net.broadcast) return;
     syncLocalPlayerNetState();
+    const playersSnap = [];
+    if (Array.isArray(Net.players)) {
+      for (let i = 0; i < Net.players.length; i++) {
+        const p = Net.players[i];
+        if (!p || p.left || p.hiddenAdmin) continue;
+        if (p.id === 'host' && player) {
+          playersSnap.push({
+            id: 'host',
+            hp: Math.max(0, Math.min(100, Math.round(player.health !== undefined ? player.health : 100))),
+            a: player.alive !== false ? 1 : 0,
+            h: (player.hidden || player.hideAnim) ? 1 : 0,
+            hs: (player.hidden && player.hidden.idx !== undefined) ? player.hidden.idx : -1,
+            x: Math.round((player.pos.x || 0) * 100) / 100,
+            y: Math.round((player.pos.y || 0) * 100) / 100,
+            z: Math.round((player.pos.z || 0) * 100) / 100,
+          });
+        } else {
+          const rp = remotePlayers.get(p.id);
+          const st = Net.remoteStates && Net.remoteStates.get(p.id);
+          const x = rp ? rp.pos.x : (st && typeof st.x === 'number' ? st.x : 0);
+          const y = rp ? rp.pos.y : (st && typeof st.y === 'number' ? st.y : 0);
+          const z = rp ? rp.pos.z : (st && typeof st.z === 'number' ? st.z : 0);
+          const hp = rp && typeof rp.health === 'number' ? rp.health : (typeof p.health === 'number' ? p.health : 100);
+          playersSnap.push({
+            id: p.id,
+            hp: Math.max(0, Math.min(100, Math.round(hp))),
+            a: p.alive !== false ? 1 : 0,
+            h: p.hidden ? 1 : 0,
+            hs: (p.hidden && p.hideSpotIdx !== undefined) ? p.hideSpotIdx : -1,
+            x: Math.round((x || 0) * 100) / 100,
+            y: Math.round((y || 0) * 100) / 100,
+            z: Math.round((z || 0) * 100) / 100,
+          });
+        }
+      }
+    }
+    const evIds = (world && Array.isArray(world.evidence))
+      ? world.evidence.filter(e => e.found).map(e => e.id)
+      : [];
     Net.broadcast({
       type: 'world_snap',
       siren: siren ? siren.getNetState() : null,
       moths: moths ? moths.getNetSync() : null,
+      players: playersSnap,
+      evIds,
+      evCount: evIds.length,
     });
   }
 
@@ -3548,13 +3701,26 @@
       world.update(dt, gameTime, { still: true, enabled: !!V().forestBirds });
     } else if (cutscene) {
       A.setReverbZone && A.setReverbZone(false, false);
+      const sb = $('skip-bar');
+      const skipFill = sb && (sb.firstElementChild || sb.firstChild);
       // hold space to skip
-      if ((player.keys.Space || LO.touchHold) && state === 'opening') {
+      if (player && (player.keys.Space || LO.touchHold) && state === 'opening') {
         skipHeld += dt;
-        $('skip-bar').firstChild.style.width = Math.min(100, skipHeld / 1.2 * 100) + '%';
-        if (skipHeld > 1.2) { A.stopVoices(); cutscene.finish(); }
-      } else if (skipHeld) { skipHeld = 0; $('skip-bar').firstChild.style.width = '0'; }
+        if (skipFill && skipFill.style) skipFill.style.width = Math.min(100, skipHeld / 1.2 * 100) + '%';
+        if (skipHeld > 1.2) {
+          A.stopVoices();
+          if (Net && Net.isClient && Net.isClient() && Net.sendToHost) {
+            Net.sendToHost({ type: 'cut_skip' });
+          }
+          if (cutscene && cutscene.finish) cutscene.finish();
+          return;
+        }
+      } else if (skipHeld) {
+        skipHeld = 0;
+        if (skipFill && skipFill.style) skipFill.style.width = '0';
+      }
       if (cutscene) cutscene.update(dt);
+      if (!cutscene || (state !== 'opening' && state !== 'ending')) return;
       A.setSubMode && A.setSubMode('mode-cutscene');
       if (world && world.updateWind) world.updateWind(dt, 0.5, camera.position, gameTime);
       if (world) world.update(dt, gameTime += dt, { still: false, enabled: !!V().forestBirds });
@@ -3811,14 +3977,6 @@
         case 'updates': openPanel('updates', 'title'); break;
         case 'credits-panel': openPanel('credits-panel', 'title'); break;
         case 'versions': openPanel('versions', 'title'); break;
-        case 'admin':
-          if (LO.isTesting && LO.AdminAuth && LO.AdminAuth.getToken() && LO.admin) {
-            ensureAdminInit();
-            LO.admin.openPanel(inPause ? 'pause' : 'title');
-          } else {
-            openAdminAuthModal(inPause ? 'pause' : 'title');
-          }
-          break;
         case 'back': closePanel(); break;
         case 'resume': resume(); break;
         case 'retry':
@@ -3860,14 +4018,6 @@
         if (e.code === 'Escape') {
           e.preventDefault();
           closeAdminAuthModal(true);
-        }
-        return;
-      }
-      if (LO.isTesting && (e.code === 'Backquote' || e.code === 'F9') && !e.ctrlKey && !e.shiftKey && state !== 'gate') {
-        e.preventDefault();
-        if (LO.admin) {
-          ensureAdminInit();
-          LO.admin.toggle(state);
         }
         return;
       }
@@ -4261,6 +4411,8 @@
           LO.Net.inGame = true;
           startGame(false, msg.seed, msg.evSeed);
         } else if (msg.type === 'admin_midjoin') {
+          if (_startGameTimer) { clearTimeout(_startGameTimer); _startGameTimer = null; }
+          if (cutscene) endCutscene();
           const rs = msg.runState || {};
           coopTeamWiped = false;
           LO.Net.inGame = true;
@@ -4269,13 +4421,14 @@
           hideAllScreens();
           const seedArg = rs.seed !== null && rs.seed !== undefined ? rs.seed : undefined;
           const evSeedArg = rs.evSeed !== null && rs.evSeed !== undefined ? rs.evSeed : undefined;
-          if (seedArg !== undefined) buildWorld(seedArg, evSeedArg);
           resetRun(seedArg, evSeedArg);
           if (world && world.evidence && Array.isArray(rs.foundIds)) {
             const idSet = new Set(rs.foundIds);
             world.evidence.forEach(e => { e.found = idSet.has(e.id); });
+            evidenceCount = world.evidence.filter(e => e.found).length;
+          } else if (typeof rs.evidenceCount === 'number') {
+            evidenceCount = rs.evidenceCount;
           }
-          if (typeof rs.evidenceCount === 'number') evidenceCount = rs.evidenceCount;
           if (rs.mapTaken && world && world.wallMap) {
             world.wallMap.taken = true;
             if (world.wallMap.mesh) world.wallMap.mesh.visible = false;
@@ -4301,6 +4454,9 @@
           updateMatchIdWatermark();
         } else if (msg.type === 'world_snap') {
           lastWorldSnap = msg;
+          if (Array.isArray(msg.evIds) && world && Array.isArray(world.evidence)) {
+            applyEvidenceSync(msg.evIds, null, null, false, null);
+          }
         } else if (msg.type === 'sneaky_wave') {
           if (sneaky && !sneaky.attacking) {
             sneaky.waveActive = true;
@@ -4315,6 +4471,12 @@
         } else if (msg.type === 'fastone_breach') {
           if (Net.isHost() && siren && siren.investigateFence && V().fastoneV2) {
             siren.investigateFence({ x: msg.x || 0, z: msg.z || 0 });
+          }
+        } else if (msg.type === 'cut_skip') {
+          if (Net.isHost() && (state === 'loading' || state === 'opening' || cutscene)) {
+            if (typeof endCutscene === 'function') endCutscene();
+            Net.broadcast({ type: 'begin_play' });
+            if (typeof beginPlay === 'function') beginPlay();
           }
         } else if (msg.type === 'begin_play') {
           if (typeof endCutscene === 'function') endCutscene();
@@ -4345,39 +4507,35 @@
         } else if (msg.type === 'ev_found') {
           if (!Net.isHost() || !world || !world.evidence) return;
           const ev = world.evidence.find(e => e.id === msg.evId);
-          if (!ev || ev.found) return;
-          ev.found = true;
-          evidenceCount++;
-          lastEvidenceTime = gameTime;
-          if (ev === hintTarget) hintTarget = null;
-          A.evidenceSting();
-          updateEvidenceUI();
+          if (!ev) return;
+          const wasFound = !!ev.found;
+          if (!wasFound) {
+            ev.found = true;
+            evidenceCount = world.evidence.filter(e => e.found).length;
+            lastEvidenceTime = gameTime;
+            if (ev === hintTarget) hintTarget = null;
+            A.evidenceSting();
+            updateEvidenceUI();
+          } else {
+            evidenceCount = world.evidence.filter(e => e.found).length;
+          }
           const finder = Net.getPlayer ? Net.getPlayer(senderId) : null;
           const finderName = finder ? finder.name : 'Teammate';
-          showHint(`${finderName} photographed: ${ev.name}`, 3600);
+          if (!wasFound) {
+            showHint(`${finderName} photographed: ${ev.name}`, 3600);
+          }
           Net.broadcast({
             type: 'ev_sync',
             foundIds: world.evidence.filter(e => e.found).map(e => e.id),
             evidenceCount,
             evName: ev.name,
             finderName,
+            finderId: senderId,
           });
           Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
           if (evidenceCount >= EVIDENCE_NEEDED && !endingQueued) queueEnding();
         } else if (msg.type === 'ev_sync') {
-          if (world && world.evidence && Array.isArray(msg.foundIds)) {
-            const idSet = new Set(msg.foundIds);
-            world.evidence.forEach(e => { if (idSet.has(e.id)) e.found = true; });
-          }
-          if (typeof msg.evidenceCount === 'number') evidenceCount = msg.evidenceCount;
-          lastEvidenceTime = gameTime;
-          if (hintTarget && hintTarget.found) hintTarget = null;
-          A.evidenceSting();
-          updateEvidenceUI();
-          if (msg.evName) {
-            const who = msg.finderName ? `${msg.finderName} photographed` : 'Evidence photographed';
-            showHint(`${who}: ${msg.evName}`, 3600);
-          }
+          applyEvidenceSync(msg.foundIds, msg.evName, msg.finderName, !!msg.reset, msg.finderId);
         } else if (msg.type === 'ending_queue') {
           if (!endingQueued) {
             endingQueued = true;
@@ -4634,11 +4792,22 @@ function boot() {
       markEvidence(ev) {
         if (!ev || ev.found) return;
         ev.found = true;
-        evidenceCount++;
+        evidenceCount = (world && Array.isArray(world.evidence)) ? world.evidence.filter(e => e.found).length : (evidenceCount + 1);
         lastEvidenceTime = gameTime;
         if (ev === hintTarget) hintTarget = null;
         A.evidenceSting();
         updateEvidenceUI();
+        if (Net && Net.isHost && Net.isHost()) {
+          Net.broadcast({
+            type: 'ev_sync',
+            foundIds: world.evidence.filter(e => e.found).map(e => e.id),
+            evidenceCount,
+            evName: ev.name,
+            finderName: Net.localName,
+            finderId: 'host',
+          });
+          Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
+        }
         if (evidenceCount >= EVIDENCE_NEEDED && !endingQueued) queueEnding();
       },
       resetEvidence() {
@@ -4649,6 +4818,10 @@ function boot() {
         player.noSilent = false;
         hintTarget = null;
         updateEvidenceUI();
+        if (Net && Net.isHost && Net.isHost()) {
+          Net.broadcast({ type: 'ev_sync', reset: true, foundIds: [], evidenceCount: 0 });
+          Net.pushRoomHeartbeat && Net.pushRoomHeartbeat();
+        }
       },
       unlockHint() {
         lastEvidenceTime = gameTime - HINT_DELAY;
@@ -4675,11 +4848,16 @@ function boot() {
       syncClock: () => { clock.getDelta(); },
       syncMatchIdUI: () => { updateMatchIdWatermark(); },
       async joinMatchAdmin(roomId, hidden) {
-        if (!LO.Net || !LO.Net.join) throw new Error('Networking unavailable');
+        if (!LO.Net || !LO.Net.join || !LO.Net.authorizeAdminJoin) throw new Error('Networking unavailable');
         const joinEl = $('coop-name-join');
         const rawName = (joinEl && joinEl.value) || loadSavedCallsign() || 'Admin';
         const clean = saveCallsign(rawName) || 'Admin';
-        const res = await LO.Net.join(roomId, clean, { adminJoin: true, adminHidden: !!hidden });
+        const adminJoinToken = await LO.Net.authorizeAdminJoin(roomId, !!hidden);
+        const res = await LO.Net.join(roomId, clean, {
+          adminJoin: true,
+          adminHidden: !!hidden,
+          adminJoinToken,
+        });
         if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
         if (!res || !res.inGame) {
           openPanel('coop-lobby', 'title');
@@ -4691,22 +4869,6 @@ function boot() {
         return await LO.Net.adminRemoteShutdown(roomId, 'Match shut down by Admin');
       },
     };
-    if (LO.isTesting && LO.admin && LO.admin.init) {
-      ensureAdminInit();
-      const tok = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
-      if (tok && typeof fetch === 'function') {
-        fetch('/api/admin-auth', {
-          method: 'GET',
-          headers: { 'X-Admin-Secret': tok },
-          cache: 'no-store',
-        }).then(r => {
-          if (r && r.status === 401 && LO.AdminAuth && LO.AdminAuth.clear) {
-            LO.AdminAuth.clear();
-            if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
-          }
-        }).catch(() => {});
-      }
-    }
     // expose for debugging
     LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, get hazards() { return hazards; }, startGame, startEnding, beginPlay };
   }

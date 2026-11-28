@@ -145,8 +145,42 @@ async function handler(req, res) {
   });
 }
 
+function issueScopedTicket(claims, ttlMs) {
+  const secret = getAdminSecret();
+  if (!secret) return '';
+  const ttl = Math.max(5000, Math.min(300000, Number(ttlMs) || 60000));
+  const payloadObj = Object.assign({}, claims || {}, {
+    exp: Date.now() + ttl,
+    n: crypto.randomBytes(8).toString('hex'),
+  });
+  const payloadB64 = Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+  const sigB64 = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
+  return `${payloadB64}.${sigB64}`;
+}
+
+function verifyScopedTicket(token) {
+  const secret = getAdminSecret();
+  if (!secret || typeof token !== 'string') return null;
+  const dot = token.indexOf('.');
+  if (dot <= 0 || dot >= token.length - 1) return null;
+  const payloadB64 = token.slice(0, dot);
+  const sigB64 = token.slice(dot + 1);
+  const expectedSig = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
+  if (!timingSafeEqualStr(sigB64, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    if (!parsed || typeof parsed.exp !== 'number' || !Number.isFinite(parsed.exp)) return null;
+    if (parsed.exp <= Date.now()) return null;
+    return parsed;
+  } catch (e) {
+    return null;
+  }
+}
+
 handler.verifyAdminRequest = verifyAdminRequest;
 handler.verifyAdminToken = verifyAdminToken;
 handler.getAdminSecret = getAdminSecret;
+handler.issueScopedTicket = issueScopedTicket;
+handler.verifyScopedTicket = verifyScopedTicket;
 
 module.exports = handler;

@@ -229,27 +229,22 @@ window.LO = window.LO || {};
 
   const ADMIN_AUTH_KEY = 'theLoudOne.adminAuth.v1';
 
+  let adminAuthToken = '';
+  try {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(ADMIN_AUTH_KEY);
+  } catch (e) { /* ignore */ }
+
   function getAdminAuth() {
-    try {
-      if (typeof sessionStorage === 'undefined') return null;
-      const raw = sessionStorage.getItem(ADMIN_AUTH_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.authorized === true && typeof parsed.token === 'string' && parsed.token.length > 0) {
-        return { authorized: true, token: parsed.token };
-      }
-    } catch (e) { /* storage unavailable */ }
+    if (typeof adminAuthToken === 'string' && adminAuthToken.length > 0) {
+      return { authorized: true, token: adminAuthToken };
+    }
     return null;
   }
 
   function setAdminAuth(token) {
     const clean = typeof token === 'string' ? token.trim() : '';
     if (!clean) return false;
-    try {
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem(ADMIN_AUTH_KEY, JSON.stringify({ authorized: true, token: clean }));
-      }
-    } catch (e) { /* ignore */ }
+    adminAuthToken = clean;
     LO.isTesting = true;
     if (typeof document !== 'undefined' && document.body) {
       document.body.classList.add('testing-build');
@@ -258,18 +253,14 @@ window.LO = window.LO || {};
   }
 
   function clearAdminAuth() {
-    try {
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.removeItem(ADMIN_AUTH_KEY);
-      }
-    } catch (e) { /* ignore */ }
+    adminAuthToken = '';
     LO.isTesting = false;
     if (typeof document !== 'undefined' && document.body) {
       document.body.classList.remove('testing-build');
     }
   }
 
-  const isTesting = !!getAdminAuth();
+  const isTesting = false;
   if (typeof document !== 'undefined' && document.body) {
     document.body.classList.toggle('testing-build', isTesting);
   }
@@ -280,10 +271,7 @@ window.LO = window.LO || {};
     get: getAdminAuth,
     set: setAdminAuth,
     clear: clearAdminAuth,
-    getToken: () => {
-      const a = getAdminAuth();
-      return a ? a.token : '';
-    },
+    getToken: () => adminAuthToken || '',
   };
   LO.settings = S;
   LO.VERSIONS = VERSIONS;

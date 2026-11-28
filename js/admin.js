@@ -332,7 +332,11 @@
 
   // ---------------- Open / Close Panel ----------------
   admin.openPanel = function (from) {
-    if (!LO.isTesting) return;
+    const tok = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+    if (!LO.isTesting || !tok) {
+      if (admin.open) admin.closePanel(true);
+      return;
+    }
     const H = host();
     if (!H) return;
     if (admin.open) return;
@@ -377,7 +381,11 @@
   };
 
   admin.toggle = function (currentState) {
-    if (!LO.isTesting) return;
+    const tok = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+    if (!LO.isTesting || !tok) {
+      if (admin.open) admin.closePanel(true);
+      return;
+    }
     if (admin.open) {
       admin.closePanel();
       return;
@@ -1400,13 +1408,31 @@
 
   async function refreshSessions() {
     if (admin.sessionsLoading) return;
+    const token = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+    if (!token) {
+      admin.sessions = [];
+      admin.sessionsError = 'Admin authorization required.';
+      if (admin.open && admin.activeTab === 'multiplayer') renderBody();
+      return;
+    }
     admin.sessionsLoading = true;
     admin.sessionsError = '';
     if (admin.open && admin.activeTab === 'multiplayer') renderBody();
     try {
-      const token = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
-      const headers = token ? { 'X-Admin-Secret': token } : {};
-      const res = await fetch('/api/rooms', { headers, cache: 'no-store' });
+      const res = await fetch('/api/rooms', {
+        headers: {
+          'X-Admin-Secret': token,
+          'Authorization': `Bearer ${token}`,
+        },
+        cache: 'no-store',
+      });
+      if (res && res.status === 401) {
+        if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
+        admin.sessions = [];
+        admin.sessionsError = 'Admin session expired. Press Ctrl+Shift+F9 to verify.';
+        admin.closePanel();
+        return;
+      }
       if (!res || !res.ok) throw new Error('Could not load active rooms.');
       const json = await res.json();
       admin.sessions = (json && Array.isArray(json.rooms)) ? json.rooms : [];
