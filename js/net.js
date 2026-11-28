@@ -178,7 +178,7 @@ window.LO = window.LO || {};
 
     // Voice & Chat runtime state
     voiceEnabled: false,
-    micMuted: false,
+    micMuted: !!(LO.settings && LO.settings.micMutedPref),
     voiceError: '',
     localStream: null,
     voiceCalls: new Map(), // peerId -> { outgoing, incoming, stream, audioEl, source, gain, flatGain, panner, analyser, buf, volume, distance, speaking, holdUntil }
@@ -197,6 +197,7 @@ window.LO = window.LO || {};
     startedAt: 0,
     _hostToken: '',
     _heartbeatTimer: null,
+    _lastHeartbeatAt: 0,
     _closing: false,
     localHiddenAdmin: false,
     _iceProviders: null,
@@ -599,9 +600,10 @@ window.LO = window.LO || {};
       else if (this.mode === 'client') this.sendToHost(pkt);
     },
 
-    enableVoice() {
+    enableVoice(opts) {
+      const preserveMute = !!(opts && opts.preserveMute);
       if (this.voiceEnabled && this.localStream) {
-        this.setMicMuted(false);
+        if (!preserveMute) this.setMicMuted(false);
         return Promise.resolve(true);
       }
       if (!this.isVoiceSupported()) {
@@ -625,8 +627,15 @@ window.LO = window.LO || {};
         }
         this.localStream = stream;
         this.voiceEnabled = true;
-        this.micMuted = false;
-        stream.getAudioTracks().forEach(t => { t.enabled = true; });
+        const startMuted = preserveMute
+          ? !!(this.micMuted || (LO.settings && LO.settings.micMutedPref))
+          : !!(LO.settings && LO.settings.micMutedPref);
+        this.micMuted = startMuted;
+        if (LO.Settings && LO.Settings.set) {
+          LO.Settings.set('voiceAutoJoin', true);
+          LO.Settings.set('micMutedPref', this.micMuted);
+        }
+        stream.getAudioTracks().forEach(t => { t.enabled = !this.micMuted; });
         const ctx = this._ensureAudioCtx();
         if (ctx && ctx.createMediaStreamSource) {
           try {
@@ -654,7 +663,7 @@ window.LO = window.LO || {};
       });
     },
 
-    disableVoice() {
+    disableVoice(preservePrefs) {
       if (this._localVoiceSource) {
         try { this._localVoiceSource.disconnect(); } catch (e) {}
         this._localVoiceSource = null;
@@ -673,23 +682,38 @@ window.LO = window.LO || {};
         if (entry.outgoing) { try { entry.outgoing.close(); } catch (e) {} entry.outgoing = null; }
       });
       this.voiceEnabled = false;
-      this.micMuted = false;
+      if (!preservePrefs && LO.Settings && LO.Settings.set) {
+        LO.Settings.set('voiceAutoJoin', false);
+      }
+      this.micMuted = !!(LO.settings && LO.settings.micMutedPref);
       this._broadcastVoiceState();
       this._emitVoiceChange();
     },
 
     setMicMuted(muted) {
       this.micMuted = !!muted;
+      if (LO.Settings && LO.Settings.set) {
+        LO.Settings.set('micMutedPref', this.micMuted);
+      }
       if (this.localStream) {
         this.localStream.getAudioTracks().forEach(t => { t.enabled = !this.micMuted; });
       }
       if (this.micMuted) this.localSpeaking = false;
-      this._broadcastVoiceState();
+      if (this.isCoop()) this._broadcastVoiceState();
       this._emitVoiceChange();
     },
 
     toggleMicMute() {
-      if (!this.voiceEnabled || !this.localStream) return this.enableVoice();
+      if (!this.isCoop()) {
+        this.setMicMuted(!this.micMuted);
+        return Promise.resolve(!this.micMuted);
+      }
+      if (!this.voiceEnabled || !this.localStream) {
+        if (this.micMuted) {
+          this.setMicMuted(false);
+        }
+        return this.enableVoice({ preserveMute: true });
+      }
       this.setMicMuted(!this.micMuted);
       return Promise.resolve(!this.micMuted);
     },
@@ -959,6 +983,7 @@ window.LO = window.LO || {};
     async _sendRoomHeartbeat(forceCheck) {
       if (this.mode !== 'host' || !this.roomCode || (this._closing && !forceCheck)) return;
       if (typeof fetch !== 'function' || typeof window === 'undefined') return;
+      this._lastHeartbeatAt = Date.now();
       const snap = this.getSessionSnapshot ? this.getSessionSnapshot() : null;
       const activeCount = this.players.filter(p => p && !p.left && !p.hiddenAdmin).length || 1;
       const payload = {
@@ -971,19 +996,24 @@ window.LO = window.LO || {};
         status: (snap && snap.status) || (this.inGame ? 'playing' : 'lobby'),
         hostToken: this._hostToken || '',
       };
+      const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ac ? setTimeout(() => ac.abort(), 4000) : null;
       try {
         const res = await fetch('/api/rooms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
           cache: 'no-store',
+          signal: ac ? ac.signal : undefined,
         });
         if (!res || !res.ok) return;
         const json = await res.json();
         if (json && json.shutdown && this.mode === 'host' && !this._closing) {
           this.shutdownByAdmin(json.shutdownReason || 'Match shut down by Admin');
         }
-      } catch (e) {}
+      } catch (e) {} finally {
+        if (timer) clearTimeout(timer);
+      }
     },
 
     pushRoomHeartbeat() {
@@ -998,7 +1028,7 @@ window.LO = window.LO || {};
       this._sendRoomHeartbeat(false);
       this._heartbeatTimer = setInterval(() => {
         this._sendRoomHeartbeat(false);
-      }, 15000);
+      }, 5000);
     },
 
     _stopRoomHeartbeat() {
@@ -1012,7 +1042,7 @@ window.LO = window.LO || {};
       const code = this.roomCode;
       if (!code || typeof window === 'undefined') return;
       const token = this._hostToken || '';
-      if (useBeacon && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      if (useBeacon && !isAdmin && typeof navigator !== 'undefined' && navigator.sendBeacon) {
         try {
           const blob = new Blob([JSON.stringify({ action: 'leave', roomId: code, hostToken: token })], { type: 'application/json' });
           navigator.sendBeacon('/api/rooms', blob);
@@ -1022,9 +1052,15 @@ window.LO = window.LO || {};
       if (typeof fetch === 'function') {
         const qs = new URLSearchParams({ roomId: code });
         if (token) qs.set('token', token);
-        if (isAdmin) qs.set('admin', '1');
+        const headers = {};
+        if (isAdmin) {
+          qs.set('admin', '1');
+          const adminSecret = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+          if (adminSecret) headers['X-Admin-Secret'] = adminSecret;
+        }
         fetch(`/api/rooms?${qs.toString()}`, {
           method: 'DELETE',
+          headers,
           keepalive: true,
           cache: 'no-store',
         }).catch(() => {});
@@ -1130,6 +1166,10 @@ window.LO = window.LO || {};
             this._emitLobby();
             this._startRoomHeartbeat();
             this._startHostWatchdog();
+            if (LO.audio && LO.audio.syncMix) LO.audio.syncMix();
+            if (LO.settings && LO.settings.voiceAutoJoin && this.isVoiceSupported()) {
+              this.enableVoice({ preserveMute: true }).catch(() => {});
+            }
             resolve(code);
           });
 
@@ -1626,7 +1666,11 @@ window.LO = window.LO || {};
                 this._emitStatus(`Connected to room ${this.roomCode}`);
                 this._emitLobby();
                 this._startPingLoop();
+                if (LO.audio && LO.audio.syncMix) LO.audio.syncMix();
                 if (this.voiceEnabled) this._broadcastVoiceState();
+                else if (LO.settings && LO.settings.voiceAutoJoin && !this.localHiddenAdmin && this.isVoiceSupported()) {
+                  this.enableVoice({ preserveMute: true }).catch(() => {});
+                }
                 if (!settled) {
                   settled = true;
                   resolve({
@@ -1792,7 +1836,7 @@ window.LO = window.LO || {};
       this.pingMs = null;
       this._lastPingSentAt = 0;
       this._lastSyncedPing = null;
-      this.disableVoice();
+      this.disableVoice(true);
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
       this.voiceCalls.clear();
       this.voiceError = '';
@@ -1819,6 +1863,7 @@ window.LO = window.LO || {};
       this.players = [];
       this.remoteStates.clear();
       this._emitPing();
+      if (LO.audio && LO.audio.syncMix) LO.audio.syncMix();
     },
 
     closeRoom(clientReason, selfReason) {
@@ -1832,7 +1877,7 @@ window.LO = window.LO || {};
       const reasonForSelf = selfReason || reasonForClients;
       this._stopRoomHeartbeat();
       this._stopHostWatchdog();
-      this.disableVoice();
+      this.disableVoice(true);
       this._deleteRoomRegistry(false, false);
       this.broadcast({ type: 'ROOM_CLOSED', reason: reasonForClients });
       setTimeout(() => {
@@ -1852,7 +1897,7 @@ window.LO = window.LO || {};
       this._closing = true;
       this._stopRoomHeartbeat();
       this._stopHostWatchdog();
-      this.disableVoice();
+      this.disableVoice(true);
       this._deleteRoomRegistry(false, true);
       this.broadcast({ type: 'ADMIN_SHUTDOWN', reason: msg });
       setTimeout(() => {
@@ -1864,18 +1909,42 @@ window.LO = window.LO || {};
     async adminRemoteShutdown(rawCode, reason) {
       const code = String(rawCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
       if (!code) return { ok: false, error: 'Invalid room ID.' };
+      const adminSecret = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+      if (!adminSecret) {
+        return { ok: false, status: 401, error: 'Admin authorization required.' };
+      }
       const msg = reason || 'Match shut down by Admin';
       let ok = false;
+      let status = 0;
+      let errMsg = '';
       if (typeof fetch === 'function') {
         try {
           const res = await fetch('/api/rooms', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Admin-Secret': adminSecret,
+            },
             body: JSON.stringify({ action: 'shutdown', roomId: code, reason: msg }),
             cache: 'no-store',
           });
+          status = res ? res.status : 0;
           ok = !!(res && res.ok);
-        } catch (e) {}
+          if (!ok && res) {
+            try {
+              const j = await res.json();
+              if (j && j.error) errMsg = j.error;
+            } catch (e) {}
+          }
+        } catch (e) {
+          errMsg = 'Network error reaching /api/rooms.';
+        }
+      }
+      if (!ok) {
+        if (status === 401 && LO.AdminAuth && LO.AdminAuth.clear) {
+          LO.AdminAuth.clear();
+        }
+        return { ok: false, status, error: errMsg || 'Failed to shut down match.' };
       }
       if (this.mode === 'host' && this.roomCode === code) {
         this.shutdownByAdmin(msg);
@@ -1885,7 +1954,7 @@ window.LO = window.LO || {};
         this.sendToHost({ type: 'ADMIN_SHUTDOWN', reason: msg });
         return { ok: true };
       }
-      // Best-effort instant signaling nudge so host sees shutdown right away instead of waiting 15s
+      // Best-effort instant signaling nudge so host sees shutdown right away instead of waiting 5s
       if (typeof Peer !== 'undefined') {
         this._loadIceConfig(false).then(cfg => {
           try {
@@ -1911,7 +1980,7 @@ window.LO = window.LO || {};
           } catch (e) {}
         });
       }
-      return { ok };
+      return { ok: true };
     },
 
     leave() {
@@ -1930,6 +1999,19 @@ window.LO = window.LO || {};
   LO.Net = Net;
 
   if (typeof window !== 'undefined') {
+    const syncHostHeartbeatOnResume = () => {
+      if (Net.mode === 'host' && Net.roomCode && !Net._closing) {
+        if ((Date.now() - (Net._lastHeartbeatAt || 0)) >= 4500) {
+          Net._sendRoomHeartbeat(false);
+        }
+      }
+    };
+    window.addEventListener('focus', syncHostHeartbeatOnResume);
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) syncHostHeartbeatOnResume();
+      });
+    }
     window.addEventListener('beforeunload', () => {
       if (Net.mode === 'host') {
         Net._deleteRoomRegistry(true, false);

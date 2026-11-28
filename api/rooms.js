@@ -3,6 +3,8 @@
 // Uses optional Vercel KV / Upstash Redis REST when configured, with automatic
 // globalThis in-memory fallback for single-instance or local dev environments.
 
+const { verifyAdminRequest } = require('./admin-auth');
+
 const ROOM_TTL_MS = 25000;
 const KV_TTL_SEC = 35;
 const KV_PREFIX = 'lo:rooms:';
@@ -226,6 +228,9 @@ module.exports = async function handler(req, res) {
     const hostToken = cleanToken(body.hostToken || headerToken);
 
     if (action === 'shutdown') {
+      if (!verifyAdminRequest(req)) {
+        return res.status(401).json({ ok: false, error: 'Unauthorized: valid ADMIN_SECRET header required.' });
+      }
       const reason = cleanText(body.reason, 80, 'Match shut down by Admin');
       const next = Object.assign({}, existing || {
         roomId,
@@ -247,7 +252,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (action === 'leave') {
-      if (existing && existing.hostToken && hostToken && existing.hostToken !== hostToken) {
+      if (existing && existing.hostToken && existing.hostToken !== hostToken) {
         return res.status(403).json({ ok: false, error: 'Unauthorized room token.' });
       }
       await storeDelete(roomId);
@@ -255,7 +260,7 @@ module.exports = async function handler(req, res) {
     }
 
     const isFresh = existing && (now - (existing.lastHeartbeat || 0)) <= ROOM_TTL_MS;
-    if (isFresh && existing.hostToken && hostToken && existing.hostToken !== hostToken) {
+    if (isFresh && existing.hostToken && existing.hostToken !== hostToken) {
       return res.status(403).json({ ok: false, error: 'Room ID already owned by another host.' });
     }
 
@@ -300,8 +305,12 @@ module.exports = async function handler(req, res) {
     const existing = await storeGet(roomId);
     const headerToken = req && req.headers ? req.headers['x-host-token'] : '';
     const hostToken = cleanToken(readQueryParam(req, 'token') || headerToken || body.hostToken);
-    const isAdmin = readQueryParam(req, 'admin') === '1' || body.admin === true;
+    const wantsAdmin = readQueryParam(req, 'admin') === '1' || body.admin === true;
+    const isAdmin = wantsAdmin && verifyAdminRequest(req);
 
+    if (wantsAdmin && !isAdmin) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized: valid ADMIN_SECRET header required.' });
+    }
     if (!isAdmin && existing && existing.hostToken && existing.hostToken !== hostToken) {
       return res.status(403).json({ ok: false, error: 'Unauthorized room token.' });
     }

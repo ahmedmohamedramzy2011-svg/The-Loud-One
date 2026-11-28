@@ -48,8 +48,8 @@
     <button type="button" id="version-btn" data-action="versions" title="Switch game version">v2.8.3</button>
     <span class="ver-sep">&nbsp;·&nbsp; stay quiet</span>
     <span class="ver-sep admin-only">&nbsp;·&nbsp;</span>
-    <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Testing Panel (` or F9)">ADMIN [`]</button>
-    <span class="testing-badge admin-only">TESTING</span>
+    <button type="button" id="admin-footer-btn" class="admin-only" data-action="admin" title="Open Admin Panel (Ctrl+Shift+F9)">ADMIN</button>
+    <span class="testing-badge admin-only">ADMIN</span>
   </div>
 </div>
 
@@ -168,8 +168,8 @@
           <tr><td>H</td><td>Hint (after 3 minutes without new evidence)</td></tr>
           <tr><td>M / Tab</td><td>Toggle Town Map (once collected)</td></tr>
           <tr><td>T / Enter</td><td>Open &amp; send co-op text chat</td></tr>
-          <tr><td>X</td><td>Enable / mute proximity voice mic</td></tr>
-          <tr class="admin-only"><td>` / F9</td><td>Admin testing panel</td></tr>
+          <tr><td id="keybind-voice-cell">X</td><td>Toggle Voice (mute / unmute microphone globally)</td></tr>
+          <tr class="admin-only"><td>Ctrl+Shift+F9 / ` / F9</td><td>Admin panel</td></tr>
           <tr><td>Esc</td><td>Pause</td></tr>
         </table>
       </div>
@@ -586,13 +586,32 @@
   </div>
 </div>
 
+<!-- Admin Authentication Modal (Ctrl+Shift+F9) -->
+<div id="admin-auth-modal" class="screen panel-screen">
+  <div class="panel small">
+    <div class="panel-head">
+      <h2>ADMIN ACCESS</h2>
+      <button type="button" id="adm-auth-close" class="panel-close" aria-label="Close">✕</button>
+    </div>
+    <form id="adm-auth-form" class="coop-form" autocomplete="off">
+      <label class="coop-label" for="adm-auth-input">ENTER ADMIN PASSWORD</label>
+      <input type="password" id="adm-auth-input" class="coop-input" placeholder="Admin password" autocomplete="current-password">
+      <div id="adm-auth-error" class="coop-status err"></div>
+      <div class="coop-actions">
+        <button type="submit" id="adm-auth-submit" class="coop-btn primary">VERIFY</button>
+        <button type="button" id="adm-auth-cancel" class="coop-btn">CANCEL</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Admin / Testing Panel -->
 <div id="admin-panel" class="screen panel-screen admin-only">
   <div class="panel adm-panel">
     <div class="panel-head adm-head">
       <div>
         <h2>ADMIN PANEL</h2>
-        <div class="adm-sub">Testing build (/testing) &nbsp;·&nbsp; Press ` or F9 anytime</div>
+        <div class="adm-sub">Verified Admin Session &nbsp;·&nbsp; Press Ctrl+Shift+F9, ` or F9 anytime</div>
       </div>
       <div class="adm-head-ctrls">
         <button type="button" id="adm-freeze-btn" class="adm-chip on">FREEZE WHEN OPEN: ON</button>

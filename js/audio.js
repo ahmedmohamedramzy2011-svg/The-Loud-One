@@ -166,10 +166,15 @@
   };
   A.getReverbZone = () => curReverbZone || 'street';
 
+  const COOP_AUDIO_SCALE = 0.52;
+  function coopScale() {
+    return (LO.Net && LO.Net.isCoop && LO.Net.isCoop()) ? COOP_AUDIO_SCALE : 1.0;
+  }
+
   function applyVolumes() {
     if (!ctx) return;
     const t = ctx.currentTime;
-    master.gain.setTargetAtTime(S.master, t, 0.05);
+    master.gain.setTargetAtTime(S.master * coopScale(), t, 0.08);
     const k = A.still ? 0 : 1, tc = 0.8;
     if (A.still) {
       // the moment the wind dies, everything else cuts out instantly
@@ -186,6 +191,8 @@
     }
     if (!A.still) voiceBus.gain.setTargetAtTime(S.voice * k, t, tc);
   }
+  A.syncMix = applyVolumes;
+  A.getCoopScale = coopScale;
   LO.events.addEventListener('settings', applyVolumes);
 
   A.now = () => (ctx ? ctx.currentTime : 0);
@@ -373,10 +380,11 @@
   A.playDeathNoise = function (fast) {
     deathT0 = null;
     if (!ctx) return;
+    const duck = coopScale();
     if (!fast) {
       if (!samples.deathlong) return;
       const s = ctx.createBufferSource(); s.buffer = samples.deathlong;
-      const g = ctx.createGain(); g.gain.value = 1.35 * Math.min(1, S.master * 1.25) * Math.max(0.4, S.sfx);
+      const g = ctx.createGain(); g.gain.value = 1.35 * Math.min(1, S.master * 1.25) * Math.max(0.4, S.sfx) * duck;
       s.connect(g); g.connect(ctx.destination);
       deathT0 = ctx.currentTime + 0.02; s.start(deathT0);
       return;
@@ -390,7 +398,7 @@
     const curve = new Float32Array(2048);
     for (let i = 0; i < curve.length; i++) { const x = i / (curve.length - 1) * 2 - 1; curve[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
     sat.curve = curve; sat.oversample = '4x';
-    const out = ctx.createGain(); out.gain.value = 1.0 * Math.min(1, S.master * 1.25) * Math.max(0.4, S.sfx);
+    const out = ctx.createGain(); out.gain.value = 1.0 * Math.min(1, S.master * 1.25) * Math.max(0.4, S.sfx) * duck;
     s.connect(drive); drive.connect(sat); sat.connect(out); out.connect(ctx.destination);
     const t0 = ctx.currentTime;
     s.start(t0);
@@ -399,7 +407,7 @@
     // pop lands as the screen collapses (2.25s after death)
     if (samples.tvoff) {
       const tv = ctx.createBufferSource(); tv.buffer = samples.tvoff;
-      const tg = ctx.createGain(); tg.gain.value = 1.4 * Math.min(1, S.master * 1.25) * Math.max(0.4, S.sfx);
+      const tg = ctx.createGain(); tg.gain.value = 1.4 * Math.min(1, S.master * 1.25) * Math.max(0.4, S.sfx) * duck;
       tv.connect(tg); tg.connect(ctx.destination);
       tv.start(t0 + 1.40);
       tvoffScheduled = t0;
@@ -2060,7 +2068,7 @@
           if (role === 'radio') { u.pitch = 0.78; u.rate = 0.96; }
           if (role === 'siren') { u.pitch = 0.05; u.rate = 0.55; }
           if (opts.rate) u.rate *= opts.rate;
-          u.volume = Math.max(0, Math.min(1, S.voice * S.master * (opts.volume === undefined ? 1 : opts.volume)));
+          u.volume = Math.max(0, Math.min(1, S.voice * S.master * coopScale() * (opts.volume === undefined ? 1 : opts.volume)));
           if (role === 'radio') {
             const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
             let i = 0;

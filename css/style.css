@@ -866,6 +866,7 @@ body:not(.testing-build) .admin-only { display: none !important; }
 #admin-footer-btn:hover, #admin-footer-btn:focus-visible { color: var(--red); border-bottom-color: var(--red); outline: none; }
 body.touch #admin-footer-btn { touch-action: manipulation; }
 
+#admin-auth-modal { z-index: 70; }
 #admin-panel { z-index: 65; }
 .adm-panel { width: min(94vw, 820px); max-height: 88dvh; max-height: 88vh; position: relative; }
 .adm-head { padding: 14px 20px 10px; }
@@ -1395,6 +1396,28 @@ body.replaying #objective,
 body.replaying #map-hud-badge,
 body.replaying #touch {
   display: none !important;
+}
+
+.keybind-btn {
+  min-width: 112px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.keybind-btn:hover {
+  border-color: var(--red);
+  color: #fff;
+}
+.keybind-btn.listening {
+  border-color: var(--red);
+  background: rgba(209, 26, 26, 0.22);
+  color: #ffd6d2;
 }
 
 

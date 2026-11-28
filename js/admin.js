@@ -1359,9 +1359,18 @@
             shutBtn.disabled = true;
             shutBtn.textContent = 'Shutting down...';
             try {
-              await H.shutdownMatchAdmin(sess.roomId);
-              setStatus(`Shut down match ${sess.roomId}.`);
-              setTimeout(() => refreshSessions(), 350);
+              const res = await H.shutdownMatchAdmin(sess.roomId);
+              if (res && res.ok) {
+                setStatus(`Shut down match ${sess.roomId}.`);
+                setTimeout(() => refreshSessions(), 350);
+              } else {
+                setStatus((res && res.error) || `Failed to shut down ${sess.roomId}.`);
+                shutBtn.disabled = false;
+                shutBtn.textContent = 'Shut Down Match';
+                if (res && res.status === 401) {
+                  admin.closePanel();
+                }
+              }
             } catch (err) {
               setStatus(`Failed to shut down ${sess.roomId}.`);
               shutBtn.disabled = false;
@@ -1395,7 +1404,9 @@
     admin.sessionsError = '';
     if (admin.open && admin.activeTab === 'multiplayer') renderBody();
     try {
-      const res = await fetch('/api/rooms', { cache: 'no-store' });
+      const token = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+      const headers = token ? { 'X-Admin-Secret': token } : {};
+      const res = await fetch('/api/rooms', { headers, cache: 'no-store' });
       if (!res || !res.ok) throw new Error('Could not load active rooms.');
       const json = await res.json();
       admin.sessions = (json && Array.isArray(json.rooms)) ? json.rooms : [];

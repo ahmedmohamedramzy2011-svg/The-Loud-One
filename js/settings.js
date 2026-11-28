@@ -25,6 +25,9 @@ window.LO = window.LO || {};
     master: 0.8, music: 0.6, sfx: 0.9, voice: 1.0, disableVoiceAttenuation: false, subtitles: true, tts: true,
     // controls
     sensitivity: 1.0, invertY: false,
+    toggleVoiceKey: 'KeyX',
+    micMutedPref: false,
+    voiceAutoJoin: false,
     fastDeath: false,
     // playable version
     gameVersion: '2.8.3',
@@ -176,6 +179,21 @@ window.LO = window.LO || {};
     { key: 'showFps', label: 'Show FPS', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
   ];
 
+  function formatKeyCode(code) {
+    const c = String(code || 'KeyX');
+    if (c.startsWith('Key') && c.length === 4) return c.slice(3);
+    if (c.startsWith('Digit') && c.length === 6) return c.slice(5);
+    if (c.startsWith('Numpad')) return 'Num ' + c.slice(6);
+    const map = {
+      Space: 'Space', Tab: 'Tab', CapsLock: 'Caps', Enter: 'Enter', Backspace: 'Backspace',
+      ShiftLeft: 'L-Shift', ShiftRight: 'R-Shift', ControlLeft: 'L-Ctrl', ControlRight: 'R-Ctrl',
+      AltLeft: 'L-Alt', AltRight: 'R-Alt', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+      Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\',
+      Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+    };
+    return map[c] || c;
+  }
+
   const AUDIO_OPTIONS = [
     { section: 'VOLUME' },
     { key: 'master', label: 'Master', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
@@ -190,6 +208,7 @@ window.LO = window.LO || {};
     { section: 'CONTROLS' },
     { key: 'sensitivity', label: 'Mouse Sensitivity', type: 'range', min: 0.2, max: 3, step: 0.05, fmt: v => v.toFixed(2) + 'x' },
     { key: 'invertY', label: 'Invert Y', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
+    { key: 'toggleVoiceKey', label: 'Toggle Voice', desc: 'Mute/unmute your microphone globally across matches', type: 'keybind' },
   ];
 
   function set(key, value) {
@@ -208,27 +227,69 @@ window.LO = window.LO || {};
     LO.events && LO.events.dispatchEvent(new CustomEvent('settings', { detail: { key, value } }));
   }
 
-  const isTesting = (function () {
+  const ADMIN_AUTH_KEY = 'theLoudOne.adminAuth.v1';
+
+  function getAdminAuth() {
     try {
-      const p = (window.location && window.location.pathname) || '/';
-      const s = (window.location && window.location.search) || '';
-      if (/^\/testing(?:\/|\.html)?$/i.test(p)) return true;
-      const params = new URLSearchParams(s);
-      const t = params.get('testing') || params.get('admin');
-      return t === '1' || t === 'true';
-    } catch (e) {
-      return false;
+      if (typeof sessionStorage === 'undefined') return null;
+      const raw = sessionStorage.getItem(ADMIN_AUTH_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.authorized === true && typeof parsed.token === 'string' && parsed.token.length > 0) {
+        return { authorized: true, token: parsed.token };
+      }
+    } catch (e) { /* storage unavailable */ }
+    return null;
+  }
+
+  function setAdminAuth(token) {
+    const clean = typeof token === 'string' ? token.trim() : '';
+    if (!clean) return false;
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(ADMIN_AUTH_KEY, JSON.stringify({ authorized: true, token: clean }));
+      }
+    } catch (e) { /* ignore */ }
+    LO.isTesting = true;
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.classList.add('testing-build');
     }
-  })();
-  if (document.body) document.body.classList.toggle('testing-build', isTesting);
+    return true;
+  }
+
+  function clearAdminAuth() {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem(ADMIN_AUTH_KEY);
+      }
+    } catch (e) { /* ignore */ }
+    LO.isTesting = false;
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.classList.remove('testing-build');
+    }
+  }
+
+  const isTesting = !!getAdminAuth();
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.classList.toggle('testing-build', isTesting);
+  }
 
   LO.events = LO.events || new EventTarget();
   LO.isTesting = isTesting;
+  LO.AdminAuth = {
+    get: getAdminAuth,
+    set: setAdminAuth,
+    clear: clearAdminAuth,
+    getToken: () => {
+      const a = getAdminAuth();
+      return a ? a.token : '';
+    },
+  };
   LO.settings = S;
   LO.VERSIONS = VERSIONS;
   LO.versionFeatures = versionFeatures;
   LO.ver = () => versionFeatures(S.gameVersion);
-  LO.Settings = { set, save, PRESETS, DEFAULTS, GRAPHICS_OPTIONS, AUDIO_OPTIONS };
+  LO.Settings = { set, save, formatKeyCode, PRESETS, DEFAULTS, GRAPHICS_OPTIONS, AUDIO_OPTIONS };
 })();
 
 // touch device detection (phones / tablets)

@@ -830,7 +830,22 @@
       lockPointer();
     }
   }
+  function voiceKeyLabel() {
+    return (LO.Settings && LO.Settings.formatKeyCode)
+      ? LO.Settings.formatKeyCode(S.toggleVoiceKey || 'KeyX')
+      : 'X';
+  }
+
+  function syncVoiceKeybindLabels() {
+    const kLabel = voiceKeyLabel();
+    const cell = $('keybind-voice-cell');
+    if (cell) cell.textContent = kLabel;
+    const chatHint = $('hud-chat-hint');
+    if (chatHint) chatHint.innerHTML = `[T] / [Enter] Chat &nbsp;·&nbsp; [${escHtml(kLabel)}] Mic`;
+  }
+
   function updateVoiceUI() {
+    syncVoiceKeybindLabels();
     const inCoop = !!(Net && Net.isCoop());
     document.body.classList.toggle('in-coop', inCoop);
     const lBtn = $('lobby-mic-btn');
@@ -843,11 +858,12 @@
     const on = !!Net.voiceEnabled;
     const muted = !!Net.micMuted;
     const talking = !!(on && !muted && Net.localSpeaking);
+    const kLabel = voiceKeyLabel();
 
     if (lBtn) {
-      lBtn.textContent = !on ? 'ENABLE MIC' : muted ? 'MIC MUTED' : 'MIC LIVE';
+      lBtn.textContent = !on ? (muted ? 'ENABLE MIC (MUTED)' : 'ENABLE MIC') : muted ? 'MIC MUTED' : 'MIC LIVE';
       lBtn.classList.toggle('live', on && !muted);
-      lBtn.classList.toggle('muted', on && muted);
+      lBtn.classList.toggle('muted', muted);
       lBtn.classList.toggle('talking', talking);
     }
     if (lStat) {
@@ -855,10 +871,12 @@
         lStat.textContent = Net.voiceError;
         lStat.className = 'coop-mic-status err';
       } else if (!on) {
-        lStat.textContent = 'Voice off — press to test mic & talk in lobby';
+        lStat.textContent = muted
+          ? `Mic muted globally ([${kLabel}] to unmute) — teammates cannot hear you`
+          : `Voice off — press [${kLabel}] or click Enable Mic to talk`;
         lStat.className = 'coop-mic-status';
       } else if (muted) {
-        lStat.textContent = 'Microphone muted — teammates cannot hear you';
+        lStat.textContent = `Microphone muted ([${kLabel}] to unmute) — teammates cannot hear you`;
         lStat.className = 'coop-mic-status';
       } else if (talking) {
         lStat.textContent = 'Transmitting voice to squad...';
@@ -871,10 +889,10 @@
       }
     }
     if (hBtn) {
-      const pfx = LO.isTouch ? '' : '[X] ';
-      hBtn.textContent = !on ? (pfx + 'MIC OFF') : muted ? (pfx + 'MIC MUTED') : (pfx + 'MIC LIVE');
+      const pfx = LO.isTouch ? '' : `[${kLabel}] `;
+      hBtn.textContent = !on ? (muted ? pfx + 'MIC MUTED' : pfx + 'MIC OFF') : muted ? (pfx + 'MIC MUTED') : (pfx + 'MIC LIVE');
       hBtn.classList.toggle('live', on && !muted);
-      hBtn.classList.toggle('muted', on && muted);
+      hBtn.classList.toggle('muted', muted);
       hBtn.classList.toggle('talking', talking);
     }
 
@@ -1532,7 +1550,16 @@
   function hintOnce(key, msg, ms) { if (seenHints[key]) return; seenHints[key] = true; showHint(msg, ms || 6000); }
 
   // ---------- options panels ----------
+  let activeKeybindCleanup = null;
+  function cancelKeybindListen() {
+    if (activeKeybindCleanup) {
+      activeKeybindCleanup();
+      activeKeybindCleanup = null;
+    }
+  }
+
   function renderOptions(listId, defs) {
+    cancelKeybindListen();
     const list = $(listId);
     list.innerHTML = '';
     defs.forEach(def => {
@@ -1564,6 +1591,41 @@
         prev.onclick = () => step(-1); next.onclick = () => step(1);
         refresh();
         ctrl.append(prev, val, next);
+      } else if (def.type === 'keybind') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'keybind-btn';
+        const fmt = (LO.Settings && LO.Settings.formatKeyCode) ? LO.Settings.formatKeyCode : (c => c);
+        btn.textContent = fmt(S[def.key] || 'KeyX');
+        btn.onclick = ev => {
+          ev.stopPropagation();
+          cancelKeybindListen();
+          btn.classList.add('listening');
+          btn.textContent = 'PRESS KEY...';
+          const cleanup = () => {
+            window.removeEventListener('keydown', onKey, true);
+            window.removeEventListener('pointerdown', onOutside, true);
+            btn.classList.remove('listening');
+            btn.textContent = fmt(S[def.key] || 'KeyX');
+            if (activeKeybindCleanup === cleanup) activeKeybindCleanup = null;
+          };
+          const onKey = ke => {
+            ke.preventDefault();
+            ke.stopPropagation();
+            if (ke.code && ke.code !== 'Escape' && ke.code !== 'Unidentified') {
+              changeSetting(def.key, ke.code);
+              updateVoiceUI();
+            }
+            cleanup();
+          };
+          const onOutside = pe => {
+            if (pe.target !== btn) cleanup();
+          };
+          activeKeybindCleanup = cleanup;
+          window.addEventListener('keydown', onKey, true);
+          window.addEventListener('pointerdown', onOutside, true);
+        };
+        ctrl.append(btn);
       } else {
         const r = document.createElement('input'); r.type = 'range';
         r.min = def.min; r.max = def.max; r.step = def.step; r.value = S[def.key];
@@ -1600,6 +1662,7 @@
     const ctrlOnly = ctrlIdx >= 0 ? aOpts.slice(ctrlIdx) : [];
     renderOptions('audio-list', audioOnly);
     renderOptions('controls-list', ctrlOnly);
+    syncVoiceKeybindLabels();
     setSettingsTab(settingsTab);
   }
 
@@ -1702,17 +1765,59 @@
         if (js && !(Net && Net.isCoop())) { js.textContent = ''; js.classList.remove('err'); js.style.color = ''; }
       }
       syncCoopVersionBadge();
+      if (id === 'coop-lobby') updateVoiceUI();
     }
     show(id);
     updateMatchIdWatermark();
   }
   function closePanel() {
+    cancelKeybindListen();
     hideAllScreens();
     if (menuReturn === 'pause' || coopMenuOpen || state === 'paused') { show('pause'); show('hud'); }
     else if (menuReturn === 'lobby') { show('coop-lobby'); }
     else if (state === 'play' || state === 'spectate') { show('hud'); }
     else show('title');
     updateMatchIdWatermark();
+  }
+
+  let adminAuthOpen = false;
+  let adminAuthReturn = 'title';
+  let adminInitialized = false;
+  function ensureAdminInit() {
+    if (!adminInitialized && LO.isTesting && LO.admin && LO.admin.init) {
+      adminInitialized = true;
+      LO.admin.init();
+    }
+  }
+  function openAdminAuthModal(from) {
+    const modal = $('admin-auth-modal');
+    if (!modal || adminAuthOpen) return;
+    adminAuthReturn = from || (state === 'paused' || coopMenuOpen ? 'pause' : state === 'play' ? 'play' : 'title');
+    adminAuthOpen = true;
+    if (adminAuthReturn === 'play') {
+      if (player) player.enabled = false;
+      if (document.pointerLockElement) document.exitPointerLock();
+    }
+    const inp = $('adm-auth-input');
+    const err = $('adm-auth-error');
+    const btn = $('adm-auth-submit');
+    if (err) err.textContent = '';
+    if (btn) { btn.disabled = false; btn.textContent = 'VERIFY'; }
+    if (inp) inp.value = '';
+    modal.classList.add('active');
+    setTimeout(() => { if (adminAuthOpen && inp) inp.focus(); }, 0);
+  }
+  function closeAdminAuthModal(restorePlay) {
+    if (!adminAuthOpen) return;
+    adminAuthOpen = false;
+    const modal = $('admin-auth-modal');
+    if (modal) modal.classList.remove('active');
+    const inp = $('adm-auth-input');
+    if (inp) inp.value = '';
+    if (restorePlay && adminAuthReturn === 'play' && state === 'play' && !coopMenuOpen && !(LO.admin && LO.admin.open)) {
+      if (player) player.enabled = true;
+      lockPointer();
+    }
   }
 
   function restoreLocalVersion() {
@@ -3706,7 +3811,14 @@
         case 'updates': openPanel('updates', 'title'); break;
         case 'credits-panel': openPanel('credits-panel', 'title'); break;
         case 'versions': openPanel('versions', 'title'); break;
-        case 'admin': if (LO.isTesting && LO.admin) LO.admin.openPanel(inPause ? 'pause' : 'title'); break;
+        case 'admin':
+          if (LO.isTesting && LO.AdminAuth && LO.AdminAuth.getToken() && LO.admin) {
+            ensureAdminInit();
+            LO.admin.openPanel(inPause ? 'pause' : 'title');
+          } else {
+            openAdminAuthModal(inPause ? 'pause' : 'title');
+          }
+          break;
         case 'back': closePanel(); break;
         case 'resume': resume(); break;
         case 'retry':
@@ -3731,9 +3843,32 @@
       }
     });
     window.addEventListener('keydown', e => {
-      if (LO.isTesting && (e.code === 'Backquote' || e.code === 'F9') && state !== 'gate') {
+      if (e.ctrlKey && e.shiftKey && e.code === 'F9' && state !== 'gate') {
         e.preventDefault();
-        if (LO.admin) LO.admin.toggle(state);
+        if (adminAuthOpen) {
+          closeAdminAuthModal(true);
+        } else if (LO.isTesting && LO.AdminAuth && LO.AdminAuth.getToken() && LO.admin) {
+          ensureAdminInit();
+          LO.admin.toggle(state);
+        } else {
+          const pausedNow = state === 'paused' || coopMenuOpen;
+          openAdminAuthModal(pausedNow ? 'pause' : state === 'play' ? 'play' : 'title');
+        }
+        return;
+      }
+      if (adminAuthOpen) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          closeAdminAuthModal(true);
+        }
+        return;
+      }
+      if (LO.isTesting && (e.code === 'Backquote' || e.code === 'F9') && !e.ctrlKey && !e.shiftKey && state !== 'gate') {
+        e.preventDefault();
+        if (LO.admin) {
+          ensureAdminInit();
+          LO.admin.toggle(state);
+        }
         return;
       }
       if (chatOpen) {
@@ -3790,16 +3925,23 @@
           return;
         }
       }
+      if (!activeKeybindCleanup && state !== 'gate' && Net && e.code === (S.toggleVoiceKey || 'KeyX') && !e.repeat) {
+        e.preventDefault();
+        A.init && A.init();
+        if (Net.toggleMicMute) {
+          Net.toggleMicMute().then(() => {
+            updateVoiceUI();
+            if (state === 'play' || state === 'spectate') {
+              showHint(Net.micMuted ? 'Microphone muted' : 'Microphone live', 1400);
+            }
+          });
+        }
+        return;
+      }
       if (Net && Net.isCoop() && (state === 'play' || state === 'spectate') && !coopMenuOpen && !(LO.admin && LO.admin.open)) {
         if ((e.code === 'KeyT' || e.code === 'Enter') && !e.repeat) {
           e.preventDefault();
           openChat();
-          return;
-        }
-        if (e.code === 'KeyX' && !e.repeat) {
-          e.preventDefault();
-          A.init && A.init();
-          if (Net.toggleMicMute) Net.toggleMicMute().then(() => updateVoiceUI());
           return;
         }
       }
@@ -3858,6 +4000,52 @@
       if (snap) applyReplayFrame(snap, 0.016, true);
       syncReplayControlsUI();
     });
+    const authForm = $('adm-auth-form');
+    const authClose = $('adm-auth-close');
+    const authCancel = $('adm-auth-cancel');
+    const authModal = $('admin-auth-modal');
+    if (authClose) authClose.addEventListener('click', () => { A.click(true); closeAdminAuthModal(true); });
+    if (authCancel) authCancel.addEventListener('click', () => { A.click(true); closeAdminAuthModal(true); });
+    if (authModal) authModal.addEventListener('click', e => { if (e.target === authModal) closeAdminAuthModal(true); });
+    if (authForm) {
+      authForm.addEventListener('submit', async e => {
+        e.preventDefault();
+        const inp = $('adm-auth-input');
+        const err = $('adm-auth-error');
+        const btn = $('adm-auth-submit');
+        const password = inp ? inp.value : '';
+        if (!password) {
+          if (err) err.textContent = 'Enter the admin password.';
+          if (inp) inp.focus();
+          return;
+        }
+        if (err) err.textContent = '';
+        if (btn) { btn.disabled = true; btn.textContent = 'VERIFYING...'; }
+        try {
+          const res = await fetch('/api/admin-auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+            cache: 'no-store',
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || !json || !json.authorized || !json.token) {
+            if (err) err.textContent = (json && json.error) || 'Invalid admin password.';
+            if (btn) { btn.disabled = false; btn.textContent = 'VERIFY'; }
+            if (inp) { inp.value = ''; inp.focus(); }
+            return;
+          }
+          if (LO.AdminAuth && LO.AdminAuth.set) LO.AdminAuth.set(json.token);
+          const returnCtx = adminAuthReturn;
+          closeAdminAuthModal(false);
+          ensureAdminInit();
+          if (LO.admin && LO.admin.openPanel) LO.admin.openPanel(returnCtx);
+        } catch (ex) {
+          if (err) err.textContent = 'Failed to reach /api/admin-auth.';
+          if (btn) { btn.disabled = false; btn.textContent = 'VERIFY'; }
+        }
+      });
+    }
     const matchIdBtn = $('coop-match-id');
     if (matchIdBtn) matchIdBtn.addEventListener('click', e => { e.stopPropagation(); copyMatchIdToClipboard(matchIdBtn); });
     const pauseMatchBtn = $('pause-match-id');
@@ -4503,7 +4691,22 @@ function boot() {
         return await LO.Net.adminRemoteShutdown(roomId, 'Match shut down by Admin');
       },
     };
-    if (LO.isTesting && LO.admin && LO.admin.init) LO.admin.init();
+    if (LO.isTesting && LO.admin && LO.admin.init) {
+      ensureAdminInit();
+      const tok = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+      if (tok && typeof fetch === 'function') {
+        fetch('/api/admin-auth', {
+          method: 'GET',
+          headers: { 'X-Admin-Secret': tok },
+          cache: 'no-store',
+        }).then(r => {
+          if (r && r.status === 401 && LO.AdminAuth && LO.AdminAuth.clear) {
+            LO.AdminAuth.clear();
+            if (LO.admin && LO.admin.open) LO.admin.closePanel(true);
+          }
+        }).catch(() => {});
+      }
+    }
     // expose for debugging
     LO.debug = { setTitleT(t) { titleT = t; }, get deathRoom() { return deathRoom; }, setGameTime(t) { gameTime = t; }, get cutscene() { return cutscene; }, get state() { return state; }, get world() { return world; }, get siren() { return siren; }, get player() { return player; }, get moths() { return moths; }, get sneaky() { return sneaky; }, get fastone() { return fastone; }, get hazards() { return hazards; }, startGame, startEnding, beginPlay };
   }
