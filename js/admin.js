@@ -55,6 +55,7 @@
   let statusMsg = '';
   let statusTimer = null;
   let uiAccum = 0;
+  let sessPollAccum = 0;
 
   // 3D overlay scene references (rebuilt automatically if scene changes)
   let dbgScene = null;
@@ -356,6 +357,7 @@
     refreshLiveUI();
     $('admin-panel').classList.add('active');
     H.syncMatchIdUI && H.syncMatchIdUI();
+    sessPollAccum = 0;
     if (admin.activeTab === 'multiplayer') refreshSessions();
   };
 
@@ -1524,6 +1526,15 @@
     if (uiAccum >= 0.12) {
       uiAccum = 0;
       refreshLiveUI();
+    }
+    if (admin.activeTab === 'multiplayer') {
+      sessPollAccum += dt;
+      if (sessPollAccum >= 10) {
+        sessPollAccum = 0;
+        refreshSessions();
+      }
+    } else {
+      sessPollAccum = 0;
     }
   };
 

@@ -190,6 +190,13 @@ window.LO = window.LO || {};
     localSpeaking: false,
     localHoldUntil: 0,
     _voiceMasterGain: null,
+    _micMonitorStream: null,
+    _micMonitorSource: null,
+    _micMonitorAnalyser: null,
+    _micMonitorBuf: null,
+    _micMonitorBusy: false,
+    _micMonitorError: '',
+    _micThreshBroadcastTimer: null,
 
     // Latency & Session Registry tracking state
     pingMs: null,
@@ -582,23 +589,41 @@ window.LO = window.LO || {};
       });
     },
 
+    getMicThreshold() {
+      const raw = LO.settings && typeof LO.settings.micThreshold === 'number' ? LO.settings.micThreshold : 0.022;
+      return Number.isFinite(raw) ? Math.max(0.002, Math.min(0.15, raw)) : 0.022;
+    },
+
+    notifyMicThresholdChanged() {
+      if (!this.isCoop()) return;
+      if (this._micThreshBroadcastTimer) clearTimeout(this._micThreshBroadcastTimer);
+      this._micThreshBroadcastTimer = setTimeout(() => {
+        this._micThreshBroadcastTimer = null;
+        if (this.isCoop()) this._broadcastVoiceState();
+      }, 120);
+    },
+
     _broadcastVoiceState() {
       const me = this.getPlayer(this.localId);
+      const thresh = this.getMicThreshold();
       if (me) {
         me.hasMic = !!this.voiceEnabled;
         me.muted = !!this.micMuted;
+        me.micThreshold = thresh;
       }
       const pkt = {
         type: 'voice_state',
         id: this.localId,
         hasMic: !!this.voiceEnabled,
         muted: !!this.micMuted,
+        micThreshold: thresh,
       };
       if (this.mode === 'host') this.broadcast(pkt);
       else if (this.mode === 'client') this.sendToHost(pkt);
     },
 
     enableVoice(opts) {
+      this.stopMicMonitor();
       const preserveMute = !!(opts && opts.preserveMute);
       if (this.voiceEnabled && this.localStream) {
         if (!preserveMute) this.setMicMuted(false);
@@ -737,16 +762,106 @@ window.LO = window.LO || {};
       };
     },
 
-    _readSpeaking(analyser, buf) {
-      if (!analyser || !buf) return false;
+    isMicMonitorActive() {
+      return !!(this._micMonitorStream && this._micMonitorAnalyser);
+    },
+
+    startMicMonitor() {
+      if (this.voiceEnabled && this.localAnalyser) {
+        this._micMonitorError = '';
+        return Promise.resolve(true);
+      }
+      if (this.isMicMonitorActive()) {
+        this._micMonitorError = '';
+        return Promise.resolve(true);
+      }
+      if (this._micMonitorBusy) return Promise.resolve(false);
+      if (!this.isVoiceSupported()) {
+        this._micMonitorError = 'Microphone not supported in this browser.';
+        return Promise.resolve(false);
+      }
+      this._micMonitorBusy = true;
+      this._micMonitorError = '';
+      const ctx = this._ensureAudioCtx();
+      return navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      }).then(stream => {
+        this._micMonitorBusy = false;
+        if (this.voiceEnabled && this.localAnalyser) {
+          stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+          return true;
+        }
+        this._micMonitorStream = stream;
+        if (ctx && ctx.createMediaStreamSource) {
+          try {
+            if (ctx.state === 'suspended' && ctx.resume) ctx.resume().catch(() => {});
+            const src = ctx.createMediaStreamSource(stream);
+            const an = ctx.createAnalyser();
+            an.fftSize = 64;
+            an.smoothingTimeConstant = 0.45;
+            src.connect(an);
+            this._micMonitorSource = src;
+            this._micMonitorAnalyser = an;
+            this._micMonitorBuf = new Uint8Array(an.fftSize);
+          } catch (e) {}
+        }
+        return true;
+      }).catch(err => {
+        this._micMonitorBusy = false;
+        this._micMonitorError = (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'))
+          ? 'Microphone permission denied.'
+          : ((err && err.message) || 'Could not access microphone.');
+        return false;
+      });
+    },
+
+    stopMicMonitor() {
+      if (this._micMonitorSource) {
+        try { this._micMonitorSource.disconnect(); } catch (e) {}
+        this._micMonitorSource = null;
+      }
+      if (this._micMonitorAnalyser) {
+        try { this._micMonitorAnalyser.disconnect(); } catch (e) {}
+        this._micMonitorAnalyser = null;
+      }
+      this._micMonitorBuf = null;
+      if (this._micMonitorStream) {
+        this._micMonitorStream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+        this._micMonitorStream = null;
+      }
+    },
+
+    _readRms(analyser, buf) {
+      if (!analyser || !buf) return 0;
       analyser.getByteTimeDomainData(buf);
       let sum = 0;
       for (let i = 0; i < buf.length; i++) {
         const d = (buf[i] - 128) / 128;
         sum += d * d;
       }
-      const rms = Math.sqrt(sum / buf.length);
-      return rms > 0.022;
+      return Math.sqrt(sum / buf.length);
+    },
+
+    _readSpeaking(analyser, buf, threshold) {
+      const thresh = (typeof threshold === 'number' && Number.isFinite(threshold))
+        ? Math.max(0.002, Math.min(0.15, threshold))
+        : this.getMicThreshold();
+      return this._readRms(analyser, buf) > thresh;
+    },
+
+    getLocalMicLevel() {
+      if (this.voiceEnabled && this.localAnalyser && this.localAnalyserBuf) {
+        return this.micMuted ? 0 : this._readRms(this.localAnalyser, this.localAnalyserBuf);
+      }
+      if (this._micMonitorAnalyser && this._micMonitorBuf) {
+        return this._readRms(this._micMonitorAnalyser, this._micMonitorBuf);
+      }
+      return 0;
     },
 
     updateVoiceProximity(listenerPos, getRemotePos, inWorld, inCutscene) {
@@ -765,7 +880,7 @@ window.LO = window.LO || {};
       }
 
       if (this.voiceEnabled && !this.micMuted && this.localAnalyser) {
-        if (this._readSpeaking(this.localAnalyser, this.localAnalyserBuf)) {
+        if (this._readSpeaking(this.localAnalyser, this.localAnalyserBuf, this.getMicThreshold())) {
           this.localHoldUntil = now + 0.28;
         }
         this.localSpeaking = now < this.localHoldUntil;
@@ -867,8 +982,11 @@ window.LO = window.LO || {};
         }
 
         const canTransmitToLocal = !inWorld || inCutscene || !localAlive || p.alive !== false;
+        const peerThresh = (typeof p.micThreshold === 'number' && Number.isFinite(p.micThreshold))
+          ? Math.max(0.002, Math.min(0.15, p.micThreshold))
+          : 0.022;
         if (entry.stream && !p.muted && canTransmitToLocal && entry.analyser) {
-          if (this._readSpeaking(entry.analyser, entry.buf)) {
+          if (this._readSpeaking(entry.analyser, entry.buf, peerThresh)) {
             entry.holdUntil = now + 0.28;
           }
           entry.speaking = now < entry.holdUntil;
@@ -1456,7 +1574,16 @@ window.LO = window.LO || {};
             if (p) {
               p.hasMic = !!msg.hasMic;
               p.muted = !!msg.muted;
-              this.broadcast({ type: 'voice_state', id: peerId, hasMic: p.hasMic, muted: p.muted }, peerId);
+              if (typeof msg.micThreshold === 'number' && isFinite(msg.micThreshold)) {
+                p.micThreshold = Math.max(0.002, Math.min(0.15, msg.micThreshold));
+              }
+              this.broadcast({
+                type: 'voice_state',
+                id: peerId,
+                hasMic: p.hasMic,
+                muted: p.muted,
+                micThreshold: p.micThreshold,
+              }, peerId);
               this._syncVoiceCalls();
               this._emitVoiceChange();
             }
@@ -1769,6 +1896,9 @@ window.LO = window.LO || {};
                   if (p) {
                     p.hasMic = !!msg.hasMic;
                     p.muted = !!msg.muted;
+                    if (typeof msg.micThreshold === 'number' && isFinite(msg.micThreshold)) {
+                      p.micThreshold = Math.max(0.002, Math.min(0.15, msg.micThreshold));
+                    }
                     this._emitVoiceChange();
                   }
                   return;

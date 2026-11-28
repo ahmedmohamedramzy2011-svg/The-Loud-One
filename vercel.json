@@ -1,6 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": ".",
+  "redirects": [
+    { "source": "/testing", "destination": "/404", "permanent": false },
+    { "source": "/testing/(.*)", "destination": "/404", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/assets/:path*", "destination": "/public/assets/:path*" }
   ],

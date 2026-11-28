@@ -1695,6 +1695,77 @@
           window.addEventListener('pointerdown', onOutside, true);
         };
         ctrl.append(btn);
+      } else if (def.type === 'mic_meter') {
+        row.classList.add('opt-row-mic');
+        ctrl.classList.add('opt-mic-ctrl');
+        const toPct = (LO.Settings && LO.Settings.rmsToMicPct) ? LO.Settings.rmsToMicPct : (v => Math.round((v / 0.16) * 100));
+        const toRms = (LO.Settings && LO.Settings.micPctToRms) ? LO.Settings.micPctToRms : (p => (p / 100) * 0.16);
+        const curPct = Math.round(toPct(S[def.key] !== undefined ? S[def.key] : 0.022));
+
+        const top = document.createElement('div'); top.className = 'mic-cal-top';
+        const left = document.createElement('div'); left.className = 'mic-cal-left';
+        const ico = document.createElement('span');
+        ico.className = 'coop-speak-ico off';
+        ico.innerHTML = SPEAK_ICO_SVG;
+        const stateEl = document.createElement('span'); stateEl.className = 'mic-cal-state'; stateEl.textContent = 'OFF';
+        const readoutEl = document.createElement('span'); readoutEl.className = 'mic-cal-readout'; readoutEl.textContent = curPct + '%';
+        left.append(ico, stateEl, readoutEl);
+
+        const testBtn = document.createElement('button');
+        testBtn.type = 'button';
+        testBtn.className = 'mic-cal-test-btn';
+        testBtn.textContent = 'TEST MIC';
+
+        top.append(left, testBtn);
+
+        const trackWrap = document.createElement('div'); trackWrap.className = 'mic-cal-track-wrap';
+        const bar = document.createElement('div'); bar.className = 'mic-cal-bar';
+        const fillEl = document.createElement('div'); fillEl.className = 'mic-cal-fill';
+        const peakEl = document.createElement('div'); peakEl.className = 'mic-cal-peak';
+        const threshEl = document.createElement('div'); threshEl.className = 'mic-cal-thresh';
+        threshEl.style.left = curPct + '%';
+        bar.append(fillEl, peakEl, threshEl);
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'mic-cal-slider';
+        slider.id = 'mic-sensitivity-slider';
+        slider.min = def.min;
+        slider.max = def.max;
+        slider.step = def.step;
+        slider.value = curPct;
+        slider.setAttribute('aria-label', 'Microphone sensitivity threshold');
+        trackWrap.append(bar, slider);
+
+        const errEl = document.createElement('div'); errEl.className = 'mic-cal-err';
+
+        micCalRefs = { ico, stateEl, readoutEl, testBtn, fillEl, peakEl, threshEl, sliderEl: slider, errEl };
+
+        slider.oninput = () => {
+          const pct = parseFloat(slider.value);
+          const rmsThresh = toRms(pct);
+          changeSetting(def.key, rmsThresh);
+          if (Net && Net.notifyMicThresholdChanged) Net.notifyMicThresholdChanged();
+          updateMicCalibratorUI(0);
+        };
+
+        testBtn.onclick = () => {
+          if (!Net) return;
+          if (Net.isMicMonitorActive && Net.isMicMonitorActive()) {
+            Net.stopMicMonitor && Net.stopMicMonitor();
+            micCalPeakPct = 0;
+            updateMicCalibratorUI(0);
+          } else if (Net.startMicMonitor) {
+            testBtn.disabled = true;
+            Net.startMicMonitor().finally(() => {
+              testBtn.disabled = false;
+              updateMicCalibratorUI(0);
+            });
+          }
+        };
+
+        ctrl.append(top, trackWrap, errEl);
+        updateMicCalibratorUI(0);
       } else {
         const r = document.createElement('input'); r.type = 'range';
         r.min = def.min; r.max = def.max; r.step = def.step; r.value = S[def.key];
@@ -1712,6 +1783,60 @@
     }
   }
 
+  let micCalRefs = null;
+  let micCalPeakPct = 0;
+  function updateMicCalibratorUI(dt) {
+    if (!micCalRefs) return;
+    const settingsEl = $('settings');
+    if (settingsEl && !settingsEl.classList.contains('active')) return;
+    const toPct = (LO.Settings && LO.Settings.rmsToMicPct) ? LO.Settings.rmsToMicPct : (v => Math.min(100, (v / 0.16) * 100));
+    const thresh = (Net && Net.getMicThreshold) ? Net.getMicThreshold() : (typeof S.micThreshold === 'number' ? S.micThreshold : 0.022);
+    const threshPct = toPct(thresh);
+    const coopMicLive = !!(Net && Net.isCoop && Net.isCoop() && Net.voiceEnabled);
+    const previewLive = !!(Net && Net.isMicMonitorActive && Net.isMicMonitorActive());
+    const muted = !!(coopMicLive && Net.micMuted);
+    const monitoring = !muted && (coopMicLive || previewLive);
+    const rms = (monitoring && Net && Net.getLocalMicLevel) ? Net.getLocalMicLevel() : 0;
+    const levelPct = monitoring ? toPct(rms) : 0;
+
+    if (levelPct > micCalPeakPct) micCalPeakPct = levelPct;
+    else micCalPeakPct = Math.max(0, micCalPeakPct - (dt || 0.016) * 38);
+
+    const active = monitoring && rms > thresh;
+    const r = micCalRefs;
+    if (r.fillEl) {
+      r.fillEl.style.width = levelPct.toFixed(1) + '%';
+      r.fillEl.classList.toggle('hot', active);
+    }
+    if (r.peakEl) {
+      r.peakEl.style.left = micCalPeakPct.toFixed(1) + '%';
+      r.peakEl.classList.toggle('show', micCalPeakPct > 1.5);
+    }
+    if (r.threshEl) r.threshEl.style.left = threshPct.toFixed(1) + '%';
+    if (r.readoutEl) r.readoutEl.textContent = Math.round(threshPct) + '%';
+    if (r.ico) {
+      const icoState = muted ? 'muted' : active ? 'talking' : (coopMicLive || previewLive) ? 'live' : 'off';
+      if (r.ico.dataset.vstate !== icoState) {
+        r.ico.dataset.vstate = icoState;
+        r.ico.className = 'coop-speak-ico ' + icoState;
+      }
+    }
+    if (r.stateEl) {
+      const stTxt = muted ? 'MUTED' : active ? 'ACTIVE' : (coopMicLive || previewLive) ? 'QUIET' : 'OFF';
+      if (r.stateEl.textContent !== stTxt) r.stateEl.textContent = stTxt;
+      r.stateEl.className = 'mic-cal-state' + (active ? ' hot' : muted ? ' muted' : '');
+    }
+    if (r.testBtn) {
+      r.testBtn.style.display = coopMicLive ? 'none' : '';
+      r.testBtn.textContent = previewLive ? 'STOP TEST' : 'TEST MIC';
+      r.testBtn.classList.toggle('active', previewLive);
+    }
+    if (r.errEl) {
+      const errTxt = (Net && Net._micMonitorError) || '';
+      if (r.errEl.textContent !== errTxt) r.errEl.textContent = errTxt;
+    }
+  }
+
   let settingsTab = 'all';
   function setSettingsTab(tab) {
     settingsTab = tab || 'all';
@@ -1724,6 +1849,7 @@
     });
   }
   function renderUnifiedSettings() {
+    micCalRefs = null;
     renderOptions('graphics-list', LO.Settings.GRAPHICS_OPTIONS);
     const aOpts = LO.Settings.AUDIO_OPTIONS || [];
     const ctrlIdx = aOpts.findIndex(o => o.section === 'GAMEPLAY' || o.section === 'CONTROLS');
@@ -1733,6 +1859,7 @@
     renderOptions('controls-list', ctrlOnly);
     syncVoiceKeybindLabels();
     setSettingsTab(settingsTab);
+    updateMicCalibratorUI(0);
   }
 
   const REBUILD_KEYS = ['textures', 'lighting', 'shadows', 'quality'];
@@ -1836,11 +1963,18 @@
       syncCoopVersionBadge();
       if (id === 'coop-lobby') updateVoiceUI();
     }
+    if (id !== 'settings' && Net && Net.stopMicMonitor) {
+      Net.stopMicMonitor();
+      micCalPeakPct = 0;
+    }
     show(id);
     updateMatchIdWatermark();
+    if (id === 'settings') updateMicCalibratorUI(0);
   }
   function closePanel() {
     cancelKeybindListen();
+    if (Net && Net.stopMicMonitor) Net.stopMicMonitor();
+    micCalPeakPct = 0;
     hideAllScreens();
     if (menuReturn === 'pause' || coopMenuOpen || state === 'paused') { show('pause'); show('hud'); }
     else if (menuReturn === 'lobby') { show('coop-lobby'); }
@@ -3932,6 +4066,7 @@
         if (Net.inGame) updateCoopTeamHUD();
       }
     }
+    updateMicCalibratorUI(dt);
     LO.TVFX.update(dt);
     if (S.showFps) {
       fpsAcc += dt; fpsFrames++;

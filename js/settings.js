@@ -22,7 +22,7 @@ window.LO = window.LO || {};
     headBob: true,
     showFps: false,
     // audio
-    master: 0.8, music: 0.6, sfx: 0.9, voice: 1.0, disableVoiceAttenuation: false, subtitles: true, tts: true,
+    master: 0.8, music: 0.6, sfx: 0.9, voice: 1.0, micThreshold: 0.022, disableVoiceAttenuation: false, subtitles: true, tts: true,
     // controls
     sensitivity: 1.0, invertY: false,
     toggleVoiceKey: 'KeyX',
@@ -151,6 +151,24 @@ window.LO = window.LO || {};
   }
   if (!VERSIONS.some(x => x.id === S.gameVersion)) S.gameVersion = LATEST_VER;
 
+  const MIC_MAX_RMS = 0.16;
+  const MIC_PCT_MIN = 8;
+  const MIC_PCT_MAX = 90;
+  function clampMicThreshold(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 0.022;
+    return Math.max(0.002, Math.min(0.15, n));
+  }
+  function rmsToMicPct(rms) {
+    const r = Math.max(0, Number(rms) || 0);
+    return Math.max(0, Math.min(100, Math.pow(r / MIC_MAX_RMS, 0.58) * 100));
+  }
+  function micPctToRms(pct) {
+    const p = Math.max(MIC_PCT_MIN, Math.min(MIC_PCT_MAX, Number(pct) || 32));
+    return clampMicThreshold(Math.pow(p / 100, 1 / 0.58) * MIC_MAX_RMS);
+  }
+  S.micThreshold = clampMicThreshold(S.micThreshold);
+
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ }
   }
@@ -200,6 +218,7 @@ window.LO = window.LO || {};
     { key: 'music', label: 'Music', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
     { key: 'sfx', label: 'Sound Effects', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
     { key: 'voice', label: 'Voices', type: 'range', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+    { key: 'micThreshold', label: 'Microphone Sensitivity', desc: 'Calibrate the volume threshold that lights up your roster voice icon', type: 'mic_meter', min: MIC_PCT_MIN, max: MIC_PCT_MAX, step: 1 },
     { key: 'disableVoiceAttenuation', label: 'Disable 3D Voice Attenuation', desc: 'Keep voice chat volume constant regardless of distance', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
     { key: 'tts', label: 'Spoken Voice Lines', desc: 'Off shows subtitles only', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
     { key: 'subtitles', label: 'Subtitles', type: 'choice', values: [false, true], labels: ['Off', 'On'] },
@@ -277,7 +296,18 @@ window.LO = window.LO || {};
   LO.VERSIONS = VERSIONS;
   LO.versionFeatures = versionFeatures;
   LO.ver = () => versionFeatures(S.gameVersion);
-  LO.Settings = { set, save, formatKeyCode, PRESETS, DEFAULTS, GRAPHICS_OPTIONS, AUDIO_OPTIONS };
+  LO.Settings = {
+    set,
+    save,
+    formatKeyCode,
+    clampMicThreshold,
+    rmsToMicPct,
+    micPctToRms,
+    PRESETS,
+    DEFAULTS,
+    GRAPHICS_OPTIONS,
+    AUDIO_OPTIONS,
+  };
 })();
 
 // touch device detection (phones / tablets)
