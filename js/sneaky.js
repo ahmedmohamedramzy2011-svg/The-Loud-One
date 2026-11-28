@@ -112,6 +112,7 @@
   };
 
   Sneaky.prototype.update = function (dt, player, camera, siren) {
+    if (LO.admin && LO.admin.freezeAllEntities) return;
     dt = this.realDt(dt);
     if (dt <= 0) return;
     if ((LO.ver && !LO.ver().sneaky) || (LO.admin && LO.admin.noSneaky) || player.calm || !player.alive) {
@@ -127,7 +128,8 @@
     const isCoopClient = window.LO && LO.Net && LO.Net.isCoop && LO.Net.isCoop() && LO.Net.isClient && LO.Net.isClient();
     const isCoopHost = window.LO && LO.Net && LO.Net.isCoop && LO.Net.isCoop() && LO.Net.isHost && LO.Net.isHost();
     if (isCoopClient && !this.waveActive) return;
-    this.timer -= dt;
+    const chaosScale = (LO.admin && LO.admin.chaosMode) ? 2.5 : 1;
+    this.timer -= dt * chaosScale;
     if (this.timer > 0) return;
     // mandatory 18-20s minimum gap from The Fast One (and never overlap)
     if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {

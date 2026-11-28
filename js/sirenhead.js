@@ -288,7 +288,7 @@
   // ------------------------------------------------------------
   SirenHead.prototype.update = function (dt, playerOrList, time) {
     if (this.scripted || !playerOrList) { this.animate(dt); return; }
-    if (LO.admin && LO.admin.sirenFreeze) { this.speedNow = 0; this.animate(dt); return; }
+    if (LO.admin && (LO.admin.sirenFreeze || LO.admin.freezeAllEntities)) { this.speedNow = 0; this.animate(dt); return; }
     const allPlayers = Array.isArray(playerOrList) ? playerOrList : [playerOrList];
     const players = allPlayers.filter(p => p && p.alive !== false);
     const player = players[0] || allPlayers[0];
@@ -730,7 +730,8 @@
     this.yaw += Math.max(-turnRate * dt, Math.min(turnRate * dt, diff));
     const facing = Math.max(0, Math.cos(diff));
     const forestSlow = (V.forestRing && W.isForest && W.isForest(this.pos)) ? 0.68 : 1;
-    const step = this.speed * forestSlow * dt * (0.25 + 0.75 * facing);
+    const admMult = (LO.admin && typeof LO.admin.sirenSpeedMult === 'number') ? LO.admin.sirenSpeedMult : 1;
+    const step = this.speed * admMult * forestSlow * dt * (0.25 + 0.75 * facing);
     const move = Math.min(step, d);
     let nx = this.pos.x + Math.sin(this.yaw) * move;
     let nz = this.pos.z + Math.cos(this.yaw) * move;

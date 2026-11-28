@@ -287,6 +287,26 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    if (action === 'verify_admin_token') {
+      const isFreshRoom = existing && (now - (existing.lastHeartbeat || 0)) <= ROOM_TTL_MS && !existing.shutdown;
+      if (!isFreshRoom) {
+        return res.status(404).json({ ok: false, authorized: false, error: 'Active room not found.' });
+      }
+      if (existing.hostToken && existing.hostToken !== hostToken) {
+        return res.status(403).json({ ok: false, authorized: false, error: 'Unauthorized host token.' });
+      }
+      const tokenStr = typeof body.adminToken === 'string' ? body.adminToken.trim() : '';
+      const expected = getAdminSecret();
+      if (!expected || !tokenStr || !verifyAdminToken(tokenStr, expected)) {
+        return res.status(401).json({ ok: false, authorized: false, error: 'Invalid or expired admin token.' });
+      }
+      return res.status(200).json({
+        ok: true,
+        authorized: true,
+        roomId,
+      });
+    }
+
     if (action === 'shutdown') {
       if (!verifyAdminSecretHeader(req)) {
         return res.status(401).json({ ok: false, error: 'Unauthorized: valid x-admin-secret header required.' });

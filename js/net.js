@@ -182,6 +182,7 @@ window.LO = window.LO || {};
     // Voice & Chat runtime state
     voiceEnabled: false,
     micMuted: !!(LO.settings && LO.settings.micMutedPref),
+    adminForceMuted: false,
     voiceError: '',
     localStream: null,
     voiceCalls: new Map(), // peerId -> { outgoing, incoming, stream, audioEl, source, gain, flatGain, panner, analyser, buf, volume, distance, speaking, holdUntil }
@@ -224,6 +225,8 @@ window.LO = window.LO || {};
     onVoiceChange: null,
     onPingUpdate: null,
     onDataTick: null,
+    onAdminCommand: null,
+    onAdminEffect: null,
     getSessionSnapshot: null,
     getRunSyncState: null,
 
@@ -606,16 +609,19 @@ window.LO = window.LO || {};
     _broadcastVoiceState() {
       const me = this.getPlayer(this.localId);
       const thresh = this.getMicThreshold();
+      const effectiveMuted = !!(this.micMuted || this.adminForceMuted);
       if (me) {
         me.hasMic = !!this.voiceEnabled;
-        me.muted = !!this.micMuted;
+        me.muted = effectiveMuted;
+        me.adminMuted = !!this.adminForceMuted;
         me.micThreshold = thresh;
       }
       const pkt = {
         type: 'voice_state',
         id: this.localId,
         hasMic: !!this.voiceEnabled,
-        muted: !!this.micMuted,
+        muted: effectiveMuted,
+        adminMuted: !!this.adminForceMuted,
         micThreshold: thresh,
       };
       if (this.mode === 'host') this.broadcast(pkt);
@@ -658,7 +664,7 @@ window.LO = window.LO || {};
           LO.Settings.set('voiceAutoJoin', true);
           LO.Settings.set('micMutedPref', this.micMuted);
         }
-        stream.getAudioTracks().forEach(t => { t.enabled = !this.micMuted; });
+        stream.getAudioTracks().forEach(t => { t.enabled = !(this.micMuted || this.adminForceMuted); });
         const ctx = this._ensureAudioCtx();
         if (ctx && ctx.createMediaStreamSource) {
           try {
@@ -714,19 +720,39 @@ window.LO = window.LO || {};
     },
 
     setMicMuted(muted) {
+      if (this.adminForceMuted && !muted) muted = true;
       this.micMuted = !!muted;
-      if (LO.Settings && LO.Settings.set) {
+      if (LO.Settings && LO.Settings.set && !this.adminForceMuted) {
         LO.Settings.set('micMutedPref', this.micMuted);
       }
       if (this.localStream) {
-        this.localStream.getAudioTracks().forEach(t => { t.enabled = !this.micMuted; });
+        this.localStream.getAudioTracks().forEach(t => { t.enabled = !(this.micMuted || this.adminForceMuted); });
       }
-      if (this.micMuted) this.localSpeaking = false;
+      if (this.micMuted || this.adminForceMuted) this.localSpeaking = false;
+      if (this.isCoop()) this._broadcastVoiceState();
+      this._emitVoiceChange();
+    },
+
+    setAdminForceMuted(muted) {
+      this.adminForceMuted = !!muted;
+      if (this.adminForceMuted) {
+        this.micMuted = true;
+        this.localSpeaking = false;
+      } else {
+        this.micMuted = !!(LO.settings && LO.settings.micMutedPref);
+      }
+      if (this.localStream) {
+        this.localStream.getAudioTracks().forEach(t => { t.enabled = !(this.micMuted || this.adminForceMuted); });
+      }
       if (this.isCoop()) this._broadcastVoiceState();
       this._emitVoiceChange();
     },
 
     toggleMicMute() {
+      if (this.adminForceMuted) {
+        this.setMicMuted(true);
+        return Promise.resolve(false);
+      }
       if (!this.isCoop()) {
         this.setMicMuted(!this.micMuted);
         return Promise.resolve(!this.micMuted);
@@ -743,10 +769,12 @@ window.LO = window.LO || {};
 
     getVoiceState(id) {
       if (!id || id === this.localId) {
+        const effMuted = !!(this.micMuted || this.adminForceMuted);
         return {
           hasMic: !!this.voiceEnabled,
-          muted: !!this.micMuted,
-          speaking: !!(this.voiceEnabled && !this.micMuted && this.localSpeaking),
+          muted: effMuted,
+          adminMuted: !!this.adminForceMuted,
+          speaking: !!(this.voiceEnabled && !effMuted && this.localSpeaking),
           volume: 1,
           distance: 0,
         };
@@ -755,7 +783,8 @@ window.LO = window.LO || {};
       const entry = this.voiceCalls.get(id);
       return {
         hasMic: !!(p && p.hasMic) || !!(entry && entry.stream),
-        muted: !!(p && p.muted),
+        muted: !!(p && (p.muted || p.adminMuted)),
+        adminMuted: !!(p && p.adminMuted),
         speaking: !!(entry && entry.speaking),
         volume: entry ? entry.volume : 0,
         distance: entry ? entry.distance : Infinity,
@@ -1368,7 +1397,7 @@ window.LO = window.LO || {};
         setTimeout(() => { try { conn.close(); } catch (e) {} }, 150);
       };
 
-      const admitClient = (msg, isAdminJoin, isAdminHidden, nowTs) => {
+      const admitClient = (msg, isAdminJoin, isAdminHidden, nowTs, isVerifiedAdmin) => {
         if (closed || accepted) return;
         if (this.inGame && !isAdminJoin) {
           rejectAndClose('Run already in progress.');
@@ -1381,6 +1410,7 @@ window.LO = window.LO || {};
         }
         if (slot < 0) slot = MAX_PLAYERS - 1;
         accepted = true;
+        conn._isVerifiedAdmin = !!isVerifiedAdmin;
         conn._lastSeen = nowTs || Date.now();
         this.conns.set(peerId, conn);
         const p = this._makePlayer(peerId, slot, msg.name, { hiddenAdmin: isAdminHidden });
@@ -1461,7 +1491,7 @@ window.LO = window.LO || {};
             const isAdminJoin = !!msg.adminJoin;
             const isAdminHidden = isAdminJoin && !!msg.adminHidden;
             if (!isAdminJoin) {
-              admitClient(msg, false, false, now);
+              admitClient(msg, false, false, now, false);
               return;
             }
             if (!msg.adminJoinToken || typeof fetch !== 'function') {
@@ -1483,7 +1513,7 @@ window.LO = window.LO || {};
               verifyingAdmin = false;
               if (closed || accepted) return;
               if (json && json.authorized) {
-                admitClient(msg, true, !!json.adminHidden && isAdminHidden, Date.now());
+                admitClient(msg, true, !!json.adminHidden && isAdminHidden, Date.now(), true);
               } else {
                 rejectAndClose('Admin authorization failed.');
               }
@@ -1569,11 +1599,49 @@ window.LO = window.LO || {};
             return;
           }
 
+          if (msg.type === 'admin_auth_proof') {
+            if (!msg.token || typeof msg.token !== 'string' || typeof fetch !== 'function') {
+              this.sendTo(peerId, { type: 'admin_auth_ack', authorized: false });
+              return;
+            }
+            fetch('/api/rooms', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'verify_admin_token',
+                roomId: this.roomCode,
+                hostToken: this._hostToken || '',
+                adminToken: msg.token,
+              }),
+              cache: 'no-store',
+            }).then(res => (res && res.ok ? res.json() : null)).then(json => {
+              if (closed) return;
+              if (json && json.authorized) {
+                conn._isVerifiedAdmin = true;
+                this.sendTo(peerId, { type: 'admin_auth_ack', authorized: true });
+              } else {
+                conn._isVerifiedAdmin = false;
+                this.sendTo(peerId, { type: 'admin_auth_ack', authorized: false });
+              }
+            }).catch(() => {});
+            return;
+          }
+
+          if (msg.type === 'admin_cmd') {
+            if (!conn._isVerifiedAdmin) return;
+            if (this.onAdminCommand) this.onAdminCommand(peerId, msg);
+            return;
+          }
+
           if (msg.type === 'voice_state') {
             const p = this.getPlayer(peerId);
             if (p) {
               p.hasMic = !!msg.hasMic;
-              p.muted = !!msg.muted;
+              p.muted = !!(msg.muted || p.adminMuted);
+              if (msg.adminMuted !== undefined && p.adminMuted !== undefined) {
+                // host retains authoritative adminMuted flag
+                p.muted = !!(p.muted || p.adminMuted);
+              }
               if (typeof msg.micThreshold === 'number' && isFinite(msg.micThreshold)) {
                 p.micThreshold = Math.max(0.002, Math.min(0.15, msg.micThreshold));
               }
@@ -1582,6 +1650,7 @@ window.LO = window.LO || {};
                 id: peerId,
                 hasMic: p.hasMic,
                 muted: p.muted,
+                adminMuted: !!p.adminMuted,
                 micThreshold: p.micThreshold,
               }, peerId);
               this._syncVoiceCalls();
@@ -1840,6 +1909,9 @@ window.LO = window.LO || {};
                   else if (LO.settings && LO.settings.voiceAutoJoin && !this.localHiddenAdmin && this.isVoiceSupported()) {
                     this.enableVoice({ preserveMute: true }).catch(() => {});
                   }
+                  if (!joinOpts.adminJoin && LO.AdminAuth && LO.AdminAuth.getToken && LO.AdminAuth.getToken()) {
+                    this.verifyAdminProofToHost();
+                  }
                   if (!settled) {
                     settled = true;
                     resolve({
@@ -1856,6 +1928,16 @@ window.LO = window.LO || {};
                       runState: msg.runState || null,
                     });
                   }
+                  return;
+                }
+                if (msg.type === 'admin_auth_ack') {
+                  if (msg.authorized === false) {
+                    if (LO.AdminAuth && LO.AdminAuth.clear) LO.AdminAuth.clear();
+                  }
+                  return;
+                }
+                if (msg.type === 'admin_fx') {
+                  if (this.onAdminEffect) this.onAdminEffect(msg);
                   return;
                 }
                 if (msg.type === 'net_pong') {
@@ -1896,6 +1978,7 @@ window.LO = window.LO || {};
                   if (p) {
                     p.hasMic = !!msg.hasMic;
                     p.muted = !!msg.muted;
+                    if (msg.adminMuted !== undefined) p.adminMuted = !!msg.adminMuted;
                     if (typeof msg.micThreshold === 'number' && isFinite(msg.micThreshold)) {
                       p.micThreshold = Math.max(0.002, Math.min(0.15, msg.micThreshold));
                     }
@@ -2076,6 +2159,81 @@ window.LO = window.LO || {};
       }
     },
 
+    verifyAdminProofToHost() {
+      if (this.mode !== 'client' || !this.hostConn || !this.hostConn.open) return false;
+      const token = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+      if (!token) return false;
+      try {
+        this.hostConn.send({ type: 'admin_auth_proof', token });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    sendAdminCommand(cmd, targetId, extra) {
+      const token = (LO.AdminAuth && LO.AdminAuth.getToken) ? LO.AdminAuth.getToken() : '';
+      if (!token) return false;
+      const pkt = { type: 'admin_cmd', cmd, targetId: targetId || 'all', extra: extra || null };
+      if (this.mode === 'host') {
+        if (this.onAdminCommand) this.onAdminCommand('host', pkt);
+        return true;
+      }
+      if (this.mode === 'client' && this.hostConn && this.hostConn.open) {
+        this.verifyAdminProofToHost();
+        return !!(() => { try { this.hostConn.send(pkt); return true; } catch (e) { return false; } })();
+      }
+      return false;
+    },
+
+    broadcastAdminFx(fx, targetId) {
+      if (this.mode !== 'host' || !fx) return;
+      const pkt = Object.assign({}, fx, { type: 'admin_fx' });
+      const tgt = targetId || 'all';
+      if (tgt === 'host') {
+        if (this.onAdminEffect) this.onAdminEffect(pkt);
+        return;
+      }
+      if (tgt === 'all') {
+        if (this.onAdminEffect) this.onAdminEffect(pkt);
+        this.broadcast(pkt);
+        return;
+      }
+      this.sendTo(tgt, pkt);
+    },
+
+    kickPeer(peerId, reason) {
+      if (this.mode !== 'host' || !peerId || peerId === 'host' || peerId === this.localId) return false;
+      const conn = this.conns.get(peerId);
+      const kickMsg = reason || 'Removed from match by Admin.';
+      if (conn) {
+        try { conn.send({ type: 'reject', reason: kickMsg }); } catch (e) {}
+        setTimeout(() => { try { conn.close(); } catch (e) {} }, 90);
+        if (conn._dropPeer) conn._dropPeer();
+        return true;
+      }
+      const idx = this.players.findIndex(p => p && p.id === peerId);
+      if (idx >= 0) {
+        const rem = this.players[idx];
+        if (this.inGame) {
+          rem.left = true;
+          rem.alive = false;
+          rem.hidden = false;
+          rem.hideSpotIdx = -1;
+          this._emitLobby();
+          if (this.onMessage) this.onMessage(peerId, { type: 'player_left', id: peerId });
+        } else {
+          this.players.splice(idx, 1);
+          this.broadcast({ type: 'lobby_sync', players: this.players.filter(pl => !pl.hiddenAdmin), version: this.hostVersion });
+          this._emitLobby();
+        }
+        if (this.onPlayerLeave) this.onPlayerLeave(rem);
+        this.pushRoomHeartbeat();
+        return true;
+      }
+      return false;
+    },
+
     // Let the other players know we are gone instead of waiting for an ICE timeout.
     _notifyLeaving() {
       if (!this.inGame) return;
@@ -2094,6 +2252,7 @@ window.LO = window.LO || {};
       this.pingMs = null;
       this._lastPingSentAt = 0;
       this._lastSyncedPing = null;
+      this.adminForceMuted = false;
       this.disableVoice(true);
       Array.from(this.voiceCalls.keys()).forEach(id => this._disposeVoiceEntry(id));
       this.voiceCalls.clear();

@@ -881,6 +881,11 @@ FastOne.prototype.triggerLocalAttack = function (localPlayer, time) {
     const allPlayers = isMulti ? playerOrList : [playerOrList];
     const localPlayer = allPlayers[0];
 
+    if (LO.admin && LO.admin.freezeAllEntities) {
+      this.updateAfterimages(dt, false);
+      return;
+    }
+
     if ((LO.ver && !LO.ver().fastone) || (LO.admin && LO.admin.noFastOne)) {
       if (this.state !== 'idle') this.finishEncounter();
       this.updateAfterimages(dt, false);
@@ -917,8 +922,9 @@ FastOne.prototype.triggerLocalAttack = function (localPlayer, time) {
 
     if (this.state === 'idle') {
       this.updateAfterimages(dt, false);
+      const chaosScale = (LO.admin && LO.admin.chaosMode) ? 2.5 : 1;
       if (this.cooldown > 0) {
-        this.cooldown = Math.max(0, this.cooldown - dt);
+        this.cooldown = Math.max(0, this.cooldown - dt * chaosScale);
         return;
       }
       // Pick eligible targets (alive, not calm, not hiding, not near Siren Head)
@@ -933,7 +939,7 @@ FastOne.prototype.triggerLocalAttack = function (localPlayer, time) {
     if (isCoopClient) return;
     // spawn timer pauses when no player is eligible
     if (!eligible.length) return;
-    this.timer -= dt;
+    this.timer -= dt * chaosScale;
     if (this.timer > 0) return;
     // mandatory 18-20s minimum gap from The Sneaky One
     if (LO.ambush.active || LO.ambush.now < LO.ambush.gapUntil) {

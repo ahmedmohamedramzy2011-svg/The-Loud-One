@@ -122,6 +122,7 @@
     this.trapSlowTimer = 0;
     this.hasMap = false;
     this.mapOpen = false;
+    this.adminFrozen = false;
   };
 
   Player.prototype.addNoise = function (radius, kind) {
@@ -356,6 +357,12 @@
         }
       }
       const adm = LO.admin || {};
+      if (this.adminFrozen) {
+        moving = false;
+        sprinting = false;
+        fwd = 0;
+        str = 0;
+      }
       const speedMult = adm.speedMult || 1;
       const sprintSpeed = this.adrenaline > 0 ? 13.8 : 6.9;
       let speed = (wantCrouch ? 1.6 : sprinting ? sprintSpeed : 3.3) * (sprinting ? 1 : Math.max(0.5, analog)) * speedMult;
@@ -366,7 +373,7 @@
       const ml = Math.hypot(mx, mz) || 1;
       mx /= ml; mz /= ml;
 
-      if (adm.noclip) {
+      if (adm.noclip && !this.adminFrozen) {
         const flySpeed = Math.max(8, speed * 2.2);
         const up = (k.Space ? 1 : 0) - (wantCrouch ? 1 : 0);
         this.vel.set(mx * flySpeed * (moving ? 1 : 0), up * flySpeed * 0.75, mz * flySpeed * (moving ? 1 : 0));
@@ -378,12 +385,17 @@
         this.fallImpact = 0;
       } else {
         const accel = this.onGround ? 12 : 3;
-        this.vel.x += (mx * speed * (moving ? 1 : 0) - this.vel.x) * Math.min(1, accel * dt);
-        this.vel.z += (mz * speed * (moving ? 1 : 0) - this.vel.z) * Math.min(1, accel * dt);
+        if (this.adminFrozen) {
+          this.vel.x = 0;
+          this.vel.z = 0;
+        } else {
+          this.vel.x += (mx * speed * (moving ? 1 : 0) - this.vel.x) * Math.min(1, accel * dt);
+          this.vel.z += (mz * speed * (moving ? 1 : 0) - this.vel.z) * Math.min(1, accel * dt);
+        }
 
         // jump
-        if (k.Space && this.onGround && (adm.infStamina || this.stamina > 12) && !wantCrouch) {
-          this.vel.y = 4.6; this.onGround = false;
+        if (!this.adminFrozen && k.Space && this.onGround && (adm.infStamina || this.stamina > 12) && !wantCrouch) {
+          this.vel.y = adm.superJump ? 8.8 : 4.6; this.onGround = false;
           this.fallPeakY = this.pos.y;
           if (!adm.infStamina) this.stamina -= 12;
           this.spike = Math.max(this.spike, NOISE.jump);
@@ -405,7 +417,7 @@
             const Vfd = LO.ver ? LO.ver() : { fallDamage: true };
             const safeHeight = 2.5;
             const damagePerMeter = 15;
-            const dmg = (Vfd.fallDamage && drop > safeHeight && this.vel.y < -7.5)
+            const dmg = (!adm.noFallDamage && Vfd.fallDamage && drop > safeHeight && this.vel.y < -7.5)
               ? Math.max(0, Math.round((drop - safeHeight) * damagePerMeter))
               : 0;
             const hard = dmg > 0 || this.vel.y < -4;
@@ -485,7 +497,9 @@
     if (this.flashOn && this.battery < 15 && Math.random() < 0.08) flick = 1;
     // the Sneaky One makes the light stutter while it's behind you
     if (this.flickerForce && Math.random() < 0.35) flick = 1;
-    this.flash.intensity = this.flashOn ? (flick ? (this.flickerForce ? 0.02 : 0.3) : 1) * (LO.settings.lighting === 'simple' ? 3 : 8) * Math.min(1, 0.4 + this.battery / 40) : 0;
+    this.flash.distance = admB.flashBoost ? 115 : 48;
+    this.flash.angle = admB.flashBoost ? 0.72 : 0.5;
+    this.flash.intensity = this.flashOn ? (flick ? (this.flickerForce ? 0.02 : 0.3) : 1) * (LO.settings.lighting === 'simple' ? 3 : 8) * (admB.flashBoost ? 2.4 : 1) * Math.min(1, 0.4 + this.battery / 40) : 0;
     LO.audio.setFlashlightBuzz(this.flashOn, this.battery < 15 ? 1 : 0);
 
     // ---------- noise ----------
@@ -766,9 +780,10 @@
   const rockMat = new THREE.MeshLambertMaterial({ color: 0x77736c });
   Player.prototype.throwRock = function () {
     if (LO.ver && !LO.ver().rocks) return;
-    if (!this.enabled || this.hidden) return;
-    if (this.rocks <= 0) { this.hint && this.hint('No rocks. Look for them on the ground.'); return; }
-    this.rocks--;
+    if (!this.enabled || this.hidden || this.adminFrozen) return;
+    const infRocks = !!(LO.admin && LO.admin.infRocks);
+    if (!infRocks && this.rocks <= 0) { this.hint && this.hint('No rocks. Look for them on the ground.'); return; }
+    if (!infRocks) this.rocks--;
     const dir = new V3();
     this.camera.getWorldDirection(dir);
     const mesh = new THREE.Mesh(rockGeo, rockMat);
