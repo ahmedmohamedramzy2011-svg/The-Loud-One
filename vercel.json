@@ -3,7 +3,9 @@
   "outputDirectory": ".",
   "redirects": [
     { "source": "/testing", "destination": "https://theloudone.vercel.app/", "permanent": false },
-    { "source": "/testing/(.*)", "destination": "https://theloudone.vercel.app/", "permanent": false }
+    { "source": "/testing/(.*)", "destination": "https://theloudone.vercel.app/", "permanent": false },
+    { "source": "/404", "destination": "https://theloudone.vercel.app/", "permanent": false },
+    { "source": "/404/(.*)", "destination": "https://theloudone.vercel.app/", "permanent": false }
   ],
   "rewrites": [
     { "source": "/assets/:path*", "destination": "/public/assets/:path*" }

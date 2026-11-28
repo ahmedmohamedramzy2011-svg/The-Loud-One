@@ -6,13 +6,19 @@
     if (
       typeof window !== 'undefined' &&
       window.location &&
-      typeof window.location.pathname === 'string' &&
-      window.location.pathname.toLowerCase().startsWith('/testing')
+      typeof window.location.pathname === 'string'
     ) {
-      try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
-      try { if (typeof document !== 'undefined' && document.body) document.body.innerHTML = ''; } catch (e) {}
-      try { window.location.replace('/'); } catch (e) {}
-      return true;
+      const p = window.location.pathname.toLowerCase();
+      if (p.startsWith('/testing')) {
+        try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
+        try { if (typeof document !== 'undefined' && document.body) document.body.innerHTML = ''; } catch (e) {}
+        try { window.location.replace('/'); } catch (e) {}
+        return true;
+      }
+      if (p === '/404' || p.startsWith('/404/')) {
+        try { window.location.replace('/'); } catch (e) {}
+        return true;
+      }
     }
     return false;
   }
