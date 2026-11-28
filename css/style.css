@@ -1095,9 +1095,46 @@ body.still #map-hud-badge { opacity: 0 !important; pointer-events: none; }
 .chat-dead-tag { font-size: 10px; color: #ff7a70; letter-spacing: 1px; margin-left: 3px; }
 .chat-text { color: var(--ink); }
 
+.coop-slot-left { min-width: 0; }
+.coop-slot-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.12s; }
+.coop-slot.talking { border-color: rgba(94,230,138,0.42); background: rgba(45,155,80,0.08); }
+.coop-slot.talking .coop-slot-name { color: #eafff0; }
+
+.coop-speak-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 3px;
+  color: var(--ink-dim); opacity: 0.45;
+  transition: color 0.12s, opacity 0.12s, background 0.12s, filter 0.12s, box-shadow 0.12s;
+}
+.coop-speak-ico svg { display: block; width: 14px; height: 14px; }
+.coop-speak-ico.compact { width: 14px; height: 14px; }
+.coop-speak-ico.compact svg { width: 12px; height: 12px; }
+.coop-speak-ico .spk-w1,
+.coop-speak-ico .spk-w2,
+.coop-speak-ico .spk-slash { opacity: 0; transition: opacity 0.12s; }
+.coop-speak-ico.off { color: #b58480; opacity: 0.48; }
+.coop-speak-ico.off .spk-slash { opacity: 0.9; }
+.coop-speak-ico.muted { color: #ffba7a; opacity: 0.78; }
+.coop-speak-ico.muted .spk-slash { opacity: 0.95; }
+.coop-speak-ico.live { color: #7ecfa0; opacity: 0.58; }
+.coop-speak-ico.live .spk-w1 { opacity: 0.35; }
+.coop-speak-ico.talking {
+  color: #6df298; opacity: 1; background: rgba(70,196,110,0.22);
+  box-shadow: 0 0 8px rgba(94,230,138,0.45);
+  filter: drop-shadow(0 0 4px rgba(94,230,138,0.8));
+}
+.coop-speak-ico.talking .spk-w1 { opacity: 1; animation: loSpeakWave 0.65s ease-in-out infinite; }
+.coop-speak-ico.talking .spk-w2 { opacity: 1; animation: loSpeakWave 0.65s ease-in-out 0.16s infinite; }
+@keyframes loSpeakWave {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
 .coop-mate.talking .coop-mate-dot {
   box-shadow: 0 0 8px #5ee68a, 0 0 0 2px rgba(94,230,138,0.65);
 }
+.coop-mate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 112px; transition: color 0.12s; }
+.coop-mate.talking .coop-mate-name { color: #eafff0; }
 .coop-mate-mic {
   font-size: 10px; letter-spacing: 0.8px; color: var(--ink-dim);
   opacity: 0.8; margin-left: 2px;

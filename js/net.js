@@ -866,7 +866,8 @@ window.LO = window.LO || {};
           entry.audioEl.volume = Math.max(0, Math.min(1, att * userVol));
         }
 
-        if (entry.stream && !p.muted && att > 0.02 && entry.analyser) {
+        const canTransmitToLocal = !inWorld || inCutscene || !localAlive || p.alive !== false;
+        if (entry.stream && !p.muted && canTransmitToLocal && entry.analyser) {
           if (this._readSpeaking(entry.analyser, entry.buf)) {
             entry.holdUntil = now + 0.28;
           }

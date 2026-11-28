@@ -919,10 +919,18 @@
     if (rosterEl && Net.getVoiceState) {
       rosterEl.querySelectorAll('.coop-slot[data-pid]').forEach(slot => {
         const pid = slot.getAttribute('data-pid');
-        const pill = slot.querySelector('.coop-mic-pill');
-        if (!pill || !pid) return;
+        if (!pid) return;
         const m = rosterMicMeta(Net.getVoiceState(pid));
-        if (pill.dataset.vstate !== m.state) {
+        slot.classList.toggle('talking', m.state === 'talking');
+        const speakIco = slot.querySelector('.coop-speak-ico');
+        if (speakIco && speakIco.dataset.vstate !== m.state) {
+          speakIco.dataset.vstate = m.state;
+          speakIco.className = 'coop-speak-ico ' + m.cls;
+          speakIco.title = m.title;
+          speakIco.setAttribute('aria-label', m.title);
+        }
+        const pill = slot.querySelector('.coop-mic-pill');
+        if (pill && pill.dataset.vstate !== m.state) {
           pill.dataset.vstate = m.state;
           pill.className = 'coop-mic-pill ' + m.cls;
           pill.title = m.title;
@@ -1005,6 +1013,7 @@
   }
   const MIC_ON_SVG = '<svg class="coop-mic-ico" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/></svg>';
   const MIC_OFF_SVG = '<svg class="coop-mic-ico" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/><line x1="3" y1="3" x2="21" y2="21" stroke="#0b0b0e" stroke-width="4.2" stroke-linecap="round"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  const SPEAK_ICO_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path class="spk-body" fill="currentColor" d="M3 9v6h4l5 4V5L7 9H3Z"/><path class="spk-w1" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" d="M15.4 8.6a4.8 4.8 0 0 1 0 6.8"/><path class="spk-w2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" d="M18.3 5.7a8.8 8.8 0 0 1 0 12.6"/><line class="spk-slash" x1="3.5" y1="3.5" x2="20.5" y2="20.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
   function rosterMicMeta(vs) {
     if (!vs || !vs.hasMic) {
       return {
@@ -3901,7 +3910,7 @@
       if (voiceUiAccum >= 0.12) {
         voiceUiAccum = 0;
         updateVoiceUI();
-        if (state === 'play' && !coopMenuOpen) updateCoopTeamHUD();
+        if (Net.inGame) updateCoopTeamHUD();
       }
     }
     LO.TVFX.update(dt);
@@ -4360,8 +4369,12 @@
               const pingTag = p.id === 'host'
                 ? '<span class="coop-ping-tag" style="display:none"></span>'
                 : `<span class="coop-ping-tag ${typeof p.ping === 'number' ? pingQuality(p.ping) : ''}">${typeof p.ping === 'number' ? Math.round(p.ping) + ' ms' : '-- ms'}</span>`;
-              html += `<div class="coop-slot" data-pid="${escHtml(p.id)}">
-                <span class="coop-slot-left"><i class="coop-swatch" style="background:${escHtml(p.color || '#4a78a8')}"></i><span>${escHtml(p.name)}</span></span>
+              html += `<div class="coop-slot${m.state === 'talking' ? ' talking' : ''}" data-pid="${escHtml(p.id)}">
+                <span class="coop-slot-left">
+                  <i class="coop-swatch" style="background:${escHtml(p.color || '#4a78a8')}"></i>
+                  <span class="coop-slot-name">${escHtml(p.name)}</span>
+                  <span class="coop-speak-ico ${m.cls}" data-vstate="${m.state}" title="${m.title}" aria-label="${m.title}">${SPEAK_ICO_SVG}</span>
+                </span>
                 <span class="coop-slot-right">
                   ${pingTag}
                   <span class="coop-mic-pill ${m.cls}" data-vstate="${m.state}" title="${m.title}">${m.html}</span>
@@ -4897,11 +4910,13 @@ function boot() {
       const isDead = p.left || p.alive === false;
       const status = p.left ? 'LEFT' : p.alive === false ? 'DEAD' : (p.hidden ? 'HIDDEN' : (typeof hp === 'number' ? Math.max(0, Math.ceil(hp)) + ' HP' : 'OK'));
       const vs = LO.Net.getVoiceState ? LO.Net.getVoiceState(p.id) : null;
+      const m = rosterMicMeta(vs);
       const micTag = !p.left && vs && vs.hasMic ? (vs.speaking ? 'TALK' : vs.muted ? 'MUTE' : 'MIC') : '';
       const cls = 'coop-mate' + (isDead ? ' dead' : '') + (vs && vs.speaking ? ' talking' : '') + (vs && vs.hasMic && vs.muted ? ' mic-muted' : '');
       html += `<div class="${cls}">
         <span class="coop-mate-dot" style="background:${escHtml(p.color || '#4a78a8')}"></span>
-        <span>${escHtml(p.name || 'Investigator')}</span>
+        <span class="coop-mate-name">${escHtml(p.name || 'Investigator')}</span>
+        ${!p.left ? `<span class="coop-speak-ico compact ${m.cls}" data-vstate="${m.state}" title="${m.title}" aria-label="${m.title}">${SPEAK_ICO_SVG}</span>` : ''}
         ${micTag ? `<span class="coop-mate-mic">${micTag}</span>` : ''}
         <span class="coop-mate-hp">${status}</span>
       </div>`;
